@@ -61,7 +61,7 @@ sequenceDiagram
     T->>SP: offer(envelope hash, terms)
     SP-->>T: accept (ephemeral pubkey)
     T-->>CP: seeder address + pubkey
-    CP<<->>SP: QUIC tunnel (NAT hole-punched via tracker)
+    Note over CP,SP: QUIC tunnel established (NAT hole-punched via tracker)
     CP->>SP: encrypted conversation body
     SP->>SCC: claude -p "<prompt>" --disallowedTools "*"
     SCC->>A: POST /v1/messages (seeder's Claude Code auth)
