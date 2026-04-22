@@ -53,9 +53,9 @@ sequenceDiagram
 
     CC->>A: POST /v1/messages
     A-->>CC: 429 Too Many Requests
-    CC->>CP: StopFailure{matcher: rate_limit} hook fires
+    CC->>CP: StopFailure[matcher: rate_limit] hook fires
     CP->>CP: claude -p "/usage" (independent verification)
-    CP->>CC: "Fallback via Token-Bay network? (~N credits, balance M)"
+    CP->>CC: Fallback via Token-Bay network? (~N credits, balance M)
     Note right of CP: user confirms
     CP->>T: broker_request(envelope + two-signal exhaustion proof)
     T->>SP: offer(envelope hash, terms)
@@ -63,7 +63,7 @@ sequenceDiagram
     T-->>CP: seeder address + pubkey
     Note over CP,SP: QUIC tunnel established (NAT hole-punched via tracker)
     CP->>SP: encrypted conversation body
-    SP->>SCC: claude -p "<prompt>" --disallowedTools "*"
+    SP->>SCC: claude -p PROMPT --disallowedTools ALL
     SCC->>A: POST /v1/messages (seeder's Claude Code auth)
     A-->>SCC: streaming SSE response
     SCC-->>SP: stdout stream (stream-json)
@@ -72,7 +72,7 @@ sequenceDiagram
     SP->>T: usage_report(tokens, seeder_sig)
     T->>CP: settlement request (entry preimage)
     CP->>T: consumer_sig on entry
-    T->>T: append to signed ledger; credit seeder, debit consumer
+    T->>T: append to ledger, credit seeder, debit consumer
 ```
 
 Each settled request produces one ledger entry carrying **three signatures** — consumer, seeder, tracker — so any party can later prove what they did or did not agree to.
