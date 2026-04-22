@@ -18,6 +18,9 @@ Thumbs.db
 *.swp
 *~
 
+# Claude Code per-user local settings
+.claude/
+
 # Superpowers scratch area
 .superpowers/
 
