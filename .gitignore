@@ -1,0 +1,26 @@
+# Go build artifacts
+bin/
+coverage.out
+*.test
+*.out
+vendor/
+
+# Go workspace local overrides
+go.work.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Superpowers scratch area
+.superpowers/
+
+# Local runtime data
+~/.token-bay/
+.token-bay-local/
