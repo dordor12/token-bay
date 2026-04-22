@@ -1,0 +1,7 @@
+{
+  "name": "token-bay",
+  "version": "0.0.0-dev",
+  "description": "Claude Code plugin for the Token-Bay educational distributed rate-limit sharing network.",
+  "commands": [],
+  "hooks": []
+}
