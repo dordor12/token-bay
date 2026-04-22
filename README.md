@@ -148,3 +148,7 @@ Subsystem specs live under `docs/superpowers/specs/<subsystem>/`. Implementation
 ## License
 
 TBD.
+
+## Pre-commit hooks
+
+Install [lefthook](https://github.com/evilmartians/lefthook), then run `lefthook install` in the repo root.
