@@ -1,4 +1,6 @@
-go 1.26.2
+go 1.23
+
+toolchain go1.26.2
 
 // Modules are added by component scaffolding plans (order: shared → plugin → tracker):
 //   - shared/  (shared-scaffolding plan)

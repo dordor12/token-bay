@@ -1,6 +1,8 @@
 module github.com/token-bay/token-bay/plugin
 
-go 1.26.2
+go 1.23
+
+toolchain go1.26.2
 
 require (
 	github.com/spf13/cobra v1.10.2
@@ -18,4 +20,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
+// Note: no `require github.com/token-bay/token-bay/shared` directive is present
+// because no plugin source imports shared/ yet. `go mod tidy` removes unused
+// requires but keeps this `replace` so the require resolves locally when a
+// feature plan adds the first shared-side import. Do not delete this replace
+// when it appears dangling — it is intentional.
 replace github.com/token-bay/token-bay/shared => ../shared
