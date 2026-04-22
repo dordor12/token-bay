@@ -1,0 +1,36 @@
+run:
+  timeout: 5m
+  go: '1.23'
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gofumpt
+    - gosec
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unused
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+      - name: var-naming
+  gosec:
+    excludes:
+      - G104  # errcheck covers this
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+    # plugin's ccbridge subprocess module intentionally runs external commands
+    - path: plugin/internal/ccbridge/.*\.go
+      linters:
+        - gosec
+      text: 'G204'
