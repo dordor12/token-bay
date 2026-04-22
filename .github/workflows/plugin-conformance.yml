@@ -1,0 +1,27 @@
+name: Plugin Bridge Conformance
+
+on:
+  pull_request:
+    paths:
+      - 'plugin/internal/ccbridge/**'
+      - 'plugin/test/conformance/**'
+      - 'plugin/test/fixtures/**'
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC nightly
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Sync workspace
+        run: go work sync
+      # TODO (later feature plan): install the `claude` CLI here so the
+      # real conformance suite can execute. Until then, the placeholder
+      # test runs and skips.
+      - name: Run conformance
+        run: make -C plugin conformance
