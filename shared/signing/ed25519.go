@@ -1,9 +1,9 @@
-// Package signing provides Ed25519 sign and verify helpers plus
-// canonical serialization primitives used throughout Token-Bay.
+// Package signing provides Ed25519 verify helpers used throughout Token-Bay.
+// Canonical serialization primitives will be added here as feature plans progress.
 //
-// Using stdlib crypto/ed25519 directly would work, but these wrappers
-// exist so call sites can't accidentally use an unchecked signature
-// or a non-canonical byte preimage.
+// Using stdlib crypto/ed25519 directly would work, but this wrapper exists
+// so call sites can't accidentally skip the length guards that prevent a
+// panic on malformed keys or signatures.
 package signing
 
 import "crypto/ed25519"
