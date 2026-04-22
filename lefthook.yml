@@ -13,3 +13,10 @@ pre-commit:
       priority: 2
       glob: '**/*.go'
       run: golangci-lint run --new-from-rev=HEAD
+    plugin-conformance:
+      priority: 3
+      glob:
+        - 'plugin/internal/ccbridge/**/*.go'
+        - 'plugin/test/conformance/**/*.go'
+        - 'plugin/test/fixtures/**'
+      run: make -C plugin conformance
