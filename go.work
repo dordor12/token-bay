@@ -1,8 +1,8 @@
 go 1.26.2
 
-// Modules are added by component scaffolding plans:
-//   - shared/  (Plan 2)
-//   - plugin/  (Plan 1 — revised)
-//   - tracker/ (Plan 3)
+// Modules are added by component scaffolding plans (order: shared → plugin → tracker):
+//   - shared/  (shared-scaffolding plan)
+//   - plugin/  (plugin-scaffolding plan)
+//   - tracker/ (tracker-scaffolding plan)
 
 use ./shared
