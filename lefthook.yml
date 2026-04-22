@@ -1,13 +1,15 @@
 pre-commit:
-  parallel: true
   commands:
     gofumpt:
-      glob: '*.go'
+      priority: 1
+      glob: '**/*.go'
       run: gofumpt -l -w {staged_files}
       stage_fixed: true
     vet:
-      glob: '*.go'
+      priority: 2
+      glob: '**/*.go'
       run: go vet ./...
     golangci-lint:
-      glob: '*.go'
+      priority: 2
+      glob: '**/*.go'
       run: golangci-lint run --new-from-rev=HEAD
