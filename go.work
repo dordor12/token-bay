@@ -6,3 +6,5 @@ go 1.26.2
 //   - tracker/ (tracker-scaffolding plan)
 
 use ./shared
+
+use ./plugin
