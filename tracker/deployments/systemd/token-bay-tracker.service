@@ -1,0 +1,20 @@
+[Unit]
+Description=Token-Bay regional tracker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=token-bay
+Group=token-bay
+ExecStart=/usr/local/bin/token-bay-tracker run --config /etc/token-bay/tracker.yaml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/token-bay
+
+[Install]
+WantedBy=multi-user.target
