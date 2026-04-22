@@ -18,3 +18,7 @@ echo ""
 echo "TODO: wire this script to the server 'run' subcommand once it lands"
 echo "in a subsequent feature plan. For now this script is a placeholder so"
 echo "the Makefile 'run-local' target has something to invoke."
+echo ""
+echo "ERROR: run subcommand not yet implemented — exiting non-zero so" >&2
+echo "       'make run-local' does not silently succeed." >&2
+exit 1

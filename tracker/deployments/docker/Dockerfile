@@ -3,7 +3,8 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /src
 COPY . .
-RUN go work sync \
+RUN mkdir -p /out \
+ && go work sync \
  && cd tracker \
  && CGO_ENABLED=0 go build -o /out/token-bay-tracker ./cmd/token-bay-tracker
 
