@@ -99,3 +99,20 @@ func TestGetState_JSONCContent_FlagsIt(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, state.HasJSONCComments)
 }
+
+func TestGetState_AfterEnterNetworkMode_InNetworkModeIsTrue(t *testing.T) {
+	store, _, _ := newTestStore(t)
+	require.NoError(t, store.EnterNetworkMode("http://127.0.0.1:53421", "session-x"))
+
+	state, err := store.GetState("http://127.0.0.1:53421")
+	require.NoError(t, err)
+	assert.True(t, state.InNetworkMode)
+}
+
+func TestGetState_WithoutEntering_InNetworkModeIsFalse(t *testing.T) {
+	store, _, _ := newTestStore(t)
+
+	state, err := store.GetState("http://127.0.0.1:53421")
+	require.NoError(t, err)
+	assert.False(t, state.InNetworkMode)
+}

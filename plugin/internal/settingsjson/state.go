@@ -65,6 +65,13 @@ func (s *Store) GetState(sidecarURL string) (*State, error) {
 	out.VertexEnabled = isEnvTruthy(parsed.Env["CLAUDE_CODE_USE_VERTEX"])
 	out.FoundryEnabled = isEnvTruthy(parsed.Env["CLAUDE_CODE_USE_FOUNDRY"])
 
+	// InNetworkMode: rollback journal exists AND our redirect is live.
+	if out.ExistingBaseURLMatches {
+		if _, err := os.Stat(s.RollbackPath); err == nil {
+			out.InNetworkMode = true
+		}
+	}
+
 	return out, nil
 }
 
