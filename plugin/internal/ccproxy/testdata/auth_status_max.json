@@ -1,0 +1,9 @@
+{
+  "loggedIn": true,
+  "authMethod": "claude.ai",
+  "apiProvider": "firstParty",
+  "email": "fixture-user@example.com",
+  "orgId": "00000000-0000-4000-8000-000000000001",
+  "orgName": "Fixture User's Organization",
+  "subscriptionType": "max"
+}
