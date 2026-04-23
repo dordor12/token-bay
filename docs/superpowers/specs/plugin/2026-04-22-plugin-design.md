@@ -140,17 +140,36 @@ $ /token-bay enroll
 Ready.
 ```
 
-### 4.2 Identity-challenge protocol (revised)
+### 4.2 Identity-challenge protocol (revised 2026-04-23)
 
-The parent spec's Q5(b) decision was "proof-of-Anthropic-account." Since the plugin no longer has direct access to an API token, the proof has to go through Claude Code. Three candidate mechanisms, in decreasing order of preference:
+**Account fingerprint source: `claude auth status --json`.** Claude Code ships a first-class non-interactive CLI subcommand that returns structured JSON (`src/cli/handlers/auth.ts:232-319`):
 
-**Option α — Claude Code emits a signed identity assertion.** If Claude Code exposes (now or later) a command like `claude identity sign <nonce>` that returns a signature over `nonce || account_fingerprint` using the account's auth material, the plugin uses that directly. Cleanest; depends on Claude Code adding the primitive.
+```json
+{
+  "loggedIn": true,
+  "authMethod": "claude.ai",
+  "apiProvider": "firstParty",
+  "email": "user@example.com",
+  "orgId": "cd2c6c26-fdea-44af-b14f-11e283737e33",
+  "orgName": "...",
+  "subscriptionType": "max"
+}
+```
 
-**Option β — Bridge-issued probe.** Plugin invokes the Claude Code bridge with a minimal prompt containing a tracker-issued nonce, e.g. "Respond with exactly `ACK:<nonce>`." The response comes back through the authenticated channel; tracker observes that the response arrived from an authenticated Claude Code session. Weaker than α (observational, not cryptographic), but works today without Claude Code changes. Account fingerprint is derived from Claude Code metadata surfaced via `claude config` or equivalent (what exactly gets exposed is open — see §10).
+The plugin uses `orgId` (a stable UUID assigned by Anthropic per Claude AI organization) as the account fingerprint. At enrollment:
 
-**Option γ — Drop Anthropic-account binding; fall back to pure self-sovereign identity.** Identity is just a local Ed25519 keypair with no Anthropic tie. Sybil resistance downgrades from Q5(b) to something closer to Q5(a)/(c) (proof-of-work or web-of-trust). Parent spec would need a corresponding amendment.
+1. Plugin generates an Ed25519 keypair locally.
+2. Plugin runs `claude auth status --json` via a non-interactive exec (no subprocess environment inheritance beyond PATH).
+3. Plugin requires `loggedIn: true`, `apiProvider == "firstParty"`, `authMethod == "claude.ai"`. On failure, enrollment aborts with a specific diagnostic (`internal/ccproxy.IsCompatible`).
+4. Plugin derives `account_fingerprint = SHA-256(orgId)` and signs `enroll_preimage = hash("token-bay-enroll:v1" || nonce || account_fingerprint || identity_pubkey)` with its Ed25519 private key.
+5. Tracker accepts the enrollment if the signature verifies. The tracker doesn't need to re-verify the `orgId` — the plugin's attestation is trust-on-first-use plus the L3 reputation subsystem's pattern detection over time.
 
-**v1 direction:** start with β, plan for α when Claude Code ships a primitive. If neither path works for a given deployment (e.g., operator cannot rely on any identity leak from the bridge), fall back to γ and accept the weaker sybil posture — this is a per-tracker config.
+**Why this is Q5(b) / option α, fully resolved.** Earlier drafts worried that Claude Code exposed no programmatic way to identify the user's account. `claude auth status --json` is that mechanism. No prompt-smuggling, no observational side-channel — a clean non-interactive CLI subcommand with a stable JSON schema.
+
+**Caveats:**
+- `orgId` is only present when `authMethod == "claude.ai"`. Users on raw API keys (`authMethod == "api_key"`) don't have an organization identifier. Token-Bay consumer-role enrollment is refused in that case (also independently refused by the ccproxy `IsCompatible` precondition — `/usage` probe requires OAuth anyway).
+- If a user belongs to multiple Claude AI organizations and switches between them, `orgId` changes and the plugin detects a mismatch on next startup (surfaces a re-enrollment prompt). Not handled in v1; noted in §10.
+- A user who rotates their Claude AI account onto the same `orgId` (e.g., password reset) retains their identity. A new org → new identity, starter-grant re-applied.
 
 ### 4.3 Key storage
 
@@ -421,7 +440,7 @@ Validated on load; hot-reload on SIGHUP for non-structural fields.
 ### Carried from prior revision
 
 - **Are the tool-disabling flags airtight across every Claude Code release?** The seeder bridge's entire safety argument rests on `--disallowedTools "*" + --mcp-config /dev/null + empty hooks` being honored. Conformance test in §12 must re-validate on every Claude Code upgrade. Any regression is a CVE-class issue and must gate the seeder role.
-- **What does Claude Code expose for identity verification?** See §4.2. Ideally a signed-nonce primitive; pragmatically, plugin reads account metadata via `claude config` or equivalent. Until resolved, `option β` is best-effort.
+- ~~**What does Claude Code expose for identity verification?**~~ **Resolved (2026-04-23):** `claude auth status --json` (a first-class CLI subcommand at `src/cli/handlers/auth.ts:232-319`) returns structured JSON including a stable `orgId` UUID when `authMethod == "claude.ai"`. Plugin uses `SHA-256(orgId)` as the account fingerprint. See §4.2. Multi-org users and org switches are a v1 caveat (re-enrollment prompt on mismatch; handled in `internal/identity` feature plan).
 - **Exact shape of the `StopFailure{matcher:rate_limit}` payload.** Determines the structured fields available for §5.6. Token-Bay's spec assumes at minimum a timestamp and an error description; richer payloads (retry-after, reset window) feed better proof fidelity and smarter UX.
 - ~~**Exact output format of `claude -p "/usage"`.**~~ **Resolved (2026-04-23):** `/usage` is `type: 'local-jsx'` — a React TUI component with no non-TTY representation. Source-code investigation confirmed any non-PTY invocation returns a hardcoded stub. Plugin now spawns `claude /usage` under a PTY via `github.com/creack/pty` and regex-scans the rendered TUI for `<N>% used` tokens. See §5.2 and `docs/superpowers/plans/2026-04-23-plugin-ratelimit.md` for the parser design.
 - **Streaming support end-to-end.** If the seeder bridge doesn't stream, the network degrades to request-response-only. Affects seeder capabilities advertised to the tracker.
