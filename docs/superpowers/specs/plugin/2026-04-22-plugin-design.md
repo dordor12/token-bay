@@ -169,16 +169,20 @@ In normal operation the plugin does **not** intercept Claude Code's HTTPS traffi
 
 ### 5.2 Rate-limit verification via `claude /usage`
 
-Before routing anything to the network, the plugin invokes Claude Code's own `/usage` slash command through the CLI bridge to confirm current rate-limit state. This is a second, independent signal from Claude Code saying "yes, this account is at its limit right now" — not just reacting to a single failed turn which might be transient or race-conditioned.
+Before routing anything to the network, the plugin invokes Claude Code's own `/usage` slash command to confirm current rate-limit state. This is a second, independent signal from Claude Code saying "yes, this account is at its limit right now" — not just reacting to a single failed turn which might be transient or race-conditioned.
 
-```bash
-claude -p "/usage" \
-  --output-format json \
-  --disallowedTools "*" \
-  --mcp-config /dev/null
-```
+**`/usage` is a TUI-only command.** `src/commands/usage/index.ts` declares it as `type: 'local-jsx'` — a React component (`src/components/Settings/Usage.tsx`) rendered via Ink. When Claude Code detects stdout is not a TTY, it bails out with a canned stub (`"You are currently using your subscription..."`) after ~5ms without calling the underlying `/api/oauth/usage` endpoint. The only way to capture the real rendered output is under a PTY.
 
-Plugin parses the output and checks for rate-limit-exhaustion signals (e.g., usage ≥ quota for the relevant window, or the response explicitly reporting "rate limited"). Exact parsing rules follow Claude Code's `/usage` output format.
+**Invocation:** `claude /usage` spawned under a PTY. No `-p` flag (it forces non-TTY mode and the stub). No `--output-format json` (silently ignored in interactive mode anyway).
+
+Go implementation uses `github.com/creack/pty`. Empirically observed output is ANSI-formatted TUI text containing one `<N>% used` token per rate-limit window (typically three: `Current session` / `Current week (all models)` / `Current week (Sonnet only)`). The tokens survive across ANSI escape boundaries for regex parsing.
+
+**Latency: early-termination required.** A full TUI render takes ~15-20s (Claude Code cold-start + data fetch + steady-state refresh loop). The probe terminates as soon as ≥2 `% used` tokens are captured (`HardDeadline` default 8s) to bound the fallback decision cost.
+
+**Classification thresholds:**
+- Any token's percentage ≥ 95 → rate-limited (accounts for `Math.floor(utilization)` undercount).
+- All tokens < 95 with ≥2 tokens captured → headroom.
+- Fewer than 2 tokens captured → ambiguous.
 
 **Verdict matrix:**
 
@@ -419,7 +423,7 @@ Validated on load; hot-reload on SIGHUP for non-structural fields.
 - **Are the tool-disabling flags airtight across every Claude Code release?** The seeder bridge's entire safety argument rests on `--disallowedTools "*" + --mcp-config /dev/null + empty hooks` being honored. Conformance test in §12 must re-validate on every Claude Code upgrade. Any regression is a CVE-class issue and must gate the seeder role.
 - **What does Claude Code expose for identity verification?** See §4.2. Ideally a signed-nonce primitive; pragmatically, plugin reads account metadata via `claude config` or equivalent. Until resolved, `option β` is best-effort.
 - **Exact shape of the `StopFailure{matcher:rate_limit}` payload.** Determines the structured fields available for §5.6. Token-Bay's spec assumes at minimum a timestamp and an error description; richer payloads (retry-after, reset window) feed better proof fidelity and smarter UX.
-- **Exact output format of `claude -p "/usage"`.** Stable JSON, human-readable text, or both? `--output-format json` is assumed in §5.2; if unavailable, plugin parses text with a tolerance margin.
+- ~~**Exact output format of `claude -p "/usage"`.**~~ **Resolved (2026-04-23):** `/usage` is `type: 'local-jsx'` — a React TUI component with no non-TTY representation. Source-code investigation confirmed any non-PTY invocation returns a hardcoded stub. Plugin now spawns `claude /usage` under a PTY via `github.com/creack/pty` and regex-scans the rendered TUI for `<N>% used` tokens. See §5.2 and `docs/superpowers/plans/2026-04-23-plugin-ratelimit.md` for the parser design.
 - **Streaming support end-to-end.** If the seeder bridge doesn't stream, the network degrades to request-response-only. Affects seeder capabilities advertised to the tracker.
 - **Multi-session users.** Two Claude Code windows open, both hit a limit. Both redirect settings.json — but settings.json is a single shared file. Plugin needs either: one sidecar per Claude Code process (more complex), or one shared sidecar that multiplexes both redirected sessions via path or header discrimination. Leaning shared-sidecar; the session id in the StopFailure hook and the `X-Claude-Code-Session-Id` header seen by ccproxy (Claude Code sends it) together let one sidecar route correctly.
 - **Windows story.** `bubblewrap` and `firejail` are Linux-only. Windows seeder sandboxing needs WSL2 or a Windows-native sandbox. v1 may be Linux-and-macOS only for seeder; consumer side (which doesn't need a sandbox) could still work on Windows.

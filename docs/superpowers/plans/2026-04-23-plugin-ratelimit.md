@@ -2,14 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Implement `plugin/internal/ratelimit` — the two-stage gate that classifies the Claude Code `StopFailure` hook payload, parses `claude -p "/usage"` output, and applies the verdict matrix from plugin spec §5.2.
+**Goal:** Implement `plugin/internal/ratelimit` — the two-stage gate that classifies the Claude Code `StopFailure` hook payload, probes `claude /usage` under a PTY, parses the rendered TUI, and applies the verdict matrix from plugin spec §5.2.
 
-**Architecture:** Pure Go, no I/O (the sidecar is responsible for invoking `claude -p "/usage"` and piping stdin into the hook handler). This module is a parser + decision matrix. Leaf: imports nothing from `shared/` or `plugin/internal/*`.
+**Architecture:** Go package with one subprocess entry point. Probe invokes `claude /usage` under a PTY (Claude Code's `/usage` is `local-jsx`, a React TUI — the only way to capture its rendered output from outside is via PTY; `-p` and piped stdout produce a canned stub). Parser is pure (strings in, verdict out). Decision matrix is pure (trigger + hook-error + usage-verdict → gate verdict).
 
 **Tech Stack:**
 - Go 1.23+
-- `encoding/json` (stdlib)
-- `regexp` (stdlib) — for text-format `/usage` fallback parser
+- `encoding/json` (stdlib) — StopFailure payload parsing
+- `regexp` (stdlib) — `% used` token extraction
+- `github.com/creack/pty` — PTY spawning (cross-platform POSIX; Windows not supported in v1)
+- `os/exec`, `context` (stdlib) — subprocess management with early termination
 - `github.com/stretchr/testify` — test assertions
 
 **Prerequisites:** Plugin scaffolding complete (`plugin-v0`). `plugin/internal/ratelimit/.gitkeep` present. `settingsjson-v0` complete (not a dep, but establishes the module pattern).
@@ -56,31 +58,31 @@ StopFailureHookInput = BaseHookInputSchema & {
 
 The plugin only handles `error == "rate_limit"`. All other values classify as "not our concern" and the gate returns `VerdictSkipHook` (this module doesn't know that the hook was bound with `matcher: rate_limit` — upstream filtering is the hook config, but defense-in-depth says we double-check).
 
-### 1.2 `/usage` output — strategy
+### 1.2 `/usage` probe — mechanism and parsing
 
-Format unknown at spec time (plugin spec §10 open question). v1 uses a two-strategy parser:
+**Mechanism.** `/usage` is a React TUI component (`type: 'local-jsx'` at `src/commands/usage/index.ts`). Any non-TTY invocation — `claude -p "/usage"`, piped-stdout `claude /usage`, or combinations with `-p ""` — returns a canned stub (`"You are currently using your subscription..."`) after ~5ms without hitting the API. Real usage data only renders under a PTY. See `docs/superpowers/specs/plugin/2026-04-22-plugin-design.md` §2.5 (updated 2026-04-23) and project memory `project_usage_probe_pty.md` for the investigation.
 
-**Strategy 1 — JSON.** Attempt `json.Unmarshal` into a hypothesized shape:
-```text
-{
-  "status":            "limited" | "ok"
-  "remaining_percent": number
-  "messages":          { "used": number, "limit": number }
-  ...
-}
-```
+**Invocation:** `claude /usage` spawned under a PTY via `github.com/creack/pty`. No `-p`. No `--output-format json` (silently ignored in interactive mode anyway).
 
-If parsing succeeds and ANY of the hypothesized fields is populated, extract a verdict:
-- `status == "limited"` OR `remaining_percent == 0` OR `messages.used >= messages.limit` → `UsageExhausted`
-- `remaining_percent > 0` with a numeric value → `UsageHeadroom`
-- None of the fields populated → `UsageUncertain`
+**Captured output shape.** Empirical sample from a live probe:
+- ANSI-formatted TUI text. Total output on my machine is ~8KB.
+- Per rate-limit window, the TUI renders `Math.floor(utilization)% used` (source: `src/components/Settings/Usage.tsx:42`). Three windows typically present: `Current session` (5h), `Current week (all models)` (7-day), `Current week (Sonnet only)` (7-day Sonnet).
+- Example observed tokens: `37% used`, `3% used`, `42% used` (percentages tick up across successive probes as the user consumes quota).
+- The tokens survive across ANSI escape boundaries — regex `(\d+)%\s*used` matches them without pre-stripping ANSI.
 
-**Strategy 2 — text.** If JSON unmarshal fails or returns `UsageUncertain`:
-- Exhaustion indicators (regex, case-insensitive): `rate[- ]limit`, `exhausted`, `exceeded`, `no (requests?|messages?) (remaining|left)`, `0% remaining`
-- Headroom indicators: `\d+% remaining`, `\d+ (requests?|messages?) (remaining|left)`
-- If exhaustion indicator matches and headroom doesn't → `UsageExhausted`
-- If headroom matches and exhaustion doesn't → `UsageHeadroom`
-- Otherwise → `UsageUncertain`
+**Early-termination strategy.** Claude Code's full TUI render can take 15-20 seconds. The probe uses a streaming read loop that terminates as soon as **≥2** `% used` tokens have been captured, or after a hard deadline (default 8s). Three expected latency phases:
+1. Process start → first byte: Claude Code cold-start (~2-5s).
+2. First byte → first `% used` token: data fetch + initial render (~1-3s).
+3. First token → second token: a few frame-update milliseconds.
+
+Early termination shaves ~10s off the full-render baseline. If the hard deadline fires with zero tokens captured, the probe returns `UsageUncertain`.
+
+**Classification thresholds:**
+- Any utilization ≥ 95 → `UsageExhausted` (95% accounts for `Math.floor` undercount — a real 99.9% renders as `99% used`).
+- All captured utilizations < 95 → `UsageHeadroom`.
+- Fewer than 2 tokens captured (or zero) → `UsageUncertain`.
+
+**Why ≥95, not ≥100:** The `/usage` API returns `utilization` as an integer percentage. Math.floor rounds down before display. A consumer who just hit a 429 likely shows 99% in `/usage`, not 100. Conservative to treat the band `[95, 100]` as exhausted.
 
 ### 1.3 Verdict matrix
 
@@ -107,10 +109,10 @@ Both signals have an `at` timestamp (StopFailure's from the hook fire time, /usa
 
 ### 1.6 What this module does NOT do
 
-- No process invocation. The sidecar runs `claude -p "/usage"`; this module parses the output.
 - No hook handler binding. The sidecar's `internal/hooks` module accepts the hook payload from stdin and calls `ratelimit.ParseStopFailurePayload`.
 - No ticket assembly for the exhaustion proof. That's in a later module (`internal/exhaustion-proof`). This module returns raw parsed structs that the caller bundles into the ticket.
-- No retry logic. One parse, one verdict.
+- No retry logic. One probe, one parse, one verdict.
+- No auth-state management. The probe subprocess inherits whatever Claude Code auth is already on the user's machine; we do not touch `.credentials.json` or the keychain.
 
 ---
 
@@ -152,20 +154,46 @@ const (
 // "StopFailure" (defensive: prevents misuse on other hook events).
 func ParseStopFailurePayload(r io.Reader) (*StopFailurePayload, error)
 
-// UsageVerdict classifies the outcome of parsing `claude -p "/usage"`.
+// ProbeRunner runs `claude /usage` under a PTY, reads output, and returns
+// as soon as enough signal has been captured or the deadline fires.
+type ProbeRunner interface {
+    // Probe returns the raw bytes captured from the PTY. An error may be
+    // returned alongside partial bytes when capture was cut short; callers
+    // should still attempt ParseUsageProbe on the bytes.
+    Probe(ctx context.Context) ([]byte, error)
+}
+
+// ClaudePTYProbeRunner is the default ProbeRunner implementation. Spawns
+// `claude /usage` under a PTY using github.com/creack/pty. Exits as soon as
+// MinTokens `% used` matches are visible in accumulated output, or when
+// HardDeadline elapses, or when ctx is cancelled.
+type ClaudePTYProbeRunner struct {
+    BinaryPath   string        // default: "claude"
+    Args         []string      // default: []string{"/usage"}
+    HardDeadline time.Duration // default: 8s
+    MinTokens    int           // default: 2
+}
+
+func NewClaudePTYProbeRunner() *ClaudePTYProbeRunner
+func (p *ClaudePTYProbeRunner) Probe(ctx context.Context) ([]byte, error)
+
+// UsageVerdict classifies the outcome of parsing `/usage` output.
 type UsageVerdict int
 
 const (
-    UsageExhausted UsageVerdict = iota  // clear signal: user is rate-limited
+    UsageExhausted UsageVerdict = iota  // clear signal: user is rate-limited (any window ≥95%)
     UsageHeadroom                        // clear signal: user has quota remaining
-    UsageUncertain                       // parser ran but signal is ambiguous
+    UsageUncertain                       // parser could not extract enough signal
 )
 
 func (v UsageVerdict) String() string
 
-// ParseUsageProbe parses `claude -p "/usage"` output. Tries JSON first
-// (UsageProbeJSON shape); falls back to regex-based text heuristics.
-// Never returns an error — worst case is UsageUncertain.
+// ParseUsageProbe classifies raw PTY-captured bytes from `claude /usage`.
+// Extracts all `\d+% used` tokens via regex; classifies per §1.2:
+//   - Any token ≥ 95 → UsageExhausted
+//   - All tokens < 95 and ≥2 tokens found → UsageHeadroom
+//   - Fewer than 2 tokens found → UsageUncertain
+// Never returns an error.
 func ParseUsageProbe(data []byte) UsageVerdict
 
 // Trigger indicates what invoked the gate.
@@ -206,13 +234,19 @@ plugin/internal/ratelimit/
 ├── ratelimit.go            -- package doc + enum types
 ├── stopfailure.go          -- StopFailurePayload + ParseStopFailurePayload
 ├── stopfailure_test.go
-├── usage.go                -- ParseUsageProbe (JSON + text strategies)
+├── probe.go                -- ProbeRunner interface + ClaudePTYProbeRunner (PTY spawn)
+├── probe_test.go           -- stub runner + small-buffer streaming tests
+├── usage.go                -- ParseUsageProbe (regex on `% used` tokens)
 ├── usage_test.go
 ├── verdict.go              -- ApplyVerdictMatrix + CheckFreshness
 ├── verdict_test.go
+└── testdata/
+    └── usage_sample.ansi   -- captured PTY bytes from a real `claude /usage` run
 ```
 
-7 files. Each file single-responsibility.
+8 Go files + one testdata fixture. Each file single-responsibility.
+
+**Testdata fixture**: the file `testdata/usage_sample.ansi` is raw bytes from a real run of `claude /usage` under a PTY, captured on 2026-04-23 against a Claude Max account at ~40% session utilization. Contains the tokens `40% used`, `3% used`, `94%`. This fixture anchors the parser tests — replace it if `Usage.tsx` renderer output changes in a future Claude Code release.
 
 ---
 
@@ -516,13 +550,277 @@ git add plugin/internal/ratelimit/stopfailure.go plugin/internal/ratelimit/stopf
 git commit -m "feat(plugin/ratelimit): ParseStopFailurePayload — JSON decode + schema guard"
 ```
 
-### Task 3: ParseUsageProbe — JSON strategy
+### Task 3: PTY probe runner — `ClaudePTYProbeRunner`
+
+**Files:**
+- Create: `plugin/internal/ratelimit/probe.go`
+- Create: `plugin/internal/ratelimit/probe_test.go`
+- Modify: `plugin/go.mod` — add `github.com/creack/pty`
+
+**Why a stub-runner interface.** The default `ClaudePTYProbeRunner` actually spawns `claude` — slow, requires the binary, network-touching. Tests use a `StubProbeRunner` that returns canned bytes (including the testdata fixture). Only one smoke test drives the real runner, and it skips unless `claude` is on PATH.
+
+- [ ] **Step 1: Add the pty dependency**
+
+```bash
+cd /Users/dor.amid/git/token-bay/plugin && PATH="$HOME/.local/share/mise/shims:$PATH" go get github.com/creack/pty@latest && PATH="$HOME/.local/share/mise/shims:$PATH" go mod tidy
+```
+
+- [ ] **Step 2: Write the stub + interface tests**
+
+Create `plugin/internal/ratelimit/probe_test.go`:
+
+```go
+package ratelimit
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// StubProbeRunner returns canned bytes. Used by the parser tests and the
+// sidecar tests; exported from this test file so sibling packages can
+// depend on it via internal/testsupport if needed later.
+type StubProbeRunner struct {
+	Bytes []byte
+	Err   error
+}
+
+func (s *StubProbeRunner) Probe(ctx context.Context) ([]byte, error) {
+	return s.Bytes, s.Err
+}
+
+func TestClaudePTYProbeRunner_Defaults(t *testing.T) {
+	r := NewClaudePTYProbeRunner()
+	require.NotNil(t, r)
+	assert.Equal(t, "claude", r.BinaryPath)
+	assert.Equal(t, []string{"/usage"}, r.Args)
+	assert.Equal(t, 8*time.Second, r.HardDeadline)
+	assert.Equal(t, 2, r.MinTokens)
+}
+
+func TestClaudePTYProbeRunner_MissingBinary_ReturnsError(t *testing.T) {
+	r := NewClaudePTYProbeRunner()
+	r.BinaryPath = "/definitely/does/not/exist/claude"
+	r.HardDeadline = 500 * time.Millisecond
+
+	_, err := r.Probe(context.Background())
+	assert.Error(t, err)
+}
+
+func TestClaudePTYProbeRunner_LiveSmokeTest(t *testing.T) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude binary not on PATH; skipping live smoke")
+	}
+	r := NewClaudePTYProbeRunner()
+	r.HardDeadline = 10 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	data, err := r.Probe(ctx)
+	// Error is acceptable if MinTokens was not reached before HardDeadline
+	// as long as we got SOME bytes — that means the PTY path is working.
+	if err != nil {
+		t.Logf("probe returned error (may be deadline-triggered): %v", err)
+	}
+	assert.NotEmpty(t, data, "live probe should return at least some TUI bytes")
+}
+
+// Ensure StubProbeRunner satisfies ProbeRunner at compile time.
+var _ ProbeRunner = (*StubProbeRunner)(nil)
+var _ ProbeRunner = (*ClaudePTYProbeRunner)(nil)
+
+func TestProbeRunner_ContextCancelled_ReturnsError(t *testing.T) {
+	r := NewClaudePTYProbeRunner()
+	r.BinaryPath = "/bin/sh"
+	r.Args = []string{"-c", "sleep 5"}
+	r.HardDeadline = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := r.Probe(ctx)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
+		"expected ctx error, got %v", err)
+}
+```
+
+- [ ] **Step 3: Run tests, confirm FAIL**
+
+Expected: `undefined: NewClaudePTYProbeRunner`, `undefined: ProbeRunner` etc.
+
+- [ ] **Step 4: Write implementation**
+
+Create `plugin/internal/ratelimit/probe.go`:
+
+```go
+package ratelimit
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os/exec"
+	"regexp"
+	"time"
+
+	"github.com/creack/pty"
+)
+
+// ProbeRunner runs `claude /usage` (or equivalent) under a PTY and returns
+// captured bytes. Callers pass the bytes to ParseUsageProbe.
+type ProbeRunner interface {
+	Probe(ctx context.Context) ([]byte, error)
+}
+
+// ClaudePTYProbeRunner spawns `claude` under a PTY (so Claude Code renders
+// its real TUI rather than the non-TTY stub) and reads until either
+// MinTokens `% used` matches are visible, the context is cancelled, or
+// HardDeadline elapses.
+type ClaudePTYProbeRunner struct {
+	BinaryPath   string
+	Args         []string
+	HardDeadline time.Duration
+	MinTokens    int
+}
+
+// NewClaudePTYProbeRunner returns a runner with sane defaults.
+func NewClaudePTYProbeRunner() *ClaudePTYProbeRunner {
+	return &ClaudePTYProbeRunner{
+		BinaryPath:   "claude",
+		Args:         []string{"/usage"},
+		HardDeadline: 8 * time.Second,
+		MinTokens:    2,
+	}
+}
+
+var probePctUsedRE = regexp.MustCompile(`(\d+)%\s*used`)
+
+// Probe spawns the configured command under a PTY, reads output, and
+// returns as soon as MinTokens `% used` matches are accumulated or the
+// hard deadline / ctx fires.
+func (p *ClaudePTYProbeRunner) Probe(ctx context.Context) ([]byte, error) {
+	deadline := p.HardDeadline
+	if deadline <= 0 {
+		deadline = 8 * time.Second
+	}
+	minTokens := p.MinTokens
+	if minTokens <= 0 {
+		minTokens = 2
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, p.BinaryPath, p.Args...)
+	pt, err := pty.Start(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("ratelimit: pty.Start %s: %w", p.BinaryPath, err)
+	}
+	defer func() { _ = pt.Close() }()
+
+	type readResult struct {
+		chunk []byte
+		err   error
+	}
+	reads := make(chan readResult, 16)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := pt.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				reads <- readResult{chunk: chunk}
+			}
+			if err != nil {
+				reads <- readResult{err: err}
+				return
+			}
+		}
+	}()
+
+	var out []byte
+	enough := false
+	for !enough {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			if len(out) == 0 {
+				return nil, ctx.Err()
+			}
+			return out, ctx.Err()
+		case r := <-reads:
+			if len(r.chunk) > 0 {
+				out = append(out, r.chunk...)
+				if countPctUsed(out) >= minTokens {
+					enough = true
+				}
+			}
+			if r.err != nil && r.err != io.EOF {
+				// Non-EOF read error before we had enough — surface it.
+				if !enough {
+					_ = cmd.Process.Kill()
+					_, _ = cmd.Process.Wait()
+					if len(out) == 0 {
+						return nil, r.err
+					}
+					return out, r.err
+				}
+			}
+			if r.err == io.EOF {
+				enough = true // process ended naturally
+			}
+		}
+	}
+
+	_ = cmd.Process.Kill()
+	_, _ = cmd.Process.Wait()
+	return out, nil
+}
+
+// countPctUsed returns the number of `N% used` tokens in data.
+// Used by the probe to decide when to early-terminate.
+func countPctUsed(data []byte) int {
+	return len(probePctUsedRE.FindAll(data, -1))
+}
+```
+
+- [ ] **Step 5: Run tests, confirm PASS**
+
+```bash
+cd /Users/dor.amid/git/token-bay/plugin && PATH="$HOME/.local/share/mise/shims:$PATH" go test -race ./internal/ratelimit/...
+```
+
+Note: the `LiveSmokeTest` may run or skip depending on whether `claude` is installed. The rest must pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add plugin/internal/ratelimit/probe.go plugin/internal/ratelimit/probe_test.go plugin/go.mod plugin/go.sum
+git commit -m "feat(plugin/ratelimit): PTY probe runner via creack/pty"
+```
+
+### Task 4: ParseUsageProbe — regex on `% used` tokens
 
 **Files:**
 - Create: `plugin/internal/ratelimit/usage.go`
 - Create: `plugin/internal/ratelimit/usage_test.go`
+- Create: `plugin/internal/ratelimit/testdata/usage_sample.ansi` — captured real probe bytes
 
-- [ ] **Step 1: Write failing tests — JSON cases only**
+- [ ] **Step 1: Capture a real fixture**
+
+During implementation, run `claude /usage` under PTY once (using the probe runner from Task 3 or a short Go main) and save the captured bytes to `plugin/internal/ratelimit/testdata/usage_sample.ansi`. This anchors the parser to real-world output.
+
+- [ ] **Step 2: Write failing tests**
 
 Create `plugin/internal/ratelimit/usage_test.go`:
 
@@ -530,245 +828,124 @@ Create `plugin/internal/ratelimit/usage_test.go`:
 package ratelimit
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestParseUsageProbe_JSONStatusLimited_ReturnsExhausted(t *testing.T) {
-	data := []byte(`{"status":"limited"}`)
-	assert.Equal(t, UsageExhausted, ParseUsageProbe(data))
-}
-
-func TestParseUsageProbe_JSONStatusOK_ReturnsHeadroom(t *testing.T) {
-	data := []byte(`{"status":"ok","remaining_percent":42}`)
+func TestParseUsageProbe_RealFixture_Headroom(t *testing.T) {
+	data, err := os.ReadFile("testdata/usage_sample.ansi")
+	require.NoError(t, err, "fixture must exist; capture via probe runner")
 	assert.Equal(t, UsageHeadroom, ParseUsageProbe(data))
 }
 
-func TestParseUsageProbe_JSONRemainingZero_ReturnsExhausted(t *testing.T) {
-	data := []byte(`{"status":"ok","remaining_percent":0}`)
-	assert.Equal(t, UsageExhausted, ParseUsageProbe(data))
-}
-
-func TestParseUsageProbe_JSONMessagesFull_ReturnsExhausted(t *testing.T) {
-	data := []byte(`{"messages":{"used":45,"limit":45}}`)
-	assert.Equal(t, UsageExhausted, ParseUsageProbe(data))
-}
-
-func TestParseUsageProbe_JSONMessagesRoom_ReturnsHeadroom(t *testing.T) {
-	data := []byte(`{"messages":{"used":10,"limit":45}}`)
+func TestParseUsageProbe_Synthetic_AllLow_Headroom(t *testing.T) {
+	data := []byte("Current session 10% used / Current week 5% used")
 	assert.Equal(t, UsageHeadroom, ParseUsageProbe(data))
 }
 
-func TestParseUsageProbe_EmptyJSON_ReturnsUncertain(t *testing.T) {
-	data := []byte(`{}`)
+func TestParseUsageProbe_Synthetic_OneHigh_Exhausted(t *testing.T) {
+	data := []byte("Current session 99% used / Current week 5% used")
+	assert.Equal(t, UsageExhausted, ParseUsageProbe(data))
+}
+
+func TestParseUsageProbe_Synthetic_ExactlyThreshold_Exhausted(t *testing.T) {
+	data := []byte("Current session 95% used / Current week 5% used")
+	assert.Equal(t, UsageExhausted, ParseUsageProbe(data))
+}
+
+func TestParseUsageProbe_Synthetic_JustBelowThreshold_Headroom(t *testing.T) {
+	data := []byte("Current session 94% used / Current week 5% used")
+	assert.Equal(t, UsageHeadroom, ParseUsageProbe(data))
+}
+
+func TestParseUsageProbe_SingleToken_Uncertain(t *testing.T) {
+	data := []byte("Current session 50% used")
 	assert.Equal(t, UsageUncertain, ParseUsageProbe(data))
+}
+
+func TestParseUsageProbe_NoTokens_Uncertain(t *testing.T) {
+	data := []byte("Loading usage data... (truncated before render)")
+	assert.Equal(t, UsageUncertain, ParseUsageProbe(data))
+}
+
+func TestParseUsageProbe_TokensAcrossANSIEscapes_StillMatches(t *testing.T) {
+	// Simulate the raw PTY format: `37%` then an ANSI escape then `used`.
+	// The regex allows \s* between % and used, and ANSI bytes start with ESC.
+	// In practice ANSI escapes are contiguous bytes with no whitespace, so
+	// the percent and `used` are joined by regular space in real captures.
+	data := []byte("Session 30% \x1b[0mused / Week 2% used")
+	assert.Equal(t, UsageHeadroom, ParseUsageProbe(data))
 }
 ```
 
-- [ ] **Step 2: Run tests, confirm FAIL**
+- [ ] **Step 3: Run tests, confirm FAIL**
 
-- [ ] **Step 3: Write JSON-strategy implementation**
+- [ ] **Step 4: Write implementation**
 
 Create `plugin/internal/ratelimit/usage.go`:
 
 ```go
 package ratelimit
 
-import "encoding/json"
+import "regexp"
 
-// usageProbeJSON is the hypothesized JSON shape of `claude -p "/usage"`.
-// Actual fields that Claude Code emits are uncertain as of the plugin spec
-// §10 open question — we parse defensively and treat any one populated
-// field as a signal.
-type usageProbeJSON struct {
-	Status           string       `json:"status,omitempty"`            // "limited" | "ok" | ""
-	RemainingPercent *float64     `json:"remaining_percent,omitempty"` // 0..100
-	Messages         *usageCounts `json:"messages,omitempty"`
-}
+// exhaustedThreshold is the utilization percentage at or above which
+// we classify a rate-limit window as exhausted. Math.floor is applied
+// by Claude Code before rendering (src/components/Settings/Usage.tsx:42),
+// so a real 99.9% shows as `99% used`. A window at 95+ is effectively
+// full.
+const exhaustedThreshold = 95
 
-type usageCounts struct {
-	Used  int `json:"used"`
-	Limit int `json:"limit"`
-}
+// usagePctUsedRE extracts `N% used` tokens. Allows ANSI escapes or other
+// non-word bytes between the digits and `used` — the `\s*` is a loose
+// tolerance for terminal-control sequences in captured output. In practice
+// captured PTY output renders the % and `used` separated by either a
+// literal space or a single cursor-control escape.
+var usagePctUsedRE = regexp.MustCompile(`(\d+)%[^\w]*used`)
 
-// ParseUsageProbe classifies `claude -p "/usage"` output. Tries JSON first;
-// falls back to text heuristics (added in Task 4). Never errors — worst case
-// is UsageUncertain, which the verdict matrix handles.
+// ParseUsageProbe extracts `N% used` utilization tokens from raw PTY
+// output and classifies per plan §1.2.
 func ParseUsageProbe(data []byte) UsageVerdict {
-	if v, ok := parseUsageJSON(data); ok {
-		return v
-	}
-	return UsageUncertain
-}
-
-func parseUsageJSON(data []byte) (UsageVerdict, bool) {
-	var p usageProbeJSON
-	if err := json.Unmarshal(data, &p); err != nil {
-		return UsageUncertain, false
-	}
-	// Status field has priority when present.
-	switch p.Status {
-	case "limited":
-		return UsageExhausted, true
-	case "ok":
-		// fall through; use numeric signals
-	}
-	// remaining_percent takes precedence over messages when present.
-	if p.RemainingPercent != nil {
-		if *p.RemainingPercent <= 0 {
-			return UsageExhausted, true
-		}
-		return UsageHeadroom, true
-	}
-	if p.Messages != nil && p.Messages.Limit > 0 {
-		if p.Messages.Used >= p.Messages.Limit {
-			return UsageExhausted, true
-		}
-		return UsageHeadroom, true
-	}
-	// Parsed but no signal.
-	return UsageUncertain, false
-}
-```
-
-- [ ] **Step 4: Run tests, confirm PASS**
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add plugin/internal/ratelimit/usage.go plugin/internal/ratelimit/usage_test.go
-git commit -m "feat(plugin/ratelimit): ParseUsageProbe JSON strategy"
-```
-
-### Task 4: ParseUsageProbe — text fallback strategy
-
-**Files:**
-- Modify: `plugin/internal/ratelimit/usage.go`
-- Modify: `plugin/internal/ratelimit/usage_test.go`
-
-- [ ] **Step 1: Append failing tests for text strategy**
-
-Append to `plugin/internal/ratelimit/usage_test.go`:
-
-```go
-func TestParseUsageProbe_TextExhaustion_ReturnsExhausted(t *testing.T) {
-	cases := []string{
-		"You have been rate limited. Wait 2h 14m.",
-		"Rate-limit exceeded",
-		"Quota exhausted for this window",
-		"No requests remaining",
-		"0% remaining",
-	}
-	for _, c := range cases {
-		t.Run(c, func(t *testing.T) {
-			assert.Equal(t, UsageExhausted, ParseUsageProbe([]byte(c)))
-		})
-	}
-}
-
-func TestParseUsageProbe_TextHeadroom_ReturnsHeadroom(t *testing.T) {
-	cases := []string{
-		"You have 42% remaining in this window.",
-		"3 messages left",
-		"20 requests remaining",
-	}
-	for _, c := range cases {
-		t.Run(c, func(t *testing.T) {
-			assert.Equal(t, UsageHeadroom, ParseUsageProbe([]byte(c)))
-		})
-	}
-}
-
-func TestParseUsageProbe_TextAmbiguous_ReturnsUncertain(t *testing.T) {
-	cases := []string{
-		"",
-		"Hello world",
-		"You are currently on the Pro plan.",
-	}
-	for _, c := range cases {
-		t.Run(c, func(t *testing.T) {
-			assert.Equal(t, UsageUncertain, ParseUsageProbe([]byte(c)))
-		})
-	}
-}
-
-func TestParseUsageProbe_TextConflicting_ReturnsUncertain(t *testing.T) {
-	// Contains both an exhaustion phrase and a headroom phrase — can't decide.
-	data := []byte("Rate limit exceeded for daily quota. 5 messages left in 5-hour window.")
-	assert.Equal(t, UsageUncertain, ParseUsageProbe(data))
-}
-```
-
-- [ ] **Step 2: Run tests, confirm FAIL on text cases**
-
-- [ ] **Step 3: Extend `usage.go` with text strategy**
-
-Add to `plugin/internal/ratelimit/usage.go`:
-
-```go
-import (
-	"encoding/json"
-	"regexp"
-)
-
-var (
-	exhaustionPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)rate[- ]limit(ed| exceeded| hit)?`),
-		regexp.MustCompile(`(?i)\bexhausted\b`),
-		regexp.MustCompile(`(?i)\bexceeded\b`),
-		regexp.MustCompile(`(?i)no (requests?|messages?|quota) (remaining|left)`),
-		regexp.MustCompile(`(?i)\b0 *% *remaining\b`),
-	}
-	headroomPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\b([1-9][0-9]?|100) *% *remaining\b`),
-		regexp.MustCompile(`(?i)\b([1-9][0-9]*) (requests?|messages?) (remaining|left)\b`),
-	}
-)
-
-// parseUsageText returns a verdict based on regex matches against text
-// output. Returns UsageUncertain if neither or both categories match.
-func parseUsageText(data []byte) UsageVerdict {
-	hasExhaustion := anyMatch(exhaustionPatterns, data)
-	hasHeadroom := anyMatch(headroomPatterns, data)
-	switch {
-	case hasExhaustion && !hasHeadroom:
-		return UsageExhausted
-	case hasHeadroom && !hasExhaustion:
-		return UsageHeadroom
-	default:
+	matches := usagePctUsedRE.FindAllSubmatch(data, -1)
+	if len(matches) < 2 {
 		return UsageUncertain
 	}
-}
-
-func anyMatch(patterns []*regexp.Regexp, data []byte) bool {
-	for _, p := range patterns {
-		if p.Match(data) {
-			return true
+	exhausted := false
+	for _, m := range matches {
+		pct := atoi(m[1])
+		if pct >= exhaustedThreshold {
+			exhausted = true
 		}
 	}
-	return false
-}
-```
-
-Modify the top-level `ParseUsageProbe` to fall through to text:
-
-```go
-func ParseUsageProbe(data []byte) UsageVerdict {
-	if v, ok := parseUsageJSON(data); ok {
-		return v
+	if exhausted {
+		return UsageExhausted
 	}
-	return parseUsageText(data)
+	return UsageHeadroom
+}
+
+// atoi is a minimal safe atoi for regex-captured digits. Never panics.
+func atoi(b []byte) int {
+	n := 0
+	for _, c := range b {
+		if c < '0' || c > '9' {
+			return n
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 ```
 
-- [ ] **Step 4: Run tests, confirm PASS across all usage tests**
+- [ ] **Step 5: Run tests, confirm PASS**
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add plugin/internal/ratelimit/usage.go plugin/internal/ratelimit/usage_test.go
-git commit -m "feat(plugin/ratelimit): ParseUsageProbe text fallback via regex"
+git add plugin/internal/ratelimit/usage.go plugin/internal/ratelimit/usage_test.go plugin/internal/ratelimit/testdata/
+git commit -m "feat(plugin/ratelimit): ParseUsageProbe via regex on % used tokens"
 ```
 
 ### Task 5: Verdict matrix + freshness guard
