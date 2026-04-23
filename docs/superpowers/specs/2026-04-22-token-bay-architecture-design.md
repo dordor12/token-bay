@@ -30,7 +30,7 @@ The following choices were resolved during brainstorming and are load-bearing ac
 
 ### 1.1 The five subsystems
 
-1. **Consumer plugin** — A Claude Code plugin. Registers a `StopFailure{rate_limit}` hook, slash commands (`/token-bay fallback`, `/token-bay status`, etc.), and a background sidecar that maintains the tracker connection. **Does not intercept Claude Code's HTTPS traffic** — Claude Code makes API calls to Anthropic normally using its own authentication. When a call ends with a rate-limit failure, the plugin verifies state with `claude -p "/usage"`, offers the user a network fallback, and on consent routes the request via the Token-Bay network.
+1. **Consumer plugin** — A Claude Code plugin. Registers a `StopFailure{rate_limit}` hook, slash commands (`/token-bay fallback`, `/token-bay status`, etc.), and a background sidecar that maintains the tracker connection. In normal operation it does **not** intercept Claude Code's HTTPS traffic — Claude Code talks to Anthropic directly using its own authentication. When a turn fails with a rate-limit error, the plugin verifies via `claude -p "/usage"`, asks the user to consent, then redirects Claude Code's next `/v1/messages` call **mid-session** to the sidecar by atomically editing `~/.claude/settings.json` (setting `ANTHROPIC_BASE_URL=http://127.0.0.1:PORT`). Claude Code's native settings watcher propagates the change within ~50ms; the next request arrives at the sidecar's Anthropic-compatible `ccproxy` endpoint, which routes through the Token-Bay network. No Claude Code restart. Details in the [plugin spec §2.5](./plugin/2026-04-22-plugin-design.md#25-mid-session-redirect-mechanism).
 2. **Seeder plugin** — Same plugin binary, different role. Registers with a regional tracker, advertises availability when the user's idle policy permits, accepts forwarded requests, and serves them via `claude -p "<prompt>"` with tool-disabling flags (no `Bash`, `Read`, `Write`, MCP, or hooks). Claude Code authenticates and talks to Anthropic on its own; the seeder plugin never holds credentials. Response streams back through `claude -p` stdout and over the tunnel.
 3. **Regional tracker** — A server that holds a live seeder registry, brokers requests, owns the region's credit ledger, and serves as NAT rendezvous for peer-to-peer tunnels. One tracker serves a latency-defined region; regions may overlap physically.
 4. **Federation layer** — The protocol by which regional trackers peer with each other. Carries Merkle-root attestations, cross-region credit-transfer proofs, and identity-revocation gossip.
@@ -45,8 +45,8 @@ The following choices were resolved during brainstorming and are load-bearing ac
   │  Claude Code CLI    │       (long-lived TLS)         │  Seeder plugin       │
   │        │            │                                │        │             │
   │  Consumer plugin ◄──┼────►  Regional tracker  ◄──────┼───  (registry,       │
-  │  (hooks + sidecar)  │      (registry, broker,        │     heartbeat)       │
-  │                     │       ledger, STUN)            │                      │
+  │  (hooks + sidecar   │      (registry, broker,        │     heartbeat)       │
+  │   + ccproxy)        │       ledger, STUN)            │                      │
   └──────────┬──────────┘               ▲                └──────────┬───────────┘
              │                          │                           │
              │                          ▼                           │
@@ -79,21 +79,23 @@ Per-request traffic attempts peer-to-peer (consumer plugin ↔ seeder plugin) fi
 |---|---|---|
 | 1 | Claude Code CLI → `api.anthropic.com` | Claude Code makes `POST /v1/messages` directly, using its own authentication. Plugin does not intercept. |
 | 2 | Anthropic → Claude Code | **`2xx`** → response streams to the CLI; plugin uninvolved. **`429`** → Claude Code ends the turn with `StopFailure{matcher: rate_limit}`. |
-| 3 | `StopFailure` hook → Consumer plugin | Plugin captures the failure payload (error shape, timestamp). |
-| 3a | Consumer plugin | Runs `claude -p "/usage"` with tool-disabling flags to independently verify rate-limit exhaustion (two-stage gate). |
+| 3 | `StopFailure` hook → Consumer plugin | Plugin captures the failure payload (error shape, timestamp) into a pending-fallback ticket. |
+| 3a | Consumer plugin | Runs `claude -p "/usage"` with tool-disabling flags to independently verify rate-limit exhaustion (two-stage gate). Appends the `/usage` output to the ticket. |
 | 3b | Consumer plugin → User | Offers network fallback (cost estimate + current balance). On user decline, stop. |
-| 3c | Consumer plugin | On user consent: capture current conversation context. Reserve `N` credits locally (upper-bound: `max_input × input_rate + max_output × output_rate`). Build envelope with `exhaustion_proof = {stop_failure, usage_probe}`. Sign. |
-| 4 | Consumer plugin → Tracker | `broker_request(model, max_input_tokens, max_output_tokens, tier, body_hash, exhaustion_proof, consumer_sig, balance_proof)` |
+| 3c | Consumer plugin (sidecar) | On user consent: atomically rewrites `~/.claude/settings.json` to set `env.ANTHROPIC_BASE_URL=http://127.0.0.1:PORT`. Records rollback. Claude Code's settings file watcher picks up the change; its next `/v1/messages` call will route to the sidecar. (Plugin spec §2.5 + §5.3.) |
+| 3d | User | Types next prompt. Claude Code builds a fresh Anthropic client that reads the new `ANTHROPIC_BASE_URL`. |
+| 4 | Claude Code → Consumer plugin (`ccproxy`) | POST `/v1/messages` arrives at sidecar. Sidecar assembles envelope with `exhaustion_proof = {stop_failure, usage_probe}` from the cached ticket; signs. |
+| 4a | Consumer plugin → Tracker | `broker_request(model, max_input_tokens, max_output_tokens, tier, body_hash, exhaustion_proof, consumer_sig, balance_proof)` |
 | 5 | Tracker | Select a seeder. Scoring: `score = reputation × α + headroom × β − latency × γ − load × δ`. Tier filter applied first. |
 | 6 | Tracker → Seeder | `offer(consumer_id, envelope_hash, terms)` |
 | 7 | Seeder → Tracker | `accept(ephemeral_pubkey)` or `reject(reason)` — on reject, tracker tries next candidate. |
 | 8 | Tracker → Consumer plugin | `seeder_addr, seeder_pubkey, reservation_token` |
 | 9 | Consumer ↔ Seeder | NAT hole-punch attempt via tracker's STUN; fallback to tracker-relayed tunnel. |
-| 10 | Consumer plugin → Seeder plugin | Encrypted conversation body over the tunnel (TLS). Standard tier: seeder plugin process decrypts. |
+| 10 | Consumer plugin → Seeder plugin | Request body over the tunnel (TLS). Standard tier: seeder plugin process decrypts. |
 | 11 | Seeder plugin | Invokes `claude -p "<prompt>"` with tool-disabling flags (`--disallowedTools "*" --mcp-config /dev/null`, empty hooks). |
-| 12 | Claude Code ↔ `api.anthropic.com` | Claude Code sends `POST /v1/messages` under its own auth; Anthropic returns a streaming SSE response. |
+| 12 | Claude Code ↔ `api.anthropic.com` (seeder side) | Seeder's Claude Code sends `POST /v1/messages` under its own auth; Anthropic returns a streaming SSE response. |
 | 13 | `claude -p` stdout → Seeder plugin → Consumer plugin | Seeder plugin reads stream-json chunks from `claude -p` and relays over the tunnel. |
-| 14 | Consumer plugin → Claude Code CLI | Stream-relay to CLI. |
+| 14 | Consumer plugin (`ccproxy`) → Claude Code | Stream SSE chunks back over the HTTP response socket — this is the same socket Claude Code opened in step 4. Claude Code renders the streaming output as a normal turn. |
 | 15 | Seeder → Tracker | `usage_report(input_tokens, output_tokens, model, seeder_sig)` |
 | 16 | Tracker | Compute `cost_credits` from the weighted metering function. Construct ledger entry. Sign. |
 | 17 | Tracker → Consumer plugin | `settlement_request(entry_preimage)` |
