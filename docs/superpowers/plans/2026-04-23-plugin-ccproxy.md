@@ -74,12 +74,23 @@ State is in-memory. On sidecar restart, all network-mode entries are lost and th
 
 ### 1.4 RequestRouter interface + two v1 impls
 
-`RequestRouter` is an interface. The HTTP handler resolves the session mode to a router and delegates. v1 ships:
+**Why there's a `PassThroughRouter` at all.** The plugin spec §2.5 redirect mechanism sets `ANTHROPIC_BASE_URL` in `settings.json` — a **process-global** env var that applies to every Anthropic-bound request from every Claude Code process sharing this user's settings file. Three realities force the sidecar to be a cooperating proxy, not just an intercept-and-route:
+
+1. **Non-turn endpoints.** Claude Code hits `/v1/messages/count_tokens`, `/v1/models`, OAuth refreshes, etc. Network-routing them is meaningless (metadata, not turn execution). Without a pass-through, Claude Code's token counter, model picker, and auth refresh break while network mode is active.
+2. **Concurrent Claude Code sessions.** A second Claude Code window (session B) in the same user's settings share sees the redirected `ANTHROPIC_BASE_URL` too. Without pass-through, B silently fails the moment session A enters network mode.
+3. **Race window at network-mode entry.** Between the `settings.json` write and the sidecar's `SessionModeStore.EnterNetworkMode` call, a request can arrive for a session we haven't registered yet. Pass-through keeps it working; the user's next retry naturally lands in `NetworkRouter`.
+
+Rejected alternatives:
+- **Refuse non-registered traffic.** Better credential isolation, terrible UX: user must close other Claude Code windows before fallback works, quota-counting breaks mid-session.
+- **Per-session redirect.** Doesn't exist in Claude Code — `ANTHROPIC_BASE_URL` is the only programmatic redirect knob, and it's process-global.
+
+The tradeoff is a real credential-handling concession: `PassThroughRouter` sees `Authorization` header bytes on the wire (we never parse/store/log them, but they transit our process). Plugin spec §2.5 already accepted this implicitly when it chose `ANTHROPIC_BASE_URL` redirect over "relaunch Claude Code" — once we said the sidecar is on the HTTPS path, pass-through was the cost of that architectural choice.
 
 **`PassThroughRouter`**:
 - Uses `httputil.ReverseProxy` with a Director that rewrites the target to `https://api.anthropic.com`.
-- Copies the original Authorization header byte-for-byte (we don't parse, log, or touch it — see plugin spec §5.1 note on credential boundary).
+- Copies the original `Authorization` header byte-for-byte. Never parses, logs, or persists it.
 - Copies the response (including streaming SSE) verbatim back to Claude Code.
+- Invoked for: non-`/v1/messages` endpoints on any session, **and** `/v1/messages` on sessions not in network mode.
 
 **`NetworkRouter`** (v1 stub):
 - Returns `501 Not Implemented` with an Anthropic-style error JSON:
@@ -88,7 +99,7 @@ State is in-memory. On sidecar restart, all network-mode entries are lost and th
    "message": "Token-Bay network routing not yet implemented in this build (v1 stub)."}}
   ```
 - Claude Code surfaces this as a failed turn. The user sees a clear message.
-- The real NetworkRouter lands in the `internal/ccproxy-network` feature plan (separate), once `shared/proto` envelope types and `internal/tunnel` exist.
+- The real `NetworkRouter` lands in the `internal/ccproxy-network` feature plan (separate), once `shared/proto` envelope types and `internal/tunnel` exist.
 
 ### 1.5 HTTP server lifecycle
 
