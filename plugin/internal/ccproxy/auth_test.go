@@ -1,9 +1,12 @@
 package ccproxy
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,4 +38,36 @@ func TestAuthState_UnmarshalMinimalNotLoggedIn(t *testing.T) {
 	assert.Equal(t, "none", state.AuthMethod)
 	assert.Empty(t, state.Email)
 	assert.Empty(t, state.OrgID)
+}
+
+func TestClaudeAuthProber_Defaults(t *testing.T) {
+	p := NewClaudeAuthProber()
+	assert.Equal(t, "claude", p.BinaryPath)
+	assert.Equal(t, 5*time.Second, p.Timeout)
+}
+
+func TestClaudeAuthProber_MissingBinary_ReturnsError(t *testing.T) {
+	p := NewClaudeAuthProber()
+	p.BinaryPath = "/definitely/does/not/exist/claude"
+
+	_, err := p.Probe(context.Background())
+	assert.Error(t, err)
+}
+
+// Compile-time interface compliance.
+var _ AuthProber = (*ClaudeAuthProber)(nil)
+
+func TestClaudeAuthProber_LiveSmokeTest(t *testing.T) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude not on PATH; skipping live smoke")
+	}
+	p := NewClaudeAuthProber()
+
+	state, err := p.Probe(context.Background())
+	// Exit code 1 from `claude auth status` (not logged in) is reflected
+	// in state.LoggedIn, not as a Probe error. Either way the JSON is
+	// valid and parseable.
+	require.NoError(t, err, "probe should parse output regardless of login state")
+	require.NotNil(t, state)
+	assert.NotEmpty(t, state.AuthMethod, "authMethod should be populated")
 }
