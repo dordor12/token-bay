@@ -13,7 +13,7 @@ Authoritative spec: `docs/superpowers/specs/plugin/2026-04-22-plugin-design.md`.
 
 1. **The plugin never holds an Anthropic API key.** All Anthropic-bound traffic is mediated by the `claude` CLI (the "bridge"). If you find yourself adding a field to store a token, stop and re-read the spec.
 2. **Seeder-role `claude -p` invocations disable every side-effecting primitive.** The minimum flag set: `--disallowedTools "*" --mcp-config /dev/null` and empty hooks. Defined in `internal/ccbridge`. Any change to those flags must ship with an updated bridge conformance test.
-3. **Never intercept Claude Code's HTTPS traffic.** The plugin is hook-driven and slash-command-driven. No local proxy. No modifying Claude Code's API base URL.
+3. **Never hold or inspect Anthropic auth credentials.** The `internal/ccproxy` local HTTP server on `127.0.0.1` is the sanctioned endpoint for mid-session redirect via `ANTHROPIC_BASE_URL` in `~/.claude/settings.json` (spec §2.5; `docs/superpowers/plans/2026-04-23-plugin-ccproxy.md`). It MUST forward upstream bytes — including the `Authorization` header — verbatim, never parsing, logging, caching, or mutating credentials. No other interception mechanism is allowed.
 4. **Audit log append-only.** Never rewrite or truncate `~/.token-bay/audit.log`. Rotation is by file.
 5. **Consumer and seeder roles share one binary.** The same `token-bay-sidecar` process handles both; config switches them on. Don't split into two binaries without a very good reason.
 
@@ -55,6 +55,6 @@ The sidecar runs a subset of the conformance suite at startup (`internal/ccbridg
 
 ## Things that look surprising and aren't bugs
 
-- `/token-bay fallback` runs `claude -p "/usage"` as part of its gate. That subprocess is a real API call and could itself hit a rate limit — that's the "degraded proof" path, documented in the exhaustion-proof spec.
+- `/token-bay fallback` runs `claude /usage` under a PTY (not `-p`) as part of its gate — `/usage` is a `local-jsx` TUI that bails to a stub when stdout isn't a TTY (spec §5.2). That subprocess is a real API call and could itself hit a rate limit — that's the "degraded proof" path, documented in the exhaustion-proof spec.
 - The plugin config has no `anthropic_token` field. Intentional (see rule 1).
 - `claude -p` appears to spawn a full Claude Code instance. Intentional; the tool-disabling flags are why that's safe.
