@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/shared/proto"
 )
 
 func TestNew_ValidShardCount(t *testing.T) {
@@ -200,5 +201,68 @@ func TestRegistry_UpdateExternalAddr_UnknownReturnsErr(t *testing.T) {
 	r, err := New(DefaultShardCount)
 	require.NoError(t, err)
 	err = r.UpdateExternalAddr(ids.IdentityID{0xDD}, netip.MustParseAddrPort("1.1.1.1:80"))
+	assert.ErrorIs(t, err, ErrUnknownSeeder)
+}
+
+func TestRegistry_Advertise_AppliesAllThreeFields(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x60}
+	r.Register(SeederRecord{IdentityID: id})
+
+	caps := Capabilities{
+		Models:     []string{"claude-opus-4-7", "claude-sonnet-4-6"},
+		MaxContext: 200_000,
+		Tiers:      []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+	}
+	require.NoError(t, r.Advertise(id, caps, true, 0.65))
+
+	got, _ := r.Get(id)
+	assert.Equal(t, caps.Models, got.Capabilities.Models)
+	assert.Equal(t, caps.MaxContext, got.Capabilities.MaxContext)
+	assert.Equal(t, caps.Tiers, got.Capabilities.Tiers)
+	assert.True(t, got.Available)
+	assert.Equal(t, 0.65, got.HeadroomEstimate)
+}
+
+func TestRegistry_Advertise_RejectsHeadroomBelowZero(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x61}
+	r.Register(SeederRecord{IdentityID: id, HeadroomEstimate: 0.5})
+
+	err = r.Advertise(id, Capabilities{}, true, -0.1)
+	assert.ErrorIs(t, err, ErrInvalidHeadroom)
+
+	// Reject = no mutation.
+	got, _ := r.Get(id)
+	assert.Equal(t, 0.5, got.HeadroomEstimate)
+}
+
+func TestRegistry_Advertise_RejectsHeadroomAboveOne(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x62}
+	r.Register(SeederRecord{IdentityID: id})
+
+	err = r.Advertise(id, Capabilities{}, true, 1.0001)
+	assert.ErrorIs(t, err, ErrInvalidHeadroom)
+}
+
+func TestRegistry_Advertise_HeadroomBoundsInclusive(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x63}
+	r.Register(SeederRecord{IdentityID: id})
+
+	require.NoError(t, r.Advertise(id, Capabilities{}, true, 0.0))
+	require.NoError(t, r.Advertise(id, Capabilities{}, true, 1.0))
+}
+
+func TestRegistry_Advertise_UnknownReturnsErr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	err = r.Advertise(ids.IdentityID{0xEE}, Capabilities{}, true, 0.5)
 	assert.ErrorIs(t, err, ErrUnknownSeeder)
 }

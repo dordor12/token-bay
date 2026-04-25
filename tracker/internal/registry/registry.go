@@ -85,3 +85,19 @@ func (r *Registry) UpdateExternalAddr(id ids.IdentityID, addr netip.AddrPort) er
 		return nil
 	})
 }
+
+// Advertise atomically applies the seeder's reported capabilities,
+// availability, and headroom. headroom must be within [0.0, 1.0] or
+// ErrInvalidHeadroom is returned (and no mutation occurs). Returns
+// ErrUnknownSeeder if the seeder is not in the registry.
+func (r *Registry) Advertise(id ids.IdentityID, caps Capabilities, available bool, headroom float64) error {
+	if headroom < 0.0 || headroom > 1.0 {
+		return ErrInvalidHeadroom
+	}
+	return r.shardFor(id).update(id, func(rec *SeederRecord) error {
+		rec.Capabilities = caps
+		rec.Available = available
+		rec.HeadroomEstimate = headroom
+		return nil
+	})
+}
