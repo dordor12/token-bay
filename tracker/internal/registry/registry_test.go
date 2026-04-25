@@ -665,3 +665,58 @@ func TestRegistry_Match_DeepCopies(t *testing.T) {
 	got, _ := r.Get(id)
 	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
 }
+
+func TestRegistry_Sweep_RemovesStale(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-2 * time.Hour)
+	fresh := now.Add(-1 * time.Minute)
+
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, LastHeartbeat: stale})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x02}, LastHeartbeat: fresh})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x03}, LastHeartbeat: stale})
+
+	removed := r.Sweep(now.Add(-1 * time.Hour))
+	assert.Equal(t, 2, removed)
+
+	_, ok1 := r.Get(ids.IdentityID{0x01})
+	_, ok2 := r.Get(ids.IdentityID{0x02})
+	_, ok3 := r.Get(ids.IdentityID{0x03})
+	assert.False(t, ok1)
+	assert.True(t, ok2)
+	assert.False(t, ok3)
+}
+
+func TestRegistry_Sweep_EmptyRegistry(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, r.Sweep(time.Now()))
+}
+
+func TestRegistry_Sweep_BoundaryIsInclusive(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	t0 := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, LastHeartbeat: t0})
+
+	// Sweeping at staleBefore == t0 should remove the record (inclusive).
+	removed := r.Sweep(t0)
+	assert.Equal(t, 1, removed)
+}
+
+func TestRegistry_Sweep_FreshRecordSurvives(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	t0 := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, LastHeartbeat: t0.Add(time.Second)})
+
+	removed := r.Sweep(t0)
+	assert.Equal(t, 0, removed)
+
+	_, ok := r.Get(ids.IdentityID{0x01})
+	assert.True(t, ok)
+}
