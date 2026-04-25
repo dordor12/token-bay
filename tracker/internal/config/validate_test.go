@@ -280,3 +280,121 @@ func TestValidate_SettlementReservationOutlivesSettlement(t *testing.T) {
 	}
 	assert.True(t, matched)
 }
+
+func TestValidate_FederationPeerCountMin(t *testing.T) {
+	c := validConfig(t)
+	c.Federation.PeerCountMin = 0
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "federation.peer_count_min" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_FederationPeerCountOrdering(t *testing.T) {
+	c := validConfig(t)
+	c.Federation.PeerCountMin = 20
+	c.Federation.PeerCountMax = 10
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "federation.peer_count_max" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_FederationGossipDedupePositive(t *testing.T) {
+	c := validConfig(t)
+	c.Federation.GossipDedupeTTLS = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "federation.gossip_dedupe_ttl_s")
+}
+
+func TestValidate_FederationTransferRetryPositive(t *testing.T) {
+	c := validConfig(t)
+	c.Federation.TransferRetryWindowH = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "federation.transfer_retry_window_hours")
+}
+
+func TestValidate_FederationEnrollRateMin(t *testing.T) {
+	c := validConfig(t)
+	c.Federation.EnrollRatePerMinPerIP = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "federation.enroll_rate_per_min_per_ip")
+}
+
+func TestValidate_ReputationEvalIntervalPositive(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.EvaluationIntervalS = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "reputation.evaluation_interval_s")
+}
+
+func TestValidate_ReputationSignalWindowOrdering_ShortGEMedium(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.SignalWindows.ShortS = 100000 // > medium
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "reputation.signal_windows" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_ReputationZScoreThresholdPositive(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.ZScoreThreshold = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "reputation.z_score_threshold")
+}
+
+func TestValidate_ReputationDefaultScoreRange(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.DefaultScore = 1.5
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "reputation.default_score")
+}
+
+func TestValidate_ReputationFreezeListCacheTTLPositive(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.FreezeListCacheTTLS = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "reputation.freeze_list_cache_ttl_s")
+}

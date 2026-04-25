@@ -21,6 +21,8 @@ func Validate(c *Config) error {
 	v.checkLedger(c)
 	v.checkBroker(c)
 	v.checkSettlement(c)
+	v.checkFederation(c)
+	v.checkReputation(c)
 	return v.toError()
 }
 
@@ -189,4 +191,44 @@ func approxEqual(a, b, tolerance float64) bool {
 // ftoa renders a float in a stable, operator-readable form.
 func ftoa(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// §6.6
+func (v *validator) checkFederation(c *Config) {
+	if c.Federation.PeerCountMin < 1 {
+		v.add("federation.peer_count_min", "must be >= 1")
+	}
+	if c.Federation.PeerCountMax < c.Federation.PeerCountMin {
+		v.add("federation.peer_count_max", "must be >= peer_count_min")
+	}
+	if c.Federation.GossipDedupeTTLS <= 0 {
+		v.add("federation.gossip_dedupe_ttl_s", "must be > 0")
+	}
+	if c.Federation.TransferRetryWindowH <= 0 {
+		v.add("federation.transfer_retry_window_hours", "must be > 0")
+	}
+	if c.Federation.EnrollRatePerMinPerIP < 1 {
+		v.add("federation.enroll_rate_per_min_per_ip", "must be >= 1")
+	}
+}
+
+// §6.7
+func (v *validator) checkReputation(c *Config) {
+	if c.Reputation.EvaluationIntervalS <= 0 {
+		v.add("reputation.evaluation_interval_s", "must be > 0")
+	}
+	w := c.Reputation.SignalWindows
+	if !(w.ShortS < w.MediumS && w.MediumS < w.LongS) {
+		v.add("reputation.signal_windows",
+			"must have short_s < medium_s < long_s")
+	}
+	if c.Reputation.ZScoreThreshold <= 0 {
+		v.add("reputation.z_score_threshold", "must be > 0")
+	}
+	if c.Reputation.DefaultScore < 0 || c.Reputation.DefaultScore > 1 {
+		v.add("reputation.default_score", "must be in [0.0, 1.0]")
+	}
+	if c.Reputation.FreezeListCacheTTLS <= 0 {
+		v.add("reputation.freeze_list_cache_ttl_s", "must be > 0")
+	}
 }
