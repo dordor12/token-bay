@@ -197,21 +197,3 @@ func TestVerifyEnvelope_MarshalError(t *testing.T) {
 	assert.False(t, VerifyEnvelope(pub, signed), "VerifyEnvelope must return false on marshal error")
 }
 
-// TestSignBalanceSnapshot_MarshalError covers the if err != nil branch in SignBalanceSnapshot.
-func TestSignBalanceSnapshot_MarshalError(t *testing.T) {
-	_, priv := fixtureKeypair(t)
-	// BalanceSnapshotBody has no string fields so we cannot inject invalid UTF-8 directly.
-	// The marshal-error branch in SignBalanceSnapshot is therefore structurally unreachable
-	// for the current schema — this is a defensive guard. This test documents that fact
-	// and keeps coverage honest: we do not manufacture a fake error.
-	// Coverage for this branch is accepted as-is (see signing/proto.go line ~68).
-	_ = priv
-}
-
-// TestVerifyBalanceSnapshot_MarshalError documents that the marshal-error branch in
-// VerifyBalanceSnapshot is structurally unreachable for the current BalanceSnapshotBody
-// schema (no string fields that could carry invalid UTF-8).
-func TestVerifyBalanceSnapshot_MarshalError(t *testing.T) {
-	pub, _ := fixtureKeypair(t)
-	_ = pub
-}
