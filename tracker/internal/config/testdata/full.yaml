@@ -1,0 +1,90 @@
+data_dir: /var/lib/token-bay
+log_level: info
+
+server:
+  listen_addr: "0.0.0.0:7777"
+  identity_key_path: /etc/token-bay/identity.key
+  tls_cert_path: /etc/token-bay/cert.pem
+  tls_key_path: /etc/token-bay/cert.key
+
+admin:
+  listen_addr: "127.0.0.1:9090"
+
+ledger:
+  storage_path: /var/lib/token-bay/ledger.sqlite
+  merkle_root_interval_minutes: 60
+
+broker:
+  headroom_threshold: 0.2
+  load_threshold: 5
+  score_weights:
+    reputation: 0.4
+    headroom: 0.3
+    rtt: 0.2
+    load: 0.1
+  offer_timeout_ms: 1500
+  max_offer_attempts: 4
+  broker_request_rate_per_sec: 2.0
+
+settlement:
+  tunnel_setup_ms: 10000
+  stream_idle_s: 60
+  settlement_timeout_s: 900
+  reservation_ttl_s: 1200
+
+federation:
+  peer_count_min: 8
+  peer_count_max: 16
+  gossip_dedupe_ttl_s: 3600
+  transfer_retry_window_hours: 24
+  enroll_rate_per_min_per_ip: 1
+
+reputation:
+  evaluation_interval_s: 60
+  signal_windows:
+    short_s: 3600
+    medium_s: 86400
+    long_s: 604800
+  z_score_threshold: 2.5
+  default_score: 0.5
+  freeze_list_cache_ttl_s: 600
+
+admission:
+  pressure_admit_threshold: 0.85
+  pressure_reject_threshold: 1.5
+  queue_cap: 512
+  trial_tier_score: 0.4
+  aging_alpha_per_minute: 0.05
+  queue_timeout_s: 300
+  score_weights:
+    settlement_reliability: 0.30
+    inverse_dispute_rate: 0.10
+    tenure: 0.20
+    net_credit_flow: 0.30
+    balance_cushion: 0.10
+  net_flow_normalization_constant: 10000
+  tenure_cap_days: 30
+  starter_grant_credits: 1000
+  rolling_window_days: 30
+  trial_settlements_required: 50
+  trial_duration_hours: 72
+  attestation_ttl_seconds: 86400
+  attestation_max_ttl_seconds: 604800
+  attestation_issuance_per_consumer_per_hour: 6
+  max_attestation_score_imported: 0.95
+  tlog_path: /var/lib/token-bay/admission.tlog
+  snapshot_path_prefix: /var/lib/token-bay/admission.snapshot
+  snapshot_interval_s: 600
+  snapshots_retained: 3
+  fsync_batch_window_ms: 5
+  heartbeat_window_minutes: 10
+  heartbeat_freshness_decay_max_s: 300
+  attestation_peer_blocklist: []
+
+stun_turn:
+  stun_listen_addr: ":3478"
+  turn_listen_addr: ":3479"
+  turn_relay_max_kbps: 1024
+
+metrics:
+  listen_addr: ":9100"
