@@ -22,9 +22,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Note: no `require github.com/token-bay/token-bay/shared` directive is present
-// because no plugin source imports shared/ yet. `go mod tidy` removes unused
-// requires but keeps this `replace` so the require resolves locally when a
-// feature plan adds the first shared-side import. Do not delete this replace
-// when it appears dangling — it is intentional.
+// Resolves the `shared` require to the in-repo sibling module for go.work-based
+// development. The pseudo-version above (v0.0.0-00010101000000-000000000000) is
+// what `go mod tidy` synthesizes for a replace-only dependency.
 replace github.com/token-bay/token-bay/shared => ../shared
