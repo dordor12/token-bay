@@ -1,0 +1,41 @@
+syntax = "proto3";
+package tokenbay.proto.v1;
+
+option go_package = "github.com/token-bay/token-bay/shared/proto";
+
+import "exhaustionproof/proof.proto";
+import "proto/balance.proto";
+
+// PrivacyTier classifies a broker_request's confidentiality requirement.
+// PRIVACY_TIER_UNSPECIFIED is rejected by ValidateEnvelopeBody.
+enum PrivacyTier {
+  PRIVACY_TIER_UNSPECIFIED = 0;
+  PRIVACY_TIER_STANDARD    = 1;
+  PRIVACY_TIER_TEE         = 2;
+}
+
+// EnvelopeBody — the signed payload of a broker_request.
+// Spec: docs/superpowers/specs/shared/2026-04-24-wire-format-v1-design.md §5.3.
+// All consumer-side validation rules in ValidateEnvelopeBody (validate.go).
+message EnvelopeBody {
+  uint32 protocol_version  = 1;   // matches shared/proto.ProtocolVersion
+  bytes  consumer_id       = 2;   // 32 bytes — Ed25519 pubkey hash / IdentityID
+  string model             = 3;
+  uint64 max_input_tokens  = 4;
+  uint64 max_output_tokens = 5;
+  PrivacyTier tier         = 6;
+  bytes  body_hash         = 7;   // 32 bytes — SHA-256 of full Anthropic /v1/messages body
+
+  tokenbay.exhaustionproof.v1.ExhaustionProofV1 exhaustion_proof = 8;
+  SignedBalanceSnapshot balance_proof = 9;
+
+  uint64 captured_at = 10;        // unix seconds — when envelope was assembled
+  bytes  nonce       = 11;        // 16 bytes — envelope-level replay protection
+}
+
+// EnvelopeSigned — wire form. Receiver verifies sig via
+// shared/signing.VerifyEnvelope (Task 7).
+message EnvelopeSigned {
+  EnvelopeBody body         = 1;
+  bytes        consumer_sig = 2;  // 64 bytes — Ed25519 over DeterministicMarshal(body)
+}
