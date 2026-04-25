@@ -105,7 +105,7 @@ func (b *Builder) Build(
 		BodyHash:        spec.BodyHash,
 		ExhaustionProof: proof,
 		BalanceProof:    balance,
-		CapturedAt:      uint64(b.Now().Unix()),
+		CapturedAt:      unixSecondsU(b.Now()),
 		Nonce:           nonce,
 	}
 
@@ -122,6 +122,17 @@ func (b *Builder) Build(
 		Body:        body,
 		ConsumerSig: sig,
 	}, nil
+}
+
+// unixSecondsU returns t.Unix() as uint64, saturating at 0 for pre-1970
+// inputs. Avoids gosec G115's int64→uint64 narrowing complaint without
+// adding spurious error paths for clocks that will never be negative.
+func unixSecondsU(t time.Time) uint64 {
+	s := t.Unix()
+	if s < 0 {
+		return 0
+	}
+	return uint64(s)
 }
 
 // validateSpec rejects obviously-bad RequestSpec fields with ErrInvalidSpec.

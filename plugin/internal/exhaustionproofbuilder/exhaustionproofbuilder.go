@@ -60,14 +60,14 @@ func (b *Builder) Build(in ProofInput) (*exhaustionproof.ExhaustionProofV1, erro
 	proof := &exhaustionproof.ExhaustionProofV1{
 		StopFailure: &exhaustionproof.StopFailure{
 			Matcher:    in.StopFailureMatcher,
-			At:         uint64(in.StopFailureAt.Unix()),
+			At:         unixSecondsU(in.StopFailureAt),
 			ErrorShape: in.StopFailureErrorShape,
 		},
 		UsageProbe: &exhaustionproof.UsageProbe{
-			At:     uint64(in.UsageProbeAt.Unix()),
+			At:     unixSecondsU(in.UsageProbeAt),
 			Output: in.UsageProbeOutput,
 		},
-		CapturedAt: uint64(b.Now().Unix()),
+		CapturedAt: unixSecondsU(b.Now()),
 		Nonce:      nonce,
 	}
 
@@ -100,4 +100,15 @@ func validateInput(in ProofInput) error {
 		return fmt.Errorf("%w: UsageProbeOutput is empty", ErrInvalidInput)
 	}
 	return nil
+}
+
+// unixSecondsU returns t.Unix() as uint64, saturating at 0 for pre-1970
+// inputs. Avoids gosec G115's int64→uint64 narrowing complaint without
+// adding spurious error paths for clocks that will never be negative.
+func unixSecondsU(t time.Time) uint64 {
+	s := t.Unix()
+	if s < 0 {
+		return 0
+	}
+	return uint64(s)
 }
