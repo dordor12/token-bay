@@ -1,0 +1,23 @@
+syntax = "proto3";
+package tokenbay.proto.v1;
+
+option go_package = "github.com/token-bay/token-bay/shared/proto";
+
+// BalanceSnapshotBody — tracker-signed credit balance for an identity.
+// Spec: docs/superpowers/specs/ledger/2026-04-22-ledger-design.md §3.4.
+// Two-message split for canonical signing: tracker signs DeterministicMarshal(body).
+message BalanceSnapshotBody {
+  bytes  identity_id    = 1;  // 32 bytes — Ed25519 pubkey hash
+  int64  credits        = 2;
+  bytes  chain_tip_hash = 3;  // 32 bytes
+  uint64 chain_tip_seq  = 4;
+  uint64 issued_at      = 5;  // unix seconds
+  uint64 expires_at     = 6;  // issued_at + 600 (10-minute freshness window)
+}
+
+// SignedBalanceSnapshot — wire form. Verifier recovers signed bytes via
+// shared/signing.DeterministicMarshal(body).
+message SignedBalanceSnapshot {
+  BalanceSnapshotBody body        = 1;
+  bytes               tracker_sig = 2;  // 64 bytes — Ed25519 signature
+}
