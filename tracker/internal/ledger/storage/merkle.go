@@ -88,4 +88,3 @@ func (s *Store) GetMerkleRoot(ctx context.Context, hour uint64) (root, sig []byt
 	}
 	return root, sig, true, nil
 }
-

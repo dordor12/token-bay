@@ -2,7 +2,8 @@
 // tracker's append-only ledger.
 //
 // Spec: docs/superpowers/specs/ledger/2026-04-22-ledger-design.md
-//   §3 (data model), §4.1 (append algorithm), §5 (storage backend).
+//
+//	§3 (data model), §4.1 (append algorithm), §5 (storage backend).
 //
 // Non-negotiables:
 //
