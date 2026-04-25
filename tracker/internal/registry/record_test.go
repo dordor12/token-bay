@@ -53,6 +53,7 @@ func TestSeederRecord_PopulatedFields(t *testing.T) {
 	}
 
 	assert.Equal(t, [32]byte{0x01, 0x02, 0x03}, r.IdentityID.Bytes())
+	assert.Equal(t, uint64(42), r.ConnSessionID)
 	assert.Equal(t, []string{"claude-opus-4-7", "claude-sonnet-4-6"}, r.Capabilities.Models)
 	assert.Equal(t, uint32(200_000), r.Capabilities.MaxContext)
 	assert.Equal(t, []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD}, r.Capabilities.Tiers)
