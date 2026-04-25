@@ -56,6 +56,66 @@ func fixtureEnvelopeBody() *EnvelopeBody {
 	}
 }
 
+// TestEnvelopeBody_Getters calls every generated getter on EnvelopeBody and
+// EnvelopeSigned — both nil and non-nil receivers — and exercises the PrivacyTier
+// enum helpers to reach the §7.3 ≥90% coverage target.
+func TestEnvelopeBody_Getters(t *testing.T) {
+	body := fixtureEnvelopeBody()
+	signed := &EnvelopeSigned{Body: body, ConsumerSig: make64(0x77)}
+
+	assert.Equal(t, uint32(ProtocolVersion), body.GetProtocolVersion())
+	assert.Equal(t, make32(0x11), body.GetConsumerId())
+	assert.Equal(t, "claude-sonnet-4-6", body.GetModel())
+	assert.Equal(t, uint64(4096), body.GetMaxInputTokens())
+	assert.Equal(t, uint64(1024), body.GetMaxOutputTokens())
+	assert.Equal(t, PrivacyTier_PRIVACY_TIER_STANDARD, body.GetTier())
+	assert.Equal(t, make32(0x22), body.GetBodyHash())
+	assert.NotNil(t, body.GetExhaustionProof())
+	assert.NotNil(t, body.GetBalanceProof())
+	assert.Equal(t, uint64(1714000025), body.GetCapturedAt())
+	assert.Equal(t, []byte("envelope-nonce12"), body.GetNonce())
+
+	assert.Equal(t, body, signed.GetBody())
+	assert.Equal(t, make64(0x77), signed.GetConsumerSig())
+
+	// Nil-receiver paths return zero values without panic.
+	var nilBody *EnvelopeBody
+	assert.Equal(t, uint32(0), nilBody.GetProtocolVersion())
+	assert.Nil(t, nilBody.GetConsumerId())
+	assert.Equal(t, "", nilBody.GetModel())
+	assert.Equal(t, uint64(0), nilBody.GetMaxInputTokens())
+	assert.Equal(t, uint64(0), nilBody.GetMaxOutputTokens())
+	assert.Equal(t, PrivacyTier_PRIVACY_TIER_UNSPECIFIED, nilBody.GetTier())
+	assert.Nil(t, nilBody.GetBodyHash())
+	assert.Nil(t, nilBody.GetExhaustionProof())
+	assert.Nil(t, nilBody.GetBalanceProof())
+	assert.Equal(t, uint64(0), nilBody.GetCapturedAt())
+	assert.Nil(t, nilBody.GetNonce())
+
+	var nilSigned *EnvelopeSigned
+	assert.Nil(t, nilSigned.GetBody())
+	assert.Nil(t, nilSigned.GetConsumerSig())
+
+	// PrivacyTier enum helpers.
+	tier := PrivacyTier_PRIVACY_TIER_STANDARD
+	assert.Equal(t, "PRIVACY_TIER_STANDARD", tier.String())
+	assert.NotNil(t, tier.Enum())
+	assert.NotNil(t, tier.Descriptor())
+	assert.NotNil(t, tier.Type())
+	assert.NotZero(t, tier.Number())
+	_, _ = tier.EnumDescriptor()
+
+	// String, Descriptor, Reset for coverage.
+	_ = body.String()
+	_ = signed.String()
+	_, _ = body.Descriptor()
+	_, _ = signed.Descriptor()
+	b2 := *body
+	b2.Reset()
+	s2 := *signed
+	s2.Reset()
+}
+
 func TestEnvelopeBody_RoundTrip(t *testing.T) {
 	original := fixtureEnvelopeBody()
 

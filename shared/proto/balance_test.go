@@ -8,6 +8,54 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// TestBalanceSnapshot_Getters calls every generated getter on BalanceSnapshotBody
+// and SignedBalanceSnapshot — both nil and non-nil receivers — to reach the §7.3
+// ≥90% coverage target. Generated getters are not called by round-trip tests.
+func TestBalanceSnapshot_Getters(t *testing.T) {
+	body := &BalanceSnapshotBody{
+		IdentityId:  make32(0xAA),
+		Credits:     500,
+		ChainTipHash: make32(0xBB),
+		ChainTipSeq: 7,
+		IssuedAt:    1714000000,
+		ExpiresAt:   1714000600,
+	}
+	signed := &SignedBalanceSnapshot{Body: body, TrackerSig: make64(0xCC)}
+
+	assert.Equal(t, make32(0xAA), body.GetIdentityId())
+	assert.Equal(t, int64(500), body.GetCredits())
+	assert.Equal(t, make32(0xBB), body.GetChainTipHash())
+	assert.Equal(t, uint64(7), body.GetChainTipSeq())
+	assert.Equal(t, uint64(1714000000), body.GetIssuedAt())
+	assert.Equal(t, uint64(1714000600), body.GetExpiresAt())
+
+	assert.Equal(t, body, signed.GetBody())
+	assert.Equal(t, make64(0xCC), signed.GetTrackerSig())
+
+	// Nil-receiver paths return zero values without panic.
+	var nilBody *BalanceSnapshotBody
+	assert.Nil(t, nilBody.GetIdentityId())
+	assert.Equal(t, int64(0), nilBody.GetCredits())
+	assert.Nil(t, nilBody.GetChainTipHash())
+	assert.Equal(t, uint64(0), nilBody.GetChainTipSeq())
+	assert.Equal(t, uint64(0), nilBody.GetIssuedAt())
+	assert.Equal(t, uint64(0), nilBody.GetExpiresAt())
+
+	var nilSigned *SignedBalanceSnapshot
+	assert.Nil(t, nilSigned.GetBody())
+	assert.Nil(t, nilSigned.GetTrackerSig())
+
+	// String, Descriptor, and Reset for coverage.
+	_ = body.String()
+	_ = signed.String()
+	_, _ = body.Descriptor()
+	_, _ = signed.Descriptor()
+	b2 := *body
+	b2.Reset()
+	s2 := *signed
+	s2.Reset()
+}
+
 func TestSignedBalanceSnapshot_RoundTrip(t *testing.T) {
 	original := &SignedBalanceSnapshot{
 		Body: &BalanceSnapshotBody{

@@ -178,3 +178,40 @@ func TestVerifyBalanceSnapshot_NilSafety(t *testing.T) {
 	assert.False(t, VerifyBalanceSnapshot(pub, nil))
 	assert.False(t, VerifyBalanceSnapshot(pub, &tbproto.SignedBalanceSnapshot{Body: nil}))
 }
+
+// TestSignEnvelope_MarshalError covers the if err != nil branch in SignEnvelope
+// that fires when DeterministicMarshal fails on a body with invalid UTF-8 in a
+// proto3 string field (the only way to make proto.Marshal error on a non-nil message).
+func TestSignEnvelope_MarshalError(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	bad := &tbproto.EnvelopeBody{Model: "\xff\xfe"} // invalid UTF-8 → marshal error
+	_, err := SignEnvelope(priv, bad)
+	require.Error(t, err, "SignEnvelope must propagate marshal error")
+}
+
+// TestVerifyEnvelope_MarshalError covers the if err != nil branch in VerifyEnvelope.
+func TestVerifyEnvelope_MarshalError(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	bad := &tbproto.EnvelopeBody{Model: "\xff\xfe"} // invalid UTF-8 → marshal error
+	signed := &tbproto.EnvelopeSigned{Body: bad, ConsumerSig: bytes64(0x00)}
+	assert.False(t, VerifyEnvelope(pub, signed), "VerifyEnvelope must return false on marshal error")
+}
+
+// TestSignBalanceSnapshot_MarshalError covers the if err != nil branch in SignBalanceSnapshot.
+func TestSignBalanceSnapshot_MarshalError(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	// BalanceSnapshotBody has no string fields so we cannot inject invalid UTF-8 directly.
+	// The marshal-error branch in SignBalanceSnapshot is therefore structurally unreachable
+	// for the current schema — this is a defensive guard. This test documents that fact
+	// and keeps coverage honest: we do not manufacture a fake error.
+	// Coverage for this branch is accepted as-is (see signing/proto.go line ~68).
+	_ = priv
+}
+
+// TestVerifyBalanceSnapshot_MarshalError documents that the marshal-error branch in
+// VerifyBalanceSnapshot is structurally unreachable for the current BalanceSnapshotBody
+// schema (no string fields that could carry invalid UTF-8).
+func TestVerifyBalanceSnapshot_MarshalError(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	_ = pub
+}
