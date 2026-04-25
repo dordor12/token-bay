@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"io"
+	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,4 +20,25 @@ func Parse(r io.Reader) (*Config, error) {
 		return nil, &ParseError{Err: err}
 	}
 	return &c, nil
+}
+
+// Load reads the YAML config file at path and decodes it. ApplyDefaults
+// and Validate are wired in by Task 12; this task only exposes the file-
+// open boundary and the *ParseError.Path enrichment.
+func Load(path string) (*Config, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	c, err := Parse(f)
+	if err != nil {
+		var pe *ParseError
+		if errors.As(err, &pe) {
+			pe.Path = path
+		}
+		return nil, err
+	}
+	return c, nil
 }
