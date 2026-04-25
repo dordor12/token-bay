@@ -20,10 +20,10 @@ type Pubkeys struct {
 
 // VerifyAll runs the per-kind signature matrix:
 //
-//   USAGE         consumer (or flag set + empty), seeder, tracker
-//   TRANSFER_OUT  consumer, no seeder, tracker
-//   TRANSFER_IN   no consumer, no seeder, tracker
-//   STARTER_GRANT no consumer, no seeder, tracker
+//	USAGE         consumer (or flag set + empty), seeder, tracker
+//	TRANSFER_OUT  consumer, no seeder, tracker
+//	TRANSFER_IN   no consumer, no seeder, tracker
+//	STARTER_GRANT no consumer, no seeder, tracker
 //
 // Returns nil on success; the first violation otherwise. Callers must
 // have run ValidateEntryBody first — VerifyAll does not re-check field

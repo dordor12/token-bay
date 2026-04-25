@@ -24,7 +24,7 @@ func keypair(label string) (ed25519.PublicKey, ed25519.PrivateKey) {
 func signedUsage(t *testing.T) (*tbproto.Entry, Pubkeys) {
 	t.Helper()
 	body, err := BuildUsageEntry(UsageInput{
-		PrevHash:   b32(0x01), Seq: 42,
+		PrevHash: b32(0x01), Seq: 42,
 		ConsumerID: b32(0x11), SeederID: b32(0x22),
 		Model: "claude-sonnet-4-6", Timestamp: 1714000100,
 		RequestID: b16(0x33),
@@ -143,7 +143,7 @@ func TestVerifyAll_UsageMissingSeederKey(t *testing.T) {
 // tracker_sig + seeder_sig still required.
 func TestVerifyAll_UsageWithFlagAndEmptyConsumerSig(t *testing.T) {
 	body, err := BuildUsageEntry(UsageInput{
-		PrevHash:   b32(0x01), Seq: 42,
+		PrevHash: b32(0x01), Seq: 42,
 		ConsumerID: b32(0x11), SeederID: b32(0x22),
 		Model: "claude-sonnet-4-6", Timestamp: 1714000100,
 		RequestID: b16(0x33), ConsumerSigMissing: true,

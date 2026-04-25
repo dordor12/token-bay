@@ -299,4 +299,3 @@ func TestVerifyEntry_MarshalError(t *testing.T) {
 	bad := &tbproto.EntryBody{Model: "\xff\xfe"} // invalid UTF-8 → marshal error
 	assert.False(t, VerifyEntry(pub, bad, bytes64(0x00)))
 }
-

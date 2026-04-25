@@ -59,7 +59,7 @@ func TestBuildUsageEntry_WithConsumerSigMissingFlag(t *testing.T) {
 
 func TestBuildUsageEntry_RejectsEmptyModel(t *testing.T) {
 	_, err := BuildUsageEntry(UsageInput{
-		PrevHash:   b32(0x01), Seq: 42,
+		PrevHash: b32(0x01), Seq: 42,
 		ConsumerID: b32(0x11), SeederID: b32(0x22),
 		Model: "", Timestamp: 1714000100, RequestID: b16(0x33),
 	})
