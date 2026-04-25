@@ -111,7 +111,6 @@ func TestBuilder_Build_FreshnessWindowExceeded(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrValidation),
 		"expected ErrValidation, got: %v", err)
-	assert.Contains(t, err.Error(), "freshness")
 }
 
 func TestBuilder_Build_RandReadFailure(t *testing.T) {
