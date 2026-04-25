@@ -464,3 +464,204 @@ func TestRegistry_Snapshot_DeepCopiesSlices(t *testing.T) {
 	got, _ := r.Get(id)
 	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
 }
+
+func TestRegistry_Match_EmptyRegistry(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	out := r.Match(Filter{})
+	assert.Empty(t, out)
+}
+
+func TestRegistry_Match_RequireAvailable(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, Available: true})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x02}, Available: false})
+
+	out := r.Match(Filter{RequireAvailable: true})
+	require.Len(t, out, 1)
+	assert.Equal(t, ids.IdentityID{0x01}, out[0].IdentityID)
+}
+
+func TestRegistry_Match_FilterByModel(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x01},
+		Capabilities: Capabilities{Models: []string{"claude-opus-4-7"}},
+	})
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x02},
+		Capabilities: Capabilities{Models: []string{"claude-sonnet-4-6"}},
+	})
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x03},
+		Capabilities: Capabilities{Models: []string{"claude-opus-4-7", "claude-sonnet-4-6"}},
+	})
+
+	out := r.Match(Filter{Model: "claude-opus-4-7"})
+	require.Len(t, out, 2)
+
+	got := map[ids.IdentityID]bool{}
+	for _, rec := range out {
+		got[rec.IdentityID] = true
+	}
+	assert.True(t, got[ids.IdentityID{0x01}])
+	assert.True(t, got[ids.IdentityID{0x03}])
+}
+
+func TestRegistry_Match_FilterByTier(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x01},
+		Capabilities: Capabilities{Tiers: []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD}},
+	})
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x02},
+		Capabilities: Capabilities{Tiers: []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_TEE}},
+	})
+
+	out := r.Match(Filter{Tier: proto.PrivacyTier_PRIVACY_TIER_TEE})
+	require.Len(t, out, 1)
+	assert.Equal(t, ids.IdentityID{0x02}, out[0].IdentityID)
+}
+
+func TestRegistry_Match_TierUnspecifiedSkipsTierFilter(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x01},
+		Capabilities: Capabilities{Tiers: []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD}},
+	})
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x02},
+		Capabilities: Capabilities{Tiers: []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_TEE}},
+	})
+
+	out := r.Match(Filter{Tier: proto.PrivacyTier_PRIVACY_TIER_UNSPECIFIED})
+	assert.Len(t, out, 2)
+}
+
+func TestRegistry_Match_FilterByMinHeadroom(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, HeadroomEstimate: 0.10})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x02}, HeadroomEstimate: 0.50})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x03}, HeadroomEstimate: 0.75})
+
+	out := r.Match(Filter{MinHeadroom: 0.5})
+	require.Len(t, out, 2)
+	for _, rec := range out {
+		assert.GreaterOrEqual(t, rec.HeadroomEstimate, 0.5)
+	}
+}
+
+func TestRegistry_Match_FilterByMaxLoad(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, Load: 0})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x02}, Load: 4})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x03}, Load: 5})
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x04}, Load: 9})
+
+	out := r.Match(Filter{MaxLoad: 5})
+	require.Len(t, out, 2, "MaxLoad is exclusive: only Load < MaxLoad passes")
+	for _, rec := range out {
+		assert.Less(t, rec.Load, 5)
+	}
+}
+
+func TestRegistry_Match_MaxLoadZeroMeansNoConstraint(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	r.Register(SeederRecord{IdentityID: ids.IdentityID{0x01}, Load: 0})
+	// MaxLoad=0 is the zero value of Filter and means "no load constraint":
+	// every record passes regardless of its Load value.
+	out := r.Match(Filter{MaxLoad: 0})
+	assert.Len(t, out, 1, "MaxLoad=0 (zero value) means no load constraint — all records pass")
+}
+
+func TestRegistry_Match_AllFiltersTogether(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	// Matches: opus, standard tier, headroom 0.6, load 2, available.
+	matchID := ids.IdentityID{0x01}
+	r.Register(SeederRecord{
+		IdentityID: matchID,
+		Available:  true,
+		Capabilities: Capabilities{
+			Models: []string{"claude-opus-4-7"},
+			Tiers:  []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+		},
+		HeadroomEstimate: 0.6,
+		Load:             2,
+	})
+	// Wrong model.
+	r.Register(SeederRecord{
+		IdentityID:   ids.IdentityID{0x02},
+		Available:    true,
+		Capabilities: Capabilities{Models: []string{"claude-sonnet-4-6"}},
+	})
+	// Headroom too low.
+	r.Register(SeederRecord{
+		IdentityID: ids.IdentityID{0x03},
+		Available:  true,
+		Capabilities: Capabilities{
+			Models: []string{"claude-opus-4-7"},
+			Tiers:  []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+		},
+		HeadroomEstimate: 0.05,
+	})
+	// Load too high.
+	r.Register(SeederRecord{
+		IdentityID: ids.IdentityID{0x04},
+		Available:  true,
+		Capabilities: Capabilities{
+			Models: []string{"claude-opus-4-7"},
+			Tiers:  []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+		},
+		HeadroomEstimate: 0.6,
+		Load:             10,
+	})
+	// Not available.
+	r.Register(SeederRecord{
+		IdentityID: ids.IdentityID{0x05},
+		Available:  false,
+		Capabilities: Capabilities{
+			Models: []string{"claude-opus-4-7"},
+			Tiers:  []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+		},
+		HeadroomEstimate: 0.6,
+	})
+
+	out := r.Match(Filter{
+		RequireAvailable: true,
+		Model:            "claude-opus-4-7",
+		Tier:             proto.PrivacyTier_PRIVACY_TIER_STANDARD,
+		MinHeadroom:      0.2,
+		MaxLoad:          5,
+	})
+	require.Len(t, out, 1)
+	assert.Equal(t, matchID, out[0].IdentityID)
+}
+
+func TestRegistry_Match_DeepCopies(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0xB1}
+	r.Register(SeederRecord{
+		IdentityID:   id,
+		Available:    true,
+		Capabilities: Capabilities{Models: []string{"claude-opus-4-7"}},
+	})
+
+	out := r.Match(Filter{RequireAvailable: true, Model: "claude-opus-4-7"})
+	require.Len(t, out, 1)
+	out[0].Capabilities.Models[0] = "MUTATED"
+
+	got, _ := r.Get(id)
+	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
+}

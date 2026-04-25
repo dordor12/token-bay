@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/shared/proto"
 )
 
 // DefaultShardCount is the registry's default shard count when callers want a
@@ -161,4 +162,72 @@ func (r *Registry) Snapshot() []SeederRecord {
 		out = append(out, sh.snapshot()...)
 	}
 	return out
+}
+
+// Filter constrains the records returned by Match.
+//
+// Empty / zero-valued fields are interpreted as "no constraint":
+//   - Model == ""                              → no model filter
+//   - Tier == proto.PrivacyTier_PRIVACY_TIER_UNSPECIFIED → no tier filter
+//   - RequireAvailable == false                → available and unavailable both pass
+//   - MinHeadroom == 0.0                       → no headroom floor
+//   - MaxLoad == 0                             → no load ceiling (zero value = no constraint)
+//
+// When MaxLoad > 0 the filter is "load strictly less than MaxLoad". Callers
+// that want to constrain load must pass a positive value.
+//
+// Reputation freeze is intentionally not a Filter field. The broker performs
+// that lookup via the reputation subsystem after Match returns candidates.
+type Filter struct {
+	RequireAvailable bool
+	Model            string
+	Tier             proto.PrivacyTier
+	MinHeadroom      float64
+	MaxLoad          int
+}
+
+// Match returns every record that satisfies the filter. Returned records are
+// deep copies; mutating the result does not affect the store. Order is
+// unspecified.
+func (r *Registry) Match(f Filter) []SeederRecord {
+	all := r.Snapshot()
+	out := all[:0]
+	for _, rec := range all {
+		if f.RequireAvailable && !rec.Available {
+			continue
+		}
+		if f.Model != "" && !containsString(rec.Capabilities.Models, f.Model) {
+			continue
+		}
+		if f.Tier != proto.PrivacyTier_PRIVACY_TIER_UNSPECIFIED &&
+			!containsTier(rec.Capabilities.Tiers, f.Tier) {
+			continue
+		}
+		if rec.HeadroomEstimate < f.MinHeadroom {
+			continue
+		}
+		if f.MaxLoad > 0 && rec.Load >= f.MaxLoad {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func containsString(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTier(xs []proto.PrivacyTier, want proto.PrivacyTier) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
 }
