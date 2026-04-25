@@ -3,6 +3,7 @@ package envelopebuilder
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -229,4 +230,86 @@ func TestBuild_RealEd25519_TamperDetected(t *testing.T) {
 	env.Body.Model = "claude-haiku-4-5-20251001"
 	assert.False(t, signing.VerifyEnvelope(signer.pub, env),
 		"VerifyEnvelope must reject a body that has been mutated post-sign")
+}
+
+func TestBuild_RejectsNilProof(t *testing.T) {
+	b := newTestBuilder(newFakeSigner())
+	env, err := b.Build(validSpec(), nil, validBalance())
+	assert.Nil(t, env)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNilProof), "expected ErrNilProof, got: %v", err)
+}
+
+func TestBuild_RejectsNilBalance(t *testing.T) {
+	b := newTestBuilder(newFakeSigner())
+	env, err := b.Build(validSpec(), validProof(), nil)
+	assert.Nil(t, env)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNilBalance), "expected ErrNilBalance, got: %v", err)
+}
+
+func TestBuild_RejectsInvalidSpec(t *testing.T) {
+	cases := []struct {
+		name      string
+		mutate    func(*RequestSpec)
+		wantField string
+	}{
+		{"empty model", func(s *RequestSpec) { s.Model = "" }, "Model"},
+		{"short body_hash", func(s *RequestSpec) { s.BodyHash = bytesOfLen(31, 0x44) }, "BodyHash"},
+		{"long body_hash", func(s *RequestSpec) { s.BodyHash = bytesOfLen(33, 0x44) }, "BodyHash"},
+		{"unspecified tier", func(s *RequestSpec) { s.Tier = tbproto.PrivacyTier_PRIVACY_TIER_UNSPECIFIED }, "Tier"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := validSpec()
+			tc.mutate(&spec)
+			b := newTestBuilder(newFakeSigner())
+			env, err := b.Build(spec, validProof(), validBalance())
+			assert.Nil(t, env)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrInvalidSpec),
+				"expected ErrInvalidSpec, got: %v", err)
+			assert.Contains(t, err.Error(), tc.wantField,
+				"error should name the offending field: %v", err)
+		})
+	}
+}
+
+func TestBuild_SignerFailure(t *testing.T) {
+	signer := newFakeSigner()
+	signer.signErr = errors.New("keychain locked")
+	b := newTestBuilder(signer)
+
+	env, err := b.Build(validSpec(), validProof(), validBalance())
+	assert.Nil(t, env)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrSign), "expected ErrSign, got: %v", err)
+	assert.Contains(t, err.Error(), "keychain locked")
+}
+
+func TestBuild_RandReadFailure(t *testing.T) {
+	signer := newFakeSigner()
+	b := NewBuilder(signer)
+	b.Now = fixedNow
+	b.RandRead = func(_ []byte) (int, error) { return 0, errors.New("entropy starved") }
+
+	env, err := b.Build(validSpec(), validProof(), validBalance())
+	assert.Nil(t, env)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrRandFailed), "expected ErrRandFailed, got: %v", err)
+	assert.Equal(t, 0, signer.callCount(), "Signer.Sign must NOT be called on RandRead failure")
+}
+
+func TestBuild_ValidationFailure(t *testing.T) {
+	// A proof that passes ProofInput-shape but fails ValidateProofV1
+	// (matcher != "rate_limit") should surface ErrValidation. Construct
+	// the proof manually since the proof builder rejects this earlier.
+	badProof := validProof()
+	badProof.StopFailure.Matcher = "server_error"
+
+	b := newTestBuilder(newFakeSigner())
+	env, err := b.Build(validSpec(), badProof, validBalance())
+	assert.Nil(t, env)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation), "expected ErrValidation, got: %v", err)
 }
