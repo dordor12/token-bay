@@ -1,16 +1,20 @@
 package envelopebuilder
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/token-bay/token-bay/shared/exhaustionproof"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/shared/signing"
 )
 
 // fakeSigner is a configurable test stand-in for the production Signer.
@@ -166,3 +170,63 @@ func TestNewBuilder_Defaults(t *testing.T) {
 
 // Compile-time check: fakeSigner must satisfy Signer.
 var _ Signer = (*fakeSigner)(nil)
+
+// realEd25519Signer wraps shared/signing.SignEnvelope with a fresh keypair.
+// Used by tests that exercise actual cryptographic verification.
+type realEd25519Signer struct {
+	priv ed25519.PrivateKey
+	pub  ed25519.PublicKey
+	id   ids.IdentityID
+}
+
+func newRealSigner(t *testing.T) *realEd25519Signer {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	// Derive IdentityID = SHA-256(pubkey). The exact derivation is irrelevant
+	// to these tests (the tracker validates only that consumer_id is 32 bytes);
+	// what matters is that it's deterministic per keypair.
+	h := sha256.Sum256(pub)
+	var id ids.IdentityID
+	copy(id[:], h[:])
+	return &realEd25519Signer{priv: priv, pub: pub, id: id}
+}
+
+func (r *realEd25519Signer) Sign(body *tbproto.EnvelopeBody) ([]byte, error) {
+	return signing.SignEnvelope(r.priv, body)
+}
+
+func (r *realEd25519Signer) IdentityID() ids.IdentityID { return r.id }
+
+func TestBuild_RealEd25519_RoundTrip(t *testing.T) {
+	signer := newRealSigner(t)
+	b := newTestBuilder(signer)
+
+	env, err := b.Build(validSpec(), validProof(), validBalance())
+	require.NoError(t, err)
+
+	// Marshal → unmarshal — survives the wire round-trip.
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(env)
+	require.NoError(t, err)
+
+	var parsed tbproto.EnvelopeSigned
+	require.NoError(t, proto.Unmarshal(wire, &parsed))
+
+	// Real Ed25519 verification against the parsed message.
+	assert.True(t, signing.VerifyEnvelope(signer.pub, &parsed),
+		"VerifyEnvelope must accept a freshly-built envelope")
+}
+
+func TestBuild_RealEd25519_TamperDetected(t *testing.T) {
+	signer := newRealSigner(t)
+	b := newTestBuilder(signer)
+
+	env, err := b.Build(validSpec(), validProof(), validBalance())
+	require.NoError(t, err)
+	require.True(t, signing.VerifyEnvelope(signer.pub, env), "sanity: original verifies")
+
+	// Mutate the body after signing.
+	env.Body.Model = "claude-haiku-4-5-20251001"
+	assert.False(t, signing.VerifyEnvelope(signer.pub, env),
+		"VerifyEnvelope must reject a body that has been mutated post-sign")
+}
