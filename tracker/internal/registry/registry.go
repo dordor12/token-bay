@@ -106,3 +106,13 @@ func (r *Registry) Advertise(id ids.IdentityID, caps Capabilities, available boo
 		return nil
 	})
 }
+
+// UpdateReputation sets the seeder's reputation score. The registry does not
+// constrain the score range — that is the reputation subsystem's contract.
+// Returns ErrUnknownSeeder if the seeder is not in the registry.
+func (r *Registry) UpdateReputation(id ids.IdentityID, score float64) error {
+	return r.shardFor(id).update(id, func(rec *SeederRecord) error {
+		rec.ReputationScore = score
+		return nil
+	})
+}

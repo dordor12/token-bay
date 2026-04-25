@@ -306,3 +306,38 @@ func TestRegistry_Advertise_DeepCopiesCapsSlices(t *testing.T) {
 	assert.Equal(t, proto.PrivacyTier_PRIVACY_TIER_STANDARD, got.Capabilities.Tiers[0])
 	assert.Equal(t, byte(0xDE), got.Capabilities.Attestation[0])
 }
+
+func TestRegistry_UpdateReputation_SetsScore(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x70}
+	r.Register(SeederRecord{IdentityID: id, ReputationScore: 0.5})
+
+	require.NoError(t, r.UpdateReputation(id, 0.83))
+
+	got, _ := r.Get(id)
+	assert.Equal(t, 0.83, got.ReputationScore)
+}
+
+func TestRegistry_UpdateReputation_AcceptsAnyFloat(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x71}
+	r.Register(SeederRecord{IdentityID: id})
+
+	// Reputation module owns scaling; registry is value-neutral.
+	for _, score := range []float64{-1.0, 0.0, 0.5, 1.0, 100.0} {
+		require.NoError(t, r.UpdateReputation(id, score))
+		got, _ := r.Get(id)
+		assert.Equal(t, score, got.ReputationScore)
+	}
+}
+
+func TestRegistry_UpdateReputation_UnknownReturnsErr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	err = r.UpdateReputation(ids.IdentityID{0xEE}, 0.5)
+	assert.ErrorIs(t, err, ErrUnknownSeeder)
+}
