@@ -52,6 +52,9 @@ func (s *shard) delete(id ids.IdentityID) {
 // update applies fn to the record under the shard's write lock. Returns
 // ErrUnknownSeeder when no record exists. If fn returns an error, the
 // mutation is discarded — the shard rolls back to the pre-call state.
+//
+// fn runs while the write lock is held; keep it short and never block on I/O
+// or other locks from inside it.
 func (s *shard) update(id ids.IdentityID, fn func(*SeederRecord) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

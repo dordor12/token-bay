@@ -1,12 +1,15 @@
 package registry
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/shared/proto"
 )
 
 func TestShard_NewIsEmpty(t *testing.T) {
@@ -121,6 +124,67 @@ func TestShard_Snapshot_ReturnsAllRecords(t *testing.T) {
 	assert.Len(t, out, 2)
 }
 
+func TestShard_Snapshot_ReturnedSlicesAreIsolated(t *testing.T) {
+	s := newShard()
+	id := ids.IdentityID{0xC1}
+	s.put(SeederRecord{
+		IdentityID: id,
+		Capabilities: Capabilities{
+			Models:      []string{"claude-opus-4-7"},
+			Tiers:       []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+			Attestation: []byte{0xAA, 0xBB},
+		},
+		NetCoords: NetCoords{
+			LocalCandidates: []netip.AddrPort{netip.MustParseAddrPort("10.0.0.1:51820")},
+		},
+	})
+
+	out := s.snapshot()
+	require.Len(t, out, 1)
+	out[0].Capabilities.Models[0] = "MUTATED"
+	out[0].Capabilities.Tiers[0] = proto.PrivacyTier_PRIVACY_TIER_TEE
+	out[0].Capabilities.Attestation[0] = 0xFF
+	out[0].NetCoords.LocalCandidates[0] = netip.MustParseAddrPort("9.9.9.9:1")
+
+	got, _ := s.get(id)
+	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
+	assert.Equal(t, proto.PrivacyTier_PRIVACY_TIER_STANDARD, got.Capabilities.Tiers[0])
+	assert.Equal(t, byte(0xAA), got.Capabilities.Attestation[0])
+	assert.Equal(t, netip.MustParseAddrPort("10.0.0.1:51820"), got.NetCoords.LocalCandidates[0])
+}
+
+func TestShard_Put_DeepCopiesAllSliceFields(t *testing.T) {
+	s := newShard()
+	id := ids.IdentityID{0xC2}
+
+	models := []string{"claude-opus-4-7"}
+	tiers := []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD}
+	attestation := []byte{0xDE, 0xAD}
+	local := []netip.AddrPort{netip.MustParseAddrPort("10.0.0.1:51820")}
+
+	s.put(SeederRecord{
+		IdentityID: id,
+		Capabilities: Capabilities{
+			Models:      models,
+			Tiers:       tiers,
+			Attestation: attestation,
+		},
+		NetCoords: NetCoords{LocalCandidates: local},
+	})
+
+	// Mutate the caller-side slices after put; the store must be isolated.
+	models[0] = "MUTATED"
+	tiers[0] = proto.PrivacyTier_PRIVACY_TIER_TEE
+	attestation[0] = 0xFF
+	local[0] = netip.MustParseAddrPort("9.9.9.9:1")
+
+	got, _ := s.get(id)
+	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
+	assert.Equal(t, proto.PrivacyTier_PRIVACY_TIER_STANDARD, got.Capabilities.Tiers[0])
+	assert.Equal(t, byte(0xDE), got.Capabilities.Attestation[0])
+	assert.Equal(t, netip.MustParseAddrPort("10.0.0.1:51820"), got.NetCoords.LocalCandidates[0])
+}
+
 func TestShard_SweepStale_RemovesAndCounts(t *testing.T) {
 	s := newShard()
 	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
@@ -137,6 +201,20 @@ func TestShard_SweepStale_RemovesAndCounts(t *testing.T) {
 	_, ok2 := s.get(ids.IdentityID{0x02})
 	assert.False(t, ok1)
 	assert.True(t, ok2)
+}
+
+func TestShard_SweepStale_ExactBoundaryIsInclusive(t *testing.T) {
+	s := newShard()
+	t0 := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	id := ids.IdentityID{0x01}
+	s.put(SeederRecord{IdentityID: id, LastHeartbeat: t0})
+
+	// Sweeping at staleBefore == t0 must remove the record (boundary inclusive).
+	removed := s.sweepStale(t0)
+	assert.Equal(t, 1, removed)
+
+	_, ok := s.get(id)
+	assert.False(t, ok)
 }
 
 // assertErr is a tiny helper so the test file can compose simple sentinel
