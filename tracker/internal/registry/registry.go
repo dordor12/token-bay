@@ -150,3 +150,15 @@ func (r *Registry) DecLoad(id ids.IdentityID) (int, error) {
 	}
 	return newLoad, nil
 }
+
+// Snapshot returns a deep copy of every record currently in the registry.
+// Order is unspecified. Each shard is briefly RLocked in turn — for very large
+// registries the result is a near-consistent (not strictly atomic) view across
+// shards, which is acceptable for the broker's selection workload.
+func (r *Registry) Snapshot() []SeederRecord {
+	var out []SeederRecord
+	for _, sh := range r.shards {
+		out = append(out, sh.snapshot()...)
+	}
+	return out
+}

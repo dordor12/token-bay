@@ -417,3 +417,50 @@ func TestRegistry_IncDec_Symmetric(t *testing.T) {
 	got, _ := r.Get(id)
 	assert.Equal(t, 0, got.Load)
 }
+
+func TestRegistry_Snapshot_Empty(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	out := r.Snapshot()
+	assert.Empty(t, out)
+}
+
+func TestRegistry_Snapshot_ReturnsAllRegistered(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	for i := 0; i < 32; i++ {
+		var id ids.IdentityID
+		id[0] = byte(i)
+		r.Register(SeederRecord{IdentityID: id, Load: i})
+	}
+
+	out := r.Snapshot()
+	assert.Len(t, out, 32)
+
+	// Verify every IdentityID we put in shows up exactly once.
+	seen := make(map[ids.IdentityID]bool, 32)
+	for _, rec := range out {
+		assert.False(t, seen[rec.IdentityID], "duplicate record in snapshot")
+		seen[rec.IdentityID] = true
+	}
+	assert.Len(t, seen, 32)
+}
+
+func TestRegistry_Snapshot_DeepCopiesSlices(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0xA1}
+	r.Register(SeederRecord{
+		IdentityID:   id,
+		Capabilities: Capabilities{Models: []string{"claude-opus-4-7"}},
+	})
+
+	out := r.Snapshot()
+	require.Len(t, out, 1)
+	out[0].Capabilities.Models[0] = "MUTATED"
+
+	got, _ := r.Get(id)
+	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
+}
