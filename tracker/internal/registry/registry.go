@@ -44,7 +44,8 @@ func (r *Registry) NumShards() int { return len(r.shards) }
 // bytes are uniformly distributed; a more elaborate hash would be wasted work.
 func (r *Registry) shardIndex(id ids.IdentityID) int {
 	b := id.Bytes()
-	return int(binary.BigEndian.Uint64(b[:8]) % uint64(len(r.shards)))
+	// Result is in [0, len(r.shards)), bounded by a positive int — safe.
+	return int(binary.BigEndian.Uint64(b[:8]) % uint64(len(r.shards))) //nolint:gosec // G115: bounded by len(r.shards), a positive int
 }
 
 func (r *Registry) shardFor(id ids.IdentityID) *shard {
