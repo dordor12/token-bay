@@ -133,3 +133,150 @@ func TestValidate_ListenerCollision_StunAndTurn(t *testing.T) {
 	require.Len(t, ve.Errors, 1)
 	assert.Equal(t, "stun_turn.turn_listen_addr", ve.Errors[0].Field)
 }
+
+func TestValidate_LedgerMerkleIntervalMustBePositive(t *testing.T) {
+	c := validConfig(t)
+	c.Ledger.MerkleRootIntervalMin = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "ledger.merkle_root_interval_minutes")
+}
+
+func TestValidate_BrokerHeadroomThresholdRange(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.HeadroomThreshold = 1.5
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "broker.headroom_threshold")
+}
+
+func TestValidate_BrokerLoadThresholdMin(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.LoadThreshold = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "broker.load_threshold")
+}
+
+func TestValidate_BrokerScoreWeightsSum(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.ScoreWeights.Reputation = 0.5 // sum becomes 1.1
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "broker.score_weights")
+}
+
+func TestValidate_BrokerScoreWeightsNegative(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.ScoreWeights.RTT = -0.2
+	c.Broker.ScoreWeights.Reputation = 0.6 // keep sum at 1.0
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	// Negative-weight rule fires first; sum check separate.
+	found := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "broker.score_weights.rtt" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected broker.score_weights.rtt error in %v", ve.Errors)
+}
+
+func TestValidate_BrokerOfferTimeoutPositive(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.OfferTimeoutMs = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "broker.offer_timeout_ms")
+}
+
+func TestValidate_BrokerMaxOfferAttemptsMin(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.MaxOfferAttempts = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "broker.max_offer_attempts")
+}
+
+func TestValidate_BrokerRequestRatePositive(t *testing.T) {
+	c := validConfig(t)
+	c.Broker.BrokerRequestRatePerSec = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "broker.broker_request_rate_per_sec")
+}
+
+func TestValidate_SettlementTimeoutsPositive(t *testing.T) {
+	cases := map[string]func(*Config){
+		"settlement.tunnel_setup_ms":      func(c *Config) { c.Settlement.TunnelSetupMs = 0 },
+		"settlement.stream_idle_s":        func(c *Config) { c.Settlement.StreamIdleS = 0 },
+		"settlement.settlement_timeout_s": func(c *Config) { c.Settlement.SettlementTimeoutS = 0 },
+		"settlement.reservation_ttl_s":    func(c *Config) { c.Settlement.ReservationTTLS = 0 },
+	}
+	for field, mut := range cases {
+		t.Run(field, func(t *testing.T) {
+			c := validConfig(t)
+			mut(c)
+			err := Validate(c)
+			require.Error(t, err)
+			var ve *ValidationError
+			require.True(t, errors.As(err, &ve))
+			matched := false
+			for _, fe := range ve.Errors {
+				if fe.Field == field {
+					matched = true
+				}
+			}
+			assert.True(t, matched, "expected %s in errors %v", field, ve.Errors)
+		})
+	}
+}
+
+func TestValidate_SettlementTunnelSetupBelowSettlementTimeout(t *testing.T) {
+	c := validConfig(t)
+	c.Settlement.TunnelSetupMs = 1_000_000 // 1000s > 900s
+	c.Settlement.SettlementTimeoutS = 900
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "settlement.tunnel_setup_ms" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_SettlementReservationOutlivesSettlement(t *testing.T) {
+	c := validConfig(t)
+	c.Settlement.SettlementTimeoutS = 900
+	c.Settlement.ReservationTTLS = 600 // shorter than settlement
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "settlement.reservation_ttl_s" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
