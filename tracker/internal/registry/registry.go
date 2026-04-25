@@ -232,9 +232,15 @@ func containsTier(xs []proto.PrivacyTier, want proto.PrivacyTier) bool {
 	return false
 }
 
-// Sweep removes every seeder whose LastHeartbeat is at or before staleBefore.
-// Returns the count removed. Each shard is locked in turn — sweeps do not
-// hold a global lock, so concurrent reads on un-affected shards proceed.
+// Sweep removes every seeder whose LastHeartbeat is at or before staleBefore
+// (inclusive — a record at exactly staleBefore IS removed). Returns the count
+// removed.
+//
+// Each shard is write-locked in turn for the deletions, then released before
+// the next shard. Concurrent ops on un-affected shards proceed; affected
+// shards block briefly. Sweep is NOT globally atomic — a Register that lands
+// in an already-swept shard while a later shard is still being processed will
+// survive the sweep, which is the intended behavior for a periodic GC.
 func (r *Registry) Sweep(staleBefore time.Time) int {
 	total := 0
 	for _, sh := range r.shards {
