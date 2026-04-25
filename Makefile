@@ -13,7 +13,12 @@ test:
 	done
 
 lint:
-	golangci-lint run ./...
+	@for m in $(MODULES); do \
+		if [ -f $$m/Makefile ]; then \
+			echo "=== lint: $$m ==="; \
+			$(MAKE) -C $$m lint || exit 1; \
+		fi; \
+	done
 
 build:
 	@for m in $(MODULES); do \

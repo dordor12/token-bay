@@ -5,14 +5,36 @@ pre-commit:
       glob: '**/*.go'
       run: gofumpt -l -w {staged_files}
       stage_fixed: true
-    vet:
+    # `go vet ./...` from the workspace root cannot expand ./... because the
+    # repo has go.work but no top-level go.mod. Vet per-module instead;
+    # only modules whose staged files changed run.
+    vet-shared:
       priority: 2
-      glob: '**/*.go'
-      run: go vet ./...
-    golangci-lint:
+      glob: 'shared/**/*.go'
+      run: cd shared && go vet ./...
+    vet-plugin:
       priority: 2
-      glob: '**/*.go'
-      run: golangci-lint run --new-from-rev=HEAD
+      glob: 'plugin/**/*.go'
+      run: cd plugin && go vet ./...
+    vet-tracker:
+      priority: 2
+      glob: 'tracker/**/*.go'
+      run: cd tracker && go vet ./...
+    # golangci-lint can't expand ./... from the workspace root because the
+    # repo has go.work but no top-level go.mod. Lint per-module instead;
+    # only modules whose staged files changed run.
+    golangci-lint-shared:
+      priority: 2
+      glob: 'shared/**/*.go'
+      run: cd shared && golangci-lint run --new-from-rev=HEAD
+    golangci-lint-plugin:
+      priority: 2
+      glob: 'plugin/**/*.go'
+      run: cd plugin && golangci-lint run --new-from-rev=HEAD
+    golangci-lint-tracker:
+      priority: 2
+      glob: 'tracker/**/*.go'
+      run: cd tracker && golangci-lint run --new-from-rev=HEAD
     plugin-conformance:
       priority: 3
       glob:
