@@ -341,3 +341,79 @@ func TestRegistry_UpdateReputation_UnknownReturnsErr(t *testing.T) {
 	err = r.UpdateReputation(ids.IdentityID{0xEE}, 0.5)
 	assert.ErrorIs(t, err, ErrUnknownSeeder)
 }
+
+func TestRegistry_IncLoad_IncrementsAndReturnsNewValue(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x80}
+	r.Register(SeederRecord{IdentityID: id, Load: 0})
+
+	n, err := r.IncLoad(id)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	n, err = r.IncLoad(id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	got, _ := r.Get(id)
+	assert.Equal(t, 2, got.Load)
+}
+
+func TestRegistry_IncLoad_UnknownReturnsErr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	_, err = r.IncLoad(ids.IdentityID{0xEE})
+	assert.ErrorIs(t, err, ErrUnknownSeeder)
+}
+
+func TestRegistry_DecLoad_DecrementsAndReturnsNewValue(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x81}
+	r.Register(SeederRecord{IdentityID: id, Load: 3})
+
+	n, err := r.DecLoad(id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+}
+
+func TestRegistry_DecLoad_AtZero_ReturnsUnderflow(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x82}
+	r.Register(SeederRecord{IdentityID: id, Load: 0})
+
+	_, err = r.DecLoad(id)
+	assert.ErrorIs(t, err, ErrLoadUnderflow)
+
+	// Mutation must NOT be persisted.
+	got, _ := r.Get(id)
+	assert.Equal(t, 0, got.Load)
+}
+
+func TestRegistry_DecLoad_UnknownReturnsErr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	_, err = r.DecLoad(ids.IdentityID{0xEF})
+	assert.ErrorIs(t, err, ErrUnknownSeeder)
+}
+
+func TestRegistry_IncDec_Symmetric(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x83}
+	r.Register(SeederRecord{IdentityID: id, Load: 0})
+
+	for i := 0; i < 5; i++ {
+		_, err := r.IncLoad(id)
+		require.NoError(t, err)
+	}
+	for i := 0; i < 5; i++ {
+		_, err := r.DecLoad(id)
+		require.NoError(t, err)
+	}
+
+	got, _ := r.Get(id)
+	assert.Equal(t, 0, got.Load)
+}

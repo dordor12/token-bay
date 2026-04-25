@@ -116,3 +116,37 @@ func (r *Registry) UpdateReputation(id ids.IdentityID, score float64) error {
 		return nil
 	})
 }
+
+// IncLoad increments the seeder's in-flight offer count by one. Returns the
+// new load value. ErrUnknownSeeder if the seeder is not in the registry.
+func (r *Registry) IncLoad(id ids.IdentityID) (int, error) {
+	var newLoad int
+	err := r.shardFor(id).update(id, func(rec *SeederRecord) error {
+		rec.Load++
+		newLoad = rec.Load
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return newLoad, nil
+}
+
+// DecLoad decrements the seeder's in-flight offer count by one. Returns the
+// new load value. ErrLoadUnderflow is returned (and no mutation occurs) if
+// load is already 0. ErrUnknownSeeder if the seeder is not in the registry.
+func (r *Registry) DecLoad(id ids.IdentityID) (int, error) {
+	var newLoad int
+	err := r.shardFor(id).update(id, func(rec *SeederRecord) error {
+		if rec.Load <= 0 {
+			return ErrLoadUnderflow
+		}
+		rec.Load--
+		newLoad = rec.Load
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return newLoad, nil
+}
