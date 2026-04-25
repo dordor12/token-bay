@@ -33,7 +33,5 @@ func TestProofV1_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, first, second, "Deterministic marshal must be byte-stable across round-trip")
-	assert.Equal(t, original.StopFailure.Matcher, parsed.StopFailure.Matcher)
-	assert.Equal(t, original.UsageProbe.At, parsed.UsageProbe.At)
-	assert.Equal(t, original.Nonce, parsed.Nonce)
+	require.True(t, proto.Equal(original, &parsed), "unmarshal must reproduce original exactly")
 }
