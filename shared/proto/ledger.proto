@@ -1,0 +1,43 @@
+syntax = "proto3";
+package tokenbay.proto.v1;
+
+option go_package = "github.com/token-bay/token-bay/shared/proto";
+
+// EntryKind classifies a ledger entry's semantic role.
+// ENTRY_KIND_UNSPECIFIED is rejected by ValidateEntryBody.
+enum EntryKind {
+  ENTRY_KIND_UNSPECIFIED   = 0;
+  ENTRY_KIND_USAGE         = 1;
+  ENTRY_KIND_TRANSFER_OUT  = 2;
+  ENTRY_KIND_TRANSFER_IN   = 3;
+  ENTRY_KIND_STARTER_GRANT = 4;
+}
+
+// EntryBody — the signed payload of a ledger entry.
+// Spec: docs/superpowers/specs/ledger/2026-04-22-ledger-design.md §3.1.
+// All three signatures (consumer/seeder/tracker) are computed over
+// shared/signing.DeterministicMarshal(body).
+message EntryBody {
+  bytes     prev_hash     = 1;   // 32 bytes; zero for genesis
+  uint64    seq           = 2;
+  EntryKind kind          = 3;
+  bytes     consumer_id   = 4;   // 32 bytes; zero for transfer_in/transfer_out (peer-side)
+  bytes     seeder_id     = 5;   // 32 bytes; zero for non-usage kinds
+  string    model         = 6;   // "" for non-usage kinds
+  uint32    input_tokens  = 7;   // 0 for non-usage kinds
+  uint32    output_tokens = 8;   // 0 for non-usage kinds
+  uint64    cost_credits  = 9;   // absolute value; sign determined by kind+party
+  uint64    timestamp     = 10;  // unix seconds
+  bytes     request_id    = 11;  // 16 bytes (UUID); zero for non-usage kinds
+  uint32    flags         = 12;  // bit 0 = consumer_sig_missing
+  bytes     ref           = 13;  // 32 bytes; transfer UUID for transfer_*; zero otherwise
+}
+
+// Entry — wire form. Receiver verifies signatures via
+// shared/signing.VerifyEntry plus tracker entry.VerifyAll.
+message Entry {
+  EntryBody body         = 1;
+  bytes     consumer_sig = 2;  // 64 bytes or empty per per-kind matrix
+  bytes     seeder_sig   = 3;  // 64 bytes or empty per per-kind matrix
+  bytes     tracker_sig  = 4;  // 64 bytes; mandatory
+}
