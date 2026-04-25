@@ -1,0 +1,27 @@
+syntax = "proto3";
+package tokenbay.exhaustionproof.v1;
+
+option go_package = "github.com/token-bay/token-bay/shared/exhaustionproof";
+
+// ExhaustionProofV1 is the v1 two-signal rate-limit-exhaustion proof
+// attached to every broker_request envelope. Spec:
+// docs/superpowers/specs/shared/2026-04-24-wire-format-v1-design.md §5.1.
+message ExhaustionProofV1 {
+  StopFailure stop_failure = 1;
+  UsageProbe  usage_probe  = 2;
+  uint64      captured_at  = 3;  // unix seconds — when the proof was assembled
+  bytes       nonce        = 4;  // 16 random bytes — proof-level replay protection
+}
+
+// StopFailure is the captured StopFailureHookInput payload.
+message StopFailure {
+  string matcher     = 1;  // v1: MUST be "rate_limit"
+  uint64 at          = 2;  // unix seconds
+  bytes  error_shape = 3;  // raw JSON Claude Code surfaced — verbatim, no transformation
+}
+
+// UsageProbe is the parsed output of `claude /usage` run under PTY.
+message UsageProbe {
+  uint64 at     = 1;  // unix seconds (when /usage was executed)
+  bytes  output = 2;  // raw bytes of /usage TUI output (PTY-captured)
+}
