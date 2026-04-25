@@ -1,6 +1,6 @@
 module github.com/token-bay/token-bay/tracker
 
-go 1.23
+go 1.25.0
 
 toolchain go1.26.2
 
