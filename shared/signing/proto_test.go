@@ -197,3 +197,106 @@ func TestVerifyEnvelope_MarshalError(t *testing.T) {
 	assert.False(t, VerifyEnvelope(pub, signed), "VerifyEnvelope must return false on marshal error")
 }
 
+// fixtureEntryBody — USAGE-kind body for SignEntry/VerifyEntry tests. Mirrors
+// shared/proto's fixtureUsageEntryBody but inlined here because tests in the
+// proto package don't export fixtures.
+func fixtureEntryBody() *tbproto.EntryBody {
+	return &tbproto.EntryBody{
+		PrevHash:     bytes32(0x01),
+		Seq:          42,
+		Kind:         tbproto.EntryKind_ENTRY_KIND_USAGE,
+		ConsumerId:   bytes32(0x11),
+		SeederId:     bytes32(0x22),
+		Model:        "claude-sonnet-4-6",
+		InputTokens:  4096,
+		OutputTokens: 1024,
+		CostCredits:  3072000,
+		Timestamp:    1714000100,
+		RequestId:    repeat(0x33, 16),
+		Flags:        0,
+		Ref:          make([]byte, 32),
+	}
+}
+
+func TestSignVerifyEntry_RoundTrip(t *testing.T) {
+	pub, priv := fixtureKeypair(t)
+	body := fixtureEntryBody()
+
+	sig, err := SignEntry(priv, body)
+	require.NoError(t, err)
+	require.Len(t, sig, ed25519.SignatureSize)
+
+	assert.True(t, VerifyEntry(pub, body, sig))
+}
+
+func TestVerifyEntry_TamperedBodyFails(t *testing.T) {
+	pub, priv := fixtureKeypair(t)
+	body := fixtureEntryBody()
+	sig, err := SignEntry(priv, body)
+	require.NoError(t, err)
+
+	body.CostCredits++ // tamper after signing
+	assert.False(t, VerifyEntry(pub, body, sig))
+}
+
+func TestVerifyEntry_TamperedSigFails(t *testing.T) {
+	pub, priv := fixtureKeypair(t)
+	body := fixtureEntryBody()
+	sig, err := SignEntry(priv, body)
+	require.NoError(t, err)
+	sig[0] ^= 0xFF
+
+	assert.False(t, VerifyEntry(pub, body, sig))
+}
+
+func TestVerifyEntry_WrongKeyFails(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	body := fixtureEntryBody()
+	sig, err := SignEntry(priv, body)
+	require.NoError(t, err)
+
+	otherSeed := make([]byte, ed25519.SeedSize)
+	otherSeed[0] = 0xFF
+	otherPriv := ed25519.NewKeyFromSeed(otherSeed)
+	otherPub := otherPriv.Public().(ed25519.PublicKey)
+
+	assert.False(t, VerifyEntry(otherPub, body, sig))
+}
+
+func TestVerifyEntry_NilSafety(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	assert.False(t, VerifyEntry(pub, nil, bytes64(0x00)))
+	assert.False(t, VerifyEntry(nil, fixtureEntryBody(), bytes64(0x00)))
+}
+
+func TestSignEntry_BadKeyLength(t *testing.T) {
+	_, err := SignEntry(ed25519.PrivateKey{1, 2, 3}, fixtureEntryBody())
+	require.Error(t, err)
+}
+
+func TestSignEntry_NilBody(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	_, err := SignEntry(priv, nil)
+	require.Error(t, err)
+}
+
+func TestVerifyEntry_WrongSigLength(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	assert.False(t, VerifyEntry(pub, fixtureEntryBody(), bytes32(0x00))) // 32 bytes, want 64
+}
+
+// TestSignEntry_MarshalError covers the if err != nil branch in SignEntry.
+func TestSignEntry_MarshalError(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	bad := &tbproto.EntryBody{Model: "\xff\xfe"} // invalid UTF-8 → marshal error
+	_, err := SignEntry(priv, bad)
+	require.Error(t, err)
+}
+
+// TestVerifyEntry_MarshalError covers the if err != nil branch in VerifyEntry.
+func TestVerifyEntry_MarshalError(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	bad := &tbproto.EntryBody{Model: "\xff\xfe"} // invalid UTF-8 → marshal error
+	assert.False(t, VerifyEntry(pub, bad, bytes64(0x00)))
+}
+
