@@ -82,3 +82,39 @@ func VerifyBalanceSnapshot(pub ed25519.PublicKey, signed *tbproto.SignedBalanceS
 	}
 	return Verify(pub, buf, signed.TrackerSig)
 }
+
+// SignEntry returns an Ed25519 signature over DeterministicMarshal(body).
+// All three ledger-entry signers (consumer, seeder, tracker) use this same
+// helper since they all sign the identical preimage — see ledger spec §3.1
+// and tracker spec §5.2 step 4.
+//
+// Pre-condition: body has been validated by tbproto.ValidateEntryBody.
+// Sign helpers do NOT re-run validation, mirroring SignEnvelope semantics.
+func SignEntry(priv ed25519.PrivateKey, body *tbproto.EntryBody) ([]byte, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("signing: private key length %d, want %d", len(priv), ed25519.PrivateKeySize)
+	}
+	if body == nil {
+		return nil, errors.New("signing: SignEntry on nil body")
+	}
+	buf, err := DeterministicMarshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("signing: marshal entry body: %w", err)
+	}
+	return ed25519.Sign(priv, buf), nil
+}
+
+// VerifyEntry reports whether sig is a valid Ed25519 signature under pub
+// over DeterministicMarshal(body). Nil body, malformed key/sig, or marshal
+// failure all return false without panicking — same nil-safety contract as
+// VerifyEnvelope and VerifyBalanceSnapshot.
+func VerifyEntry(pub ed25519.PublicKey, body *tbproto.EntryBody, sig []byte) bool {
+	if body == nil {
+		return false
+	}
+	buf, err := DeterministicMarshal(body)
+	if err != nil {
+		return false
+	}
+	return Verify(pub, buf, sig)
+}

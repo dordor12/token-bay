@@ -36,9 +36,14 @@ func ValidateProofV1(p *ExhaustionProofV1) error {
 	if p.UsageProbe.At == 0 {
 		return errors.New("exhaustionproof: usage_probe.at is zero")
 	}
-	gap := int64(p.StopFailure.At) - int64(p.UsageProbe.At)
-	if gap < 0 {
-		gap = -gap
+	// Compute |StopFailure.At - UsageProbe.At| in unsigned space to avoid
+	// any uint64→int64 narrowing concern: `At` is a wire-format uint64 and
+	// proofFreshnessWindow is small (seconds), so the absolute gap fits.
+	var gap uint64
+	if p.StopFailure.At > p.UsageProbe.At {
+		gap = p.StopFailure.At - p.UsageProbe.At
+	} else {
+		gap = p.UsageProbe.At - p.StopFailure.At
 	}
 	if gap > proofFreshnessWindow {
 		return fmt.Errorf("exhaustionproof: signals %ds apart, exceeds freshness window %ds", gap, proofFreshnessWindow)

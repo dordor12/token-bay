@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,4 +65,146 @@ func TestValidateEnvelopeBody_WrapsExhaustionProofError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "proto: exhaustion_proof:", "wrapper prefix must be present")
 	assert.Contains(t, err.Error(), "matcher", "inner ValidateProofV1 error must be preserved (substring 'matcher' is unique to the inner error)")
+}
+
+func TestValidateEntryBody_AcceptsAllKinds(t *testing.T) {
+	t.Run("usage", func(t *testing.T) {
+		require.NoError(t, ValidateEntryBody(fixtureUsageEntryBody()))
+	})
+	t.Run("transfer_out", func(t *testing.T) {
+		require.NoError(t, ValidateEntryBody(fixtureTransferOutEntryBody()))
+	})
+	t.Run("transfer_in", func(t *testing.T) {
+		require.NoError(t, ValidateEntryBody(fixtureTransferInEntryBody()))
+	})
+	t.Run("starter_grant", func(t *testing.T) {
+		require.NoError(t, ValidateEntryBody(fixtureStarterGrantEntryBody()))
+	})
+}
+
+func TestValidateEntryBody_NilBody(t *testing.T) {
+	err := ValidateEntryBody(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil")
+}
+
+// Cross-kind structural rejections — invariants every kind must satisfy.
+func TestValidateEntryBody_StructuralRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*EntryBody)
+		errFrag string
+	}{
+		{"prev_hash short", func(b *EntryBody) { b.PrevHash = make([]byte, 16) }, "prev_hash"},
+		{"prev_hash long", func(b *EntryBody) { b.PrevHash = make([]byte, 64) }, "prev_hash"},
+		{"ref wrong length", func(b *EntryBody) { b.Ref = make([]byte, 8) }, "ref"},
+		{"unspecified kind", func(b *EntryBody) { b.Kind = EntryKind_ENTRY_KIND_UNSPECIFIED }, "kind"},
+		{"unknown kind", func(b *EntryBody) { b.Kind = EntryKind(99) }, "kind"},
+		{"flags unknown bit", func(b *EntryBody) { b.Flags = 1 << 5 }, "flags"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fixtureUsageEntryBody()
+			tc.mutate(b)
+			err := ValidateEntryBody(b)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
+}
+
+// USAGE-specific field invariants.
+func TestValidateEntryBody_UsageRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*EntryBody)
+		errFrag string
+	}{
+		{"consumer_id short", func(b *EntryBody) { b.ConsumerId = make([]byte, 16) }, "consumer_id"},
+		{"seeder_id short", func(b *EntryBody) { b.SeederId = make([]byte, 16) }, "seeder_id"},
+		{"empty model", func(b *EntryBody) { b.Model = "" }, "model"},
+		{"model too long", func(b *EntryBody) { b.Model = strings.Repeat("x", 33) }, "model"},
+		{"request_id wrong length", func(b *EntryBody) { b.RequestId = make([]byte, 8) }, "request_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fixtureUsageEntryBody()
+			tc.mutate(b)
+			err := ValidateEntryBody(b)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
+}
+
+// TRANSFER_OUT must zero out the seeder/model/request_id slots and reject
+// any flags.
+func TestValidateEntryBody_TransferOutRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*EntryBody)
+		errFrag string
+	}{
+		{"seeder_id non-zero", func(b *EntryBody) { b.SeederId = make32(0xFF) }, "seeder_id"},
+		{"model non-empty", func(b *EntryBody) { b.Model = "claude" }, "model"},
+		{"request_id non-zero", func(b *EntryBody) { b.RequestId = make16(0xFF) }, "request_id"},
+		{"input_tokens non-zero", func(b *EntryBody) { b.InputTokens = 1 }, "tokens"},
+		{"flag set", func(b *EntryBody) { b.Flags = 1 }, "flags"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fixtureTransferOutEntryBody()
+			tc.mutate(b)
+			err := ValidateEntryBody(b)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
+}
+
+// TRANSFER_IN: both counterparty IDs must be zero.
+func TestValidateEntryBody_TransferInRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*EntryBody)
+		errFrag string
+	}{
+		{"consumer_id non-zero", func(b *EntryBody) { b.ConsumerId = make32(0xFF) }, "consumer_id"},
+		{"seeder_id non-zero", func(b *EntryBody) { b.SeederId = make32(0xFF) }, "seeder_id"},
+		{"model non-empty", func(b *EntryBody) { b.Model = "claude" }, "model"},
+		{"flag set", func(b *EntryBody) { b.Flags = 1 }, "flags"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fixtureTransferInEntryBody()
+			tc.mutate(b)
+			err := ValidateEntryBody(b)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
+}
+
+// STARTER_GRANT: consumer_id required, everything else zero.
+func TestValidateEntryBody_StarterGrantRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*EntryBody)
+		errFrag string
+	}{
+		{"consumer_id short", func(b *EntryBody) { b.ConsumerId = make([]byte, 16) }, "consumer_id"},
+		{"seeder_id non-zero", func(b *EntryBody) { b.SeederId = make32(0xFF) }, "seeder_id"},
+		{"model non-empty", func(b *EntryBody) { b.Model = "claude" }, "model"},
+		{"ref non-zero", func(b *EntryBody) { b.Ref = make32(0xAA) }, "ref"},
+		{"flag set", func(b *EntryBody) { b.Flags = 1 }, "flags"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fixtureStarterGrantEntryBody()
+			tc.mutate(b)
+			err := ValidateEntryBody(b)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errFrag)
+		})
+	}
 }

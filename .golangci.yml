@@ -37,8 +37,18 @@ issues:
     - path: _test\.go
       linters:
         - gosec
-    # plugin's ccbridge subprocess module intentionally runs external commands
-    - path: plugin/internal/ccbridge/.*\.go
+    # The plugin spawns the `claude` CLI from three places by design:
+    # - internal/ccbridge   — seeder-role bridge (claude -p)
+    # - internal/ccproxy    — auth-status fingerprint probe (claude auth status)
+    # - internal/ratelimit  — /usage TUI probe under PTY (claude /usage)
+    # Each takes a configured BinaryPath so callers can stub it in tests; that
+    # configurability is what gosec flags as G204. The architectural choice to
+    # spawn `claude` is intentional and documented in plugin/CLAUDE.md.
+    #
+    # Pattern is unanchored so it matches whether golangci-lint is run from
+    # repo root (file path: plugin/internal/.../...) or per-module from
+    # plugin/ (file path: internal/.../...).
+    - path: (^|/)internal/(ccbridge|ccproxy|ratelimit)/.*\.go
       linters:
         - gosec
       text: 'G204'

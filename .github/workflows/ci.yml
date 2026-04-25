@@ -26,12 +26,28 @@ jobs:
         run: make build
 
   lint:
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [shared, plugin, tracker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          # Pin to a Go version new enough to typecheck the repo's code.
+          # The test jobs install 1.23 and auto-bump via the go.work toolchain
+          # directive at build time, but goinstall'd golangci-lint compiles
+          # itself against the active Go (its own go.mod doesn't request
+          # newer), so the lint job has to install a sufficiently new Go up
+          # front. 'stable' tracks the latest released minor.
+          go-version: 'stable'
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          # Build golangci-lint from source against the runner's Go (above)
+          # rather than downloading a prebuilt release binary that ships
+          # compiled with an older Go and trips typecheck on newer language
+          # features in this repo.
+          install-mode: goinstall
+          working-directory: ${{ matrix.module }}
