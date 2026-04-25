@@ -139,6 +139,12 @@ func TestSignEnvelope_NilBody(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestVerifyEnvelope_WrongSigLength(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	signed := &tbproto.EnvelopeSigned{Body: fixtureBody(), ConsumerSig: bytes32(0x00)} // 32 bytes, want 64
+	assert.False(t, VerifyEnvelope(pub, signed))
+}
+
 func TestSignVerifyBalanceSnapshot_RoundTrip(t *testing.T) {
 	pub, priv := fixtureKeypair(t)
 	body := &tbproto.BalanceSnapshotBody{
@@ -154,6 +160,17 @@ func TestSignVerifyBalanceSnapshot_RoundTrip(t *testing.T) {
 	// Tamper detection.
 	body.Credits = 999
 	assert.False(t, VerifyBalanceSnapshot(pub, signed))
+}
+
+func TestSignBalanceSnapshot_BadKeyLength(t *testing.T) {
+	_, err := SignBalanceSnapshot(ed25519.PrivateKey{1, 2, 3}, &tbproto.BalanceSnapshotBody{})
+	require.Error(t, err)
+}
+
+func TestSignBalanceSnapshot_NilBody(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	_, err := SignBalanceSnapshot(priv, nil)
+	require.Error(t, err)
 }
 
 func TestVerifyBalanceSnapshot_NilSafety(t *testing.T) {
