@@ -64,16 +64,42 @@ func TestParse_RejectsMalformedYAML(t *testing.T) {
 	require.True(t, errors.As(err, &pe))
 }
 
-func TestLoad_FullYAMLLoadsAndAppliesDefaultsAndValidates(t *testing.T) {
-	// At this point in the plan, ApplyDefaults and Validate are not yet
-	// wired into Load — Task 12 will complete the wiring. For now we only
-	// assert the file-open + Parse path. The test file will be extended
-	// as the wiring lands; this initial form is intentionally loose.
-	c, err := Load("testdata/full.yaml")
+func TestLoad_TempdirYAMLPassesValidation(t *testing.T) {
+	tmp := t.TempDir()
+	yaml := "data_dir: " + tmp + "\n" +
+		"server:\n" +
+		"  listen_addr: \"0.0.0.0:7777\"\n" +
+		"  identity_key_path: " + tmp + "/identity.key\n" +
+		"  tls_cert_path: " + tmp + "/cert.pem\n" +
+		"  tls_key_path: " + tmp + "/cert.key\n" +
+		"ledger:\n" +
+		"  storage_path: " + tmp + "/ledger.sqlite\n"
+	path := tmp + "/tracker.yaml"
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
 
-	require.NoError(t, err)
+	c, err := Load(path)
+
+	require.NoError(t, err, "expected clean Load against tmp dir")
 	require.NotNil(t, c)
-	assert.Equal(t, "/var/lib/token-bay", c.DataDir)
+	assert.Equal(t, tmp+"/admission.tlog", c.Admission.TLogPath)
+}
+
+func TestLoad_MinimalFailsValidationOnMissingTLogParent(t *testing.T) {
+	c, err := Load("testdata/minimal.yaml")
+
+	if err == nil {
+		require.NotNil(t, c)
+		return
+	}
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve), "got %v", err)
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "admission.tlog_path" {
+			matched = true
+		}
+	}
+	assert.True(t, matched, "expected admission.tlog_path error: %v", ve.Errors)
 }
 
 func TestLoad_MissingFileReturnsErrorPathPresent(t *testing.T) {

@@ -398,3 +398,143 @@ func TestValidate_ReputationFreezeListCacheTTLPositive(t *testing.T) {
 
 	assertOneFieldError(t, err, "reputation.freeze_list_cache_ttl_s")
 }
+
+func TestValidate_AdmissionPressureOrdering(t *testing.T) {
+	c := validConfig(t)
+	c.Admission.PressureAdmitThreshold = 1.5
+	c.Admission.PressureRejectThreshold = 1.0
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "admission.pressure_admit_threshold" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_AdmissionScoreWeightsSum(t *testing.T) {
+	c := validConfig(t)
+	c.Admission.ScoreWeights.Tenure = 0.3 // sum becomes 1.1
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "admission.score_weights" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_AdmissionAttestationTTLOrdering(t *testing.T) {
+	c := validConfig(t)
+	c.Admission.AttestationTTLSeconds = 100000
+	c.Admission.AttestationMaxTTLSeconds = 50000
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "admission.attestation_max_ttl_seconds" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_AdmissionTrialTierScoreRange(t *testing.T) {
+	c := validConfig(t)
+	c.Admission.TrialTierScore = 1.5
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "admission.trial_tier_score")
+}
+
+func TestValidate_AdmissionMaxImportedScoreRange(t *testing.T) {
+	c := validConfig(t)
+	c.Admission.MaxAttestationScoreImported = 2.0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "admission.max_attestation_score_imported")
+}
+
+func TestValidate_AdmissionTLogParentExists(t *testing.T) {
+	tmp := t.TempDir()
+	c := validConfig(t)
+	c.Admission.TLogPath = tmp + "/sub/admission.tlog" // /sub does not exist
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "admission.tlog_path" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_AdmissionTLogParentExistsHappy(t *testing.T) {
+	tmp := t.TempDir()
+	c := validConfig(t)
+	c.Admission.TLogPath = tmp + "/admission.tlog" // tmp exists
+
+	err := Validate(c)
+
+	assert.NoError(t, err)
+}
+
+func TestValidate_AdmissionEmptyBlocklistEntry(t *testing.T) {
+	c := validConfig(t)
+	c.Admission.AttestationPeerBlocklist = []string{"peer-a", "", "peer-c"}
+
+	err := Validate(c)
+
+	require.Error(t, err)
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	matched := false
+	for _, fe := range ve.Errors {
+		if fe.Field == "admission.attestation_peer_blocklist[1]" {
+			matched = true
+		}
+	}
+	assert.True(t, matched)
+}
+
+func TestValidate_AdmissionFsyncBatchWindowAllowsZero(t *testing.T) {
+	// Spec §6.8 says fsync_batch_window_ms ≥ 0 (zero = synchronous fsync).
+	c := validConfig(t)
+	c.Admission.FsyncBatchWindowMs = 0
+
+	err := Validate(c)
+
+	assert.NoError(t, err)
+}
+
+func TestValidate_AdmissionStunTurnRelayKbps(t *testing.T) {
+	c := validConfig(t)
+	c.STUNTURN.TURNRelayMaxKbps = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "stun_turn.turn_relay_max_kbps")
+}

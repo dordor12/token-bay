@@ -22,9 +22,9 @@ func Parse(r io.Reader) (*Config, error) {
 	return &c, nil
 }
 
-// Load reads the YAML config file at path and decodes it. ApplyDefaults
-// and Validate are wired in by Task 12; this task only exposes the file-
-// open boundary and the *ParseError.Path enrichment.
+// Load reads the YAML config file at path, applies defaults, and validates.
+// Returns a typed *ParseError on parse failure or *ValidationError on
+// invariant failure (both errors.As-comparable).
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -38,6 +38,10 @@ func Load(path string) (*Config, error) {
 		if errors.As(err, &pe) {
 			pe.Path = path
 		}
+		return nil, err
+	}
+	ApplyDefaults(c)
+	if err := Validate(c); err != nil {
 		return nil, err
 	}
 	return c, nil

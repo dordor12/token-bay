@@ -2,6 +2,7 @@ package config
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 )
@@ -23,6 +24,8 @@ func Validate(c *Config) error {
 	v.checkSettlement(c)
 	v.checkFederation(c)
 	v.checkReputation(c)
+	v.checkAdmission(c)
+	v.checkSTUNTURN(c)
 	return v.toError()
 }
 
@@ -209,6 +212,127 @@ func (v *validator) checkFederation(c *Config) {
 	}
 	if c.Federation.EnrollRatePerMinPerIP < 1 {
 		v.add("federation.enroll_rate_per_min_per_ip", "must be >= 1")
+	}
+}
+
+// §6.8
+func (v *validator) checkAdmission(c *Config) {
+	a := c.Admission
+
+	if a.PressureAdmitThreshold <= 0 {
+		v.add("admission.pressure_admit_threshold", "must be > 0")
+	}
+	if a.PressureRejectThreshold <= 0 {
+		v.add("admission.pressure_reject_threshold", "must be > 0")
+	}
+	if a.PressureAdmitThreshold > 0 && a.PressureRejectThreshold > 0 &&
+		a.PressureAdmitThreshold >= a.PressureRejectThreshold {
+		v.add("admission.pressure_admit_threshold",
+			"must be < pressure_reject_threshold")
+	}
+
+	if a.QueueCap < 1 {
+		v.add("admission.queue_cap", "must be >= 1")
+	}
+	if a.TrialTierScore < 0 || a.TrialTierScore > 1 {
+		v.add("admission.trial_tier_score", "must be in [0.0, 1.0]")
+	}
+	if a.AgingAlphaPerMinute < 0 {
+		v.add("admission.aging_alpha_per_minute", "must be >= 0")
+	}
+	if a.QueueTimeoutS <= 0 {
+		v.add("admission.queue_timeout_s", "must be > 0")
+	}
+
+	w := a.ScoreWeights
+	checkNonNeg := func(field string, val float64) {
+		if val < 0 {
+			v.add(field, "must be >= 0")
+		}
+	}
+	checkNonNeg("admission.score_weights.settlement_reliability", w.SettlementReliability)
+	checkNonNeg("admission.score_weights.inverse_dispute_rate", w.InverseDisputeRate)
+	checkNonNeg("admission.score_weights.tenure", w.Tenure)
+	checkNonNeg("admission.score_weights.net_credit_flow", w.NetCreditFlow)
+	checkNonNeg("admission.score_weights.balance_cushion", w.BalanceCushion)
+	sum := w.SettlementReliability + w.InverseDisputeRate + w.Tenure + w.NetCreditFlow + w.BalanceCushion
+	if !approxEqual(sum, 1.0, 1e-3) {
+		v.add("admission.score_weights",
+			"weights must sum to 1.0 ± 0.001 (got "+ftoa(sum)+")")
+	}
+
+	if a.NetFlowNormalizationConstant <= 0 {
+		v.add("admission.net_flow_normalization_constant", "must be > 0")
+	}
+	if a.TenureCapDays < 1 {
+		v.add("admission.tenure_cap_days", "must be >= 1")
+	}
+	if a.StarterGrantCredits < 1 {
+		v.add("admission.starter_grant_credits", "must be >= 1")
+	}
+	if a.RollingWindowDays < 1 {
+		v.add("admission.rolling_window_days", "must be >= 1")
+	}
+	if a.TrialSettlementsRequired < 0 {
+		v.add("admission.trial_settlements_required", "must be >= 0")
+	}
+	if a.TrialDurationHours < 0 {
+		v.add("admission.trial_duration_hours", "must be >= 0")
+	}
+	if a.AttestationTTLSeconds <= 0 {
+		v.add("admission.attestation_ttl_seconds", "must be > 0")
+	}
+	if a.AttestationMaxTTLSeconds < a.AttestationTTLSeconds {
+		v.add("admission.attestation_max_ttl_seconds",
+			"must be >= attestation_ttl_seconds")
+	}
+	if a.AttestationIssuancePerConsumerPerHour < 1 {
+		v.add("admission.attestation_issuance_per_consumer_per_hour", "must be >= 1")
+	}
+	if a.MaxAttestationScoreImported < 0 || a.MaxAttestationScoreImported > 1 {
+		v.add("admission.max_attestation_score_imported", "must be in [0.0, 1.0]")
+	}
+
+	if a.TLogPath == "" {
+		v.add("admission.tlog_path", "must be non-empty")
+	} else {
+		if dir := filepath.Dir(a.TLogPath); dir != "" {
+			if _, err := os.Stat(dir); err != nil {
+				v.add("admission.tlog_path",
+					"parent directory does not exist: "+dir)
+			}
+		}
+	}
+	if a.SnapshotPathPrefix == "" {
+		v.add("admission.snapshot_path_prefix", "must be non-empty")
+	}
+	if a.SnapshotIntervalS <= 0 {
+		v.add("admission.snapshot_interval_s", "must be > 0")
+	}
+	if a.SnapshotsRetained < 1 {
+		v.add("admission.snapshots_retained", "must be >= 1")
+	}
+	if a.FsyncBatchWindowMs < 0 {
+		v.add("admission.fsync_batch_window_ms", "must be >= 0")
+	}
+	if a.HeartbeatWindowMinutes < 1 {
+		v.add("admission.heartbeat_window_minutes", "must be >= 1")
+	}
+	if a.HeartbeatFreshnessDecayMaxS <= 0 {
+		v.add("admission.heartbeat_freshness_decay_max_s", "must be > 0")
+	}
+	for i, peer := range a.AttestationPeerBlocklist {
+		if peer == "" {
+			v.add("admission.attestation_peer_blocklist["+strconv.Itoa(i)+"]",
+				"must be non-empty")
+		}
+	}
+}
+
+// §6.9 (listener parse + collision already handled in §6.2)
+func (v *validator) checkSTUNTURN(c *Config) {
+	if c.STUNTURN.TURNRelayMaxKbps <= 0 {
+		v.add("stun_turn.turn_relay_max_kbps", "must be > 0")
 	}
 }
 
