@@ -135,3 +135,93 @@ type STUNTURNConfig struct {
 type MetricsConfig struct {
 	ListenAddr string `yaml:"listen_addr"`
 }
+
+// DefaultConfig returns a Config with every defaultable field populated
+// per the design spec §4.1. Required fields (see spec §4.2) are returned
+// zero-valued so Validate flags them when the operator forgets.
+func DefaultConfig() *Config {
+	return &Config{
+		LogLevel: "info",
+		Admin: AdminConfig{
+			ListenAddr: "127.0.0.1:9090",
+		},
+		Ledger: LedgerConfig{
+			MerkleRootIntervalMin: 60,
+		},
+		Broker: BrokerConfig{
+			HeadroomThreshold: 0.2,
+			LoadThreshold:     5,
+			ScoreWeights: BrokerScoreWeights{
+				Reputation: 0.4,
+				Headroom:   0.3,
+				RTT:        0.2,
+				Load:       0.1,
+			},
+			OfferTimeoutMs:          1500,
+			MaxOfferAttempts:        4,
+			BrokerRequestRatePerSec: 2.0,
+		},
+		Settlement: SettlementConfig{
+			TunnelSetupMs:      10000,
+			StreamIdleS:        60,
+			SettlementTimeoutS: 900,
+			ReservationTTLS:    1200,
+		},
+		Federation: FederationConfig{
+			PeerCountMin:          8,
+			PeerCountMax:          16,
+			GossipDedupeTTLS:      3600,
+			TransferRetryWindowH:  24,
+			EnrollRatePerMinPerIP: 1,
+		},
+		Reputation: ReputationConfig{
+			EvaluationIntervalS: 60,
+			SignalWindows: ReputationSignalWindows{
+				ShortS:  3600,
+				MediumS: 86400,
+				LongS:   604800,
+			},
+			ZScoreThreshold:     2.5,
+			DefaultScore:        0.5,
+			FreezeListCacheTTLS: 600,
+		},
+		Admission: AdmissionConfig{
+			PressureAdmitThreshold:  0.85,
+			PressureRejectThreshold: 1.5,
+			QueueCap:                512,
+			TrialTierScore:          0.4,
+			AgingAlphaPerMinute:     0.05,
+			QueueTimeoutS:           300,
+			ScoreWeights: AdmissionScoreWeights{
+				SettlementReliability: 0.30,
+				InverseDisputeRate:    0.10,
+				Tenure:                0.20,
+				NetCreditFlow:         0.30,
+				BalanceCushion:        0.10,
+			},
+			NetFlowNormalizationConstant:          10000,
+			TenureCapDays:                         30,
+			StarterGrantCredits:                   1000,
+			RollingWindowDays:                     30,
+			TrialSettlementsRequired:              50,
+			TrialDurationHours:                    72,
+			AttestationTTLSeconds:                 86400,
+			AttestationMaxTTLSeconds:              604800,
+			AttestationIssuancePerConsumerPerHour: 6,
+			MaxAttestationScoreImported:           0.95,
+			SnapshotIntervalS:                     600,
+			SnapshotsRetained:                     3,
+			FsyncBatchWindowMs:                    5,
+			HeartbeatWindowMinutes:                10,
+			HeartbeatFreshnessDecayMaxS:           300,
+		},
+		STUNTURN: STUNTURNConfig{
+			STUNListenAddr:   ":3478",
+			TURNListenAddr:   ":3479",
+			TURNRelayMaxKbps: 1024,
+		},
+		Metrics: MetricsConfig{
+			ListenAddr: ":9100",
+		},
+	}
+}
