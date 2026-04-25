@@ -62,3 +62,17 @@ func fixedClock(t time.Time) func() time.Time {
 func mustEntryHash(body *tbproto.EntryBody) ([32]byte, error) {
 	return entry.Hash(body)
 }
+
+// nextTipForTest returns (prev_hash, next_seq) for the next entry on l's
+// chain. Used by AppendUsage / AppendTransferOut tests that need to
+// pre-build a body matching the current tip — the real broker does the
+// same calculation.
+func nextTipForTest(t *testing.T, l *Ledger) ([]byte, uint64) {
+	t.Helper()
+	tipSeq, tipHash, hasTip, err := l.Tip(context.Background())
+	require.NoError(t, err)
+	if !hasTip {
+		return make([]byte, 32), 1
+	}
+	return tipHash, tipSeq + 1
+}
