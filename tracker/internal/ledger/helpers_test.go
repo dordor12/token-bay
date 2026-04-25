@@ -19,21 +19,23 @@ import (
 // and a deterministic tracker keypair. Closes the Store via t.Cleanup.
 func openTempLedger(t *testing.T, opts ...Option) *Ledger {
 	t.Helper()
-	store := openTempStoreForLedger(t)
-	_, priv := trackerKeypair()
-	l, err := Open(store, priv, opts...)
-	require.NoError(t, err)
+	l, _ := openTempLedgerWithPath(t, opts...)
 	return l
 }
 
-// openTempStoreForLedger returns a fresh Store backed by a tempdir-scoped
-// SQLite file. Closes via t.Cleanup.
-func openTempStoreForLedger(t *testing.T) *storage.Store {
+// openTempLedgerWithPath is like openTempLedger but also returns the
+// SQLite file path — used by integration tests that need raw DB access
+// to simulate corruption or restart.
+func openTempLedgerWithPath(t *testing.T, opts ...Option) (*Ledger, string) {
 	t.Helper()
-	s, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "ledger.db"))
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	s, err := storage.Open(context.Background(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
-	return s
+	_, priv := trackerKeypair()
+	l, err := Open(s, priv, opts...)
+	require.NoError(t, err)
+	return l, path
 }
 
 // trackerKeypair returns a deterministic Ed25519 keypair so tracker_sig
