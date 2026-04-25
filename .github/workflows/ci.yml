@@ -39,4 +39,9 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          # Build golangci-lint with the runner's Go toolchain (auto-bumped
+          # to the version go.work requires) instead of using the prebuilt
+          # release binary, which is compiled with an older Go and trips
+          # the typecheck linter on files that use newer language features.
+          install-mode: goinstall
           working-directory: ${{ matrix.module }}
