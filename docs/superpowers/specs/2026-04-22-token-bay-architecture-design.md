@@ -290,10 +290,11 @@ Payload attached to every `broker_request` envelope. Two versions:
     output:      <parsed /usage result>,
   },
   captured_at:     u64,
-  consumer_nonce:  bytes16,
-  consumer_sig:    bytes64              // over all above
+  nonce:           bytes16,
 }
 ```
+
+*Amended 2026-04-25: ProofV1 has no standalone signature — the enclosing `EnvelopeSigned.consumer_sig` covers the proof's bytes. Standalone proof verification is not exercised by any v1 use case; if a future use case (e.g., gossiped reputation audit) requires it, reintroduce a proof-internal sig in a versioned amendment. Schema lives in `shared/exhaustionproof/proof.proto`.*
 
 Trust rests on L1 (the reference plugin honors the two-stage gate) plus the correlation of two independent Claude-Code-sourced signals — a forker has to fabricate both plausibly. L3 catches systematic lying over time.
 

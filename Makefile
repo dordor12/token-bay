@@ -1,4 +1,4 @@
-.PHONY: all test lint check build clean
+.PHONY: all test lint check build clean proto-check
 
 MODULES := plugin shared tracker
 
@@ -24,6 +24,14 @@ build:
 	done
 
 check: test lint
+
+proto-check:
+	@for m in $(MODULES); do \
+		if [ -f $$m/Makefile ] && grep -q '^proto-check:' $$m/Makefile; then \
+			echo "=== proto-check: $$m ==="; \
+			$(MAKE) -C $$m proto-check || exit 1; \
+		fi; \
+	done
 
 clean:
 	@for m in $(MODULES); do \
