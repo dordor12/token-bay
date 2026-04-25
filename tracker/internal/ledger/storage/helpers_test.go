@@ -55,6 +55,22 @@ func keyFor(label string) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return priv.Public().(ed25519.PublicKey), priv
 }
 
+// mustSign signs body with priv or fails the test.
+func mustSign(t *testing.T, priv ed25519.PrivateKey, body *tbproto.EntryBody) []byte {
+	t.Helper()
+	sig, err := signing.SignEntry(priv, body)
+	require.NoError(t, err)
+	return sig
+}
+
+// mustHash computes entry.Hash(body) or fails the test.
+func mustHash(t *testing.T, body *tbproto.EntryBody) [32]byte {
+	t.Helper()
+	h, err := entry.Hash(body)
+	require.NoError(t, err)
+	return h
+}
+
 // builtUsageInput constructs an AppendInput for a signed USAGE entry at
 // (seq, prevHash) with synthetic 1000-credit-cost balance updates for two
 // distinct identities. The orchestrator equivalents will live in
