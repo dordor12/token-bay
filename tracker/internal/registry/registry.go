@@ -2,6 +2,8 @@ package registry
 
 import (
 	"encoding/binary"
+	"net/netip"
+	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
 )
@@ -63,4 +65,23 @@ func (r *Registry) Get(id ids.IdentityID) (SeederRecord, bool) {
 // Deregister removes the seeder. No-op when no record exists.
 func (r *Registry) Deregister(id ids.IdentityID) {
 	r.shardFor(id).delete(id)
+}
+
+// Heartbeat sets LastHeartbeat to now. Returns ErrUnknownSeeder if the seeder
+// is not in the registry.
+func (r *Registry) Heartbeat(id ids.IdentityID, now time.Time) error {
+	return r.shardFor(id).update(id, func(rec *SeederRecord) error {
+		rec.LastHeartbeat = now
+		return nil
+	})
+}
+
+// UpdateExternalAddr sets the seeder's reflexive (STUN-observed) address.
+// Other NetCoords fields are preserved. Returns ErrUnknownSeeder if the
+// seeder is not in the registry.
+func (r *Registry) UpdateExternalAddr(id ids.IdentityID, addr netip.AddrPort) error {
+	return r.shardFor(id).update(id, func(rec *SeederRecord) error {
+		rec.NetCoords.ExternalAddr = addr
+		return nil
+	})
 }

@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,4 +141,64 @@ func TestRegistry_Get_ReturnedSliceMutationDoesNotAffectStore(t *testing.T) {
 	got2, _ := r.Get(id)
 	assert.Equal(t, "claude-opus-4-7", got2.Capabilities.Models[0],
 		"store must not be aliased through returned record's slice")
+}
+
+func TestRegistry_Heartbeat_BumpsLastHeartbeat(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x44}
+	t0 := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(30 * time.Second)
+	r.Register(SeederRecord{IdentityID: id, LastHeartbeat: t0})
+
+	require.NoError(t, r.Heartbeat(id, t1))
+
+	got, _ := r.Get(id)
+	assert.Equal(t, t1, got.LastHeartbeat)
+}
+
+func TestRegistry_Heartbeat_UnknownReturnsErr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	err = r.Heartbeat(ids.IdentityID{0xCC}, time.Now())
+	assert.ErrorIs(t, err, ErrUnknownSeeder)
+}
+
+func TestRegistry_UpdateExternalAddr_SetsAddr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x55}
+	r.Register(SeederRecord{IdentityID: id})
+
+	addr := netip.MustParseAddrPort("198.51.100.4:51820")
+	require.NoError(t, r.UpdateExternalAddr(id, addr))
+
+	got, _ := r.Get(id)
+	assert.Equal(t, addr, got.NetCoords.ExternalAddr)
+}
+
+func TestRegistry_UpdateExternalAddr_PreservesLocalCandidates(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x56}
+	local := []netip.AddrPort{netip.MustParseAddrPort("10.0.0.1:51820")}
+	r.Register(SeederRecord{
+		IdentityID: id,
+		NetCoords:  NetCoords{LocalCandidates: local},
+	})
+
+	require.NoError(t, r.UpdateExternalAddr(id, netip.MustParseAddrPort("203.0.113.9:443")))
+
+	got, _ := r.Get(id)
+	assert.Equal(t, local, got.NetCoords.LocalCandidates)
+}
+
+func TestRegistry_UpdateExternalAddr_UnknownReturnsErr(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	err = r.UpdateExternalAddr(ids.IdentityID{0xDD}, netip.MustParseAddrPort("1.1.1.1:80"))
+	assert.ErrorIs(t, err, ErrUnknownSeeder)
 }
