@@ -49,11 +49,9 @@ func (r *Registry) shardFor(id ids.IdentityID) *shard {
 }
 
 // Register inserts or replaces a SeederRecord. Caller is responsible for
-// providing the full record — including LastHeartbeat. Idempotent upsert
-// (no error on existing IdentityID).
-func (r *Registry) Register(rec SeederRecord) error {
+// providing the full record — including LastHeartbeat. Idempotent upsert.
+func (r *Registry) Register(rec SeederRecord) {
 	r.shardFor(rec.IdentityID).put(rec)
-	return nil
 }
 
 // Get returns a deep copy of the seeder's record. ok is false when no record

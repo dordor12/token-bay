@@ -73,7 +73,7 @@ func TestRegistry_RegisterThenGet(t *testing.T) {
 			Models: []string{"claude-opus-4-7"},
 		},
 	}
-	require.NoError(t, r.Register(rec))
+	r.Register(rec)
 
 	got, ok := r.Get(rec.IdentityID)
 	require.True(t, ok)
@@ -95,8 +95,8 @@ func TestRegistry_Register_Upserts(t *testing.T) {
 	require.NoError(t, err)
 
 	id := ids.IdentityID{0x11}
-	require.NoError(t, r.Register(SeederRecord{IdentityID: id, Load: 1}))
-	require.NoError(t, r.Register(SeederRecord{IdentityID: id, Load: 9}))
+	r.Register(SeederRecord{IdentityID: id, Load: 1})
+	r.Register(SeederRecord{IdentityID: id, Load: 9})
 
 	got, ok := r.Get(id)
 	require.True(t, ok)
@@ -108,7 +108,7 @@ func TestRegistry_Deregister_Removes(t *testing.T) {
 	require.NoError(t, err)
 
 	id := ids.IdentityID{0x22}
-	require.NoError(t, r.Register(SeederRecord{IdentityID: id}))
+	r.Register(SeederRecord{IdentityID: id})
 	r.Deregister(id)
 
 	_, ok := r.Get(id)
@@ -128,10 +128,10 @@ func TestRegistry_Get_ReturnedSliceMutationDoesNotAffectStore(t *testing.T) {
 	require.NoError(t, err)
 
 	id := ids.IdentityID{0x33}
-	require.NoError(t, r.Register(SeederRecord{
+	r.Register(SeederRecord{
 		IdentityID:   id,
 		Capabilities: Capabilities{Models: []string{"claude-opus-4-7"}},
-	}))
+	})
 
 	got, _ := r.Get(id)
 	got.Capabilities.Models[0] = "INJECTED"
