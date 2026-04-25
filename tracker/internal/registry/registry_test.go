@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"math"
 	"net/netip"
 	"testing"
 	"time"
@@ -265,4 +266,43 @@ func TestRegistry_Advertise_UnknownReturnsErr(t *testing.T) {
 	require.NoError(t, err)
 	err = r.Advertise(ids.IdentityID{0xEE}, Capabilities{}, true, 0.5)
 	assert.ErrorIs(t, err, ErrUnknownSeeder)
+}
+
+func TestRegistry_Advertise_RejectsNaNHeadroom(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x64}
+	r.Register(SeederRecord{IdentityID: id, HeadroomEstimate: 0.5})
+
+	err = r.Advertise(id, Capabilities{}, true, math.NaN())
+	assert.ErrorIs(t, err, ErrInvalidHeadroom)
+
+	got, _ := r.Get(id)
+	assert.Equal(t, 0.5, got.HeadroomEstimate, "NaN must be rejected and not mutate the store")
+}
+
+func TestRegistry_Advertise_DeepCopiesCapsSlices(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	id := ids.IdentityID{0x65}
+	r.Register(SeederRecord{IdentityID: id})
+
+	models := []string{"claude-opus-4-7"}
+	tiers := []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD}
+	attestation := []byte{0xDE, 0xAD}
+	require.NoError(t, r.Advertise(id, Capabilities{
+		Models:      models,
+		Tiers:       tiers,
+		Attestation: attestation,
+	}, true, 0.5))
+
+	// Mutate caller-side slices after the call; the store must be insulated.
+	models[0] = "MUTATED"
+	tiers[0] = proto.PrivacyTier_PRIVACY_TIER_TEE
+	attestation[0] = 0xFF
+
+	got, _ := r.Get(id)
+	assert.Equal(t, "claude-opus-4-7", got.Capabilities.Models[0])
+	assert.Equal(t, proto.PrivacyTier_PRIVACY_TIER_STANDARD, got.Capabilities.Tiers[0])
+	assert.Equal(t, byte(0xDE), got.Capabilities.Attestation[0])
 }

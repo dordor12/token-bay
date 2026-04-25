@@ -101,10 +101,18 @@ func (s *shard) sweepStale(staleBefore time.Time) int {
 // returned copies do not alias their backing arrays.
 func cloneRecord(r SeederRecord) SeederRecord {
 	out := r
-	out.Capabilities.Models = cloneStrings(r.Capabilities.Models)
-	out.Capabilities.Tiers = cloneTiers(r.Capabilities.Tiers)
-	out.Capabilities.Attestation = cloneBytes(r.Capabilities.Attestation)
+	out.Capabilities = cloneCapabilities(r.Capabilities)
 	out.NetCoords.LocalCandidates = cloneAddrPorts(r.NetCoords.LocalCandidates)
+	return out
+}
+
+// cloneCapabilities deep-copies the slice fields of a Capabilities so the
+// store and the caller do not share backing arrays.
+func cloneCapabilities(c Capabilities) Capabilities {
+	out := c
+	out.Models = cloneStrings(c.Models)
+	out.Tiers = cloneTiers(c.Tiers)
+	out.Attestation = cloneBytes(c.Attestation)
 	return out
 }
 
