@@ -2,22 +2,15 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 func TestApplyMigrations_CreatesV1Tables(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ledger.db")+"?_pragma=journal_mode(WAL)")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
+	db := openTempDB(t)
 	ctx := context.Background()
-	require.NoError(t, applyMigrations(ctx, db))
 
 	for _, name := range []string{"schema_version", "entries", "balances", "merkle_roots", "peer_root_archive"} {
 		var got string
@@ -33,12 +26,9 @@ func TestApplyMigrations_CreatesV1Tables(t *testing.T) {
 }
 
 func TestApplyMigrations_Idempotent(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ledger.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
+	db := openTempDB(t)
 	ctx := context.Background()
-	require.NoError(t, applyMigrations(ctx, db))
+
 	require.NoError(t, applyMigrations(ctx, db), "running twice must not error")
 
 	var n int
@@ -47,11 +37,7 @@ func TestApplyMigrations_Idempotent(t *testing.T) {
 }
 
 func TestApplyMigrations_CreatesIndexes(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ledger.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	require.NoError(t, applyMigrations(context.Background(), db))
+	db := openTempDB(t)
 
 	for _, name := range []string{"idx_entries_consumer", "idx_entries_seeder", "idx_entries_time"} {
 		var got string

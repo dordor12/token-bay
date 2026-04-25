@@ -13,8 +13,8 @@ import (
 // openTempDB returns a SQLite handle backed by a fresh tempdir-scoped file
 // with v1 migrations applied. Closes automatically via t.Cleanup.
 //
-// Used by tests in this package that need raw SQL access without the Store
-// wrapper. Higher-level tests use openTempStore (defined in this file).
+// Used by tests that need raw SQL access without the Store wrapper.
+// Higher-level tests use openTempStore.
 func openTempDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := "file:" + filepath.Join(t.TempDir(), "ledger.db") +
@@ -27,4 +27,15 @@ func openTempDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, applyMigrations(context.Background(), db))
 	return db
+}
+
+// openTempStore returns a fresh Store backed by a tempdir-scoped DB file.
+// Closes automatically via t.Cleanup.
+func openTempStore(t *testing.T) *Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	s, err := Open(context.Background(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
