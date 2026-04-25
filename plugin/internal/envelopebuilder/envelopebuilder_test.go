@@ -313,3 +313,58 @@ func TestBuild_ValidationFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrValidation), "expected ErrValidation, got: %v", err)
 }
+
+func TestBuild_DeterministicMarshal(t *testing.T) {
+	// Same inputs (same spec, same proof, same balance, same fixed Now,
+	// same zeroRand sequence, same fake-signer canned bytes) → byte-identical
+	// DeterministicMarshal of the body across two Build() calls.
+	signer := newFakeSigner()
+	b := newTestBuilder(signer)
+
+	a, err := b.Build(validSpec(), validProof(), validBalance())
+	require.NoError(t, err)
+	c, err := b.Build(validSpec(), validProof(), validBalance())
+	require.NoError(t, err)
+
+	first, err := proto.MarshalOptions{Deterministic: true}.Marshal(a.Body)
+	require.NoError(t, err)
+	second, err := proto.MarshalOptions{Deterministic: true}.Marshal(c.Body)
+	require.NoError(t, err)
+	assert.Equal(t, first, second,
+		"identical inputs must produce identical DeterministicMarshal output")
+}
+
+func TestBuild_Concurrent(t *testing.T) {
+	// 50 goroutines call Build() on the same Builder. The fake signer is
+	// concurrency-safe via its mu; Builder itself holds no mutable per-request
+	// state. -race must be clean.
+	signer := newFakeSigner()
+	b := newTestBuilder(signer)
+
+	const N = 50
+	var wg sync.WaitGroup
+	wg.Add(N)
+	results := make([]*tbproto.EnvelopeSigned, N)
+	errs := make([]error, N)
+
+	for i := range N {
+		go func(i int) {
+			defer wg.Done()
+			// Distinct BodyHash per goroutine — distinct envelopes.
+			spec := validSpec()
+			spec.BodyHash = bytesOfLen(32, byte(i+1))
+			env, err := b.Build(spec, validProof(), validBalance())
+			results[i] = env
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range N {
+		require.NoErrorf(t, errs[i], "goroutine %d errored", i)
+		require.NotNil(t, results[i])
+		assert.Equal(t, byte(i+1), results[i].Body.BodyHash[0],
+			"goroutine %d produced an envelope with the wrong BodyHash", i)
+	}
+	assert.Equal(t, N, signer.callCount(), "Signer.Sign called once per goroutine")
+}
