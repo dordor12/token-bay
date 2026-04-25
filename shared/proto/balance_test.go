@@ -36,6 +36,7 @@ func TestSignedBalanceSnapshot_RoundTrip(t *testing.T) {
 
 // Test helpers — generate fixed-pattern byte slices for fixture data.
 // Used by balance_test.go and (later) envelope_test.go in the same package.
+func make16(b byte) []byte { return bytesN(b, 16) }
 func make32(b byte) []byte { return bytesN(b, 32) }
 func make64(b byte) []byte { return bytesN(b, 64) }
 func bytesN(b byte, n int) []byte {

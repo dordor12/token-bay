@@ -59,3 +59,125 @@ func ValidateEnvelopeBody(b *EnvelopeBody) error {
 	}
 	return nil
 }
+
+// entryHashLen is the required length for prev_hash and ref.
+const entryHashLen = 32
+
+// entryRequestIDLen is the required length for request_id (UUID-shaped).
+const entryRequestIDLen = 16
+
+// entryModelMaxLen mirrors ledger spec §3.1 model: string(32).
+const entryModelMaxLen = 32
+
+// entryFlagsMask covers all defined flag bits. Bit 0 = consumer_sig_missing.
+// Reject any body with unknown bits set so v2 flags don't silently appear
+// as garbage to a v1 verifier.
+const entryFlagsMask = uint32(0x1)
+
+// ValidateEntryBody enforces v1 wire-format invariants on an EntryBody.
+// Tracker callers run pre-sign and post-parse before trusting any field.
+// Does NOT verify signatures — see entry.VerifyAll on the tracker side.
+func ValidateEntryBody(b *EntryBody) error {
+	if b == nil {
+		return errors.New("proto: nil EntryBody")
+	}
+	if len(b.PrevHash) != entryHashLen {
+		return fmt.Errorf("proto: prev_hash length %d, want %d", len(b.PrevHash), entryHashLen)
+	}
+	if len(b.Ref) != entryHashLen {
+		return fmt.Errorf("proto: ref length %d, want %d", len(b.Ref), entryHashLen)
+	}
+	if b.Flags & ^entryFlagsMask != 0 {
+		return fmt.Errorf("proto: flags = %#x, unknown bits set", b.Flags)
+	}
+	switch b.Kind {
+	case EntryKind_ENTRY_KIND_USAGE:
+		if len(b.ConsumerId) != entryHashLen {
+			return fmt.Errorf("proto: usage consumer_id length %d, want %d", len(b.ConsumerId), entryHashLen)
+		}
+		if len(b.SeederId) != entryHashLen {
+			return fmt.Errorf("proto: usage seeder_id length %d, want %d", len(b.SeederId), entryHashLen)
+		}
+		if b.Model == "" {
+			return errors.New("proto: usage entry has empty model")
+		}
+		if len(b.Model) > entryModelMaxLen {
+			return fmt.Errorf("proto: model length %d exceeds %d", len(b.Model), entryModelMaxLen)
+		}
+		if len(b.RequestId) != entryRequestIDLen {
+			return fmt.Errorf("proto: usage request_id length %d, want %d", len(b.RequestId), entryRequestIDLen)
+		}
+	case EntryKind_ENTRY_KIND_TRANSFER_OUT:
+		if len(b.ConsumerId) != entryHashLen {
+			return fmt.Errorf("proto: transfer_out consumer_id length %d, want %d", len(b.ConsumerId), entryHashLen)
+		}
+		if len(b.SeederId) != entryHashLen || !allZero(b.SeederId) {
+			return errors.New("proto: transfer_out seeder_id must be 32 zero bytes")
+		}
+		if b.Model != "" {
+			return errors.New("proto: transfer_out model must be empty")
+		}
+		if len(b.RequestId) != entryRequestIDLen || !allZero(b.RequestId) {
+			return errors.New("proto: transfer_out request_id must be 16 zero bytes")
+		}
+		if b.InputTokens != 0 || b.OutputTokens != 0 {
+			return errors.New("proto: transfer_out tokens must be zero")
+		}
+		if b.Flags != 0 {
+			return fmt.Errorf("proto: transfer_out flags must be 0, got %#x", b.Flags)
+		}
+	case EntryKind_ENTRY_KIND_TRANSFER_IN:
+		if len(b.ConsumerId) != entryHashLen || !allZero(b.ConsumerId) {
+			return errors.New("proto: transfer_in consumer_id must be 32 zero bytes")
+		}
+		if len(b.SeederId) != entryHashLen || !allZero(b.SeederId) {
+			return errors.New("proto: transfer_in seeder_id must be 32 zero bytes")
+		}
+		if b.Model != "" {
+			return errors.New("proto: transfer_in model must be empty")
+		}
+		if len(b.RequestId) != entryRequestIDLen || !allZero(b.RequestId) {
+			return errors.New("proto: transfer_in request_id must be 16 zero bytes")
+		}
+		if b.InputTokens != 0 || b.OutputTokens != 0 {
+			return errors.New("proto: transfer_in tokens must be zero")
+		}
+		if b.Flags != 0 {
+			return fmt.Errorf("proto: transfer_in flags must be 0, got %#x", b.Flags)
+		}
+	case EntryKind_ENTRY_KIND_STARTER_GRANT:
+		if len(b.ConsumerId) != entryHashLen {
+			return fmt.Errorf("proto: starter_grant consumer_id length %d, want %d", len(b.ConsumerId), entryHashLen)
+		}
+		if len(b.SeederId) != entryHashLen || !allZero(b.SeederId) {
+			return errors.New("proto: starter_grant seeder_id must be 32 zero bytes")
+		}
+		if b.Model != "" {
+			return errors.New("proto: starter_grant model must be empty")
+		}
+		if len(b.RequestId) != entryRequestIDLen || !allZero(b.RequestId) {
+			return errors.New("proto: starter_grant request_id must be 16 zero bytes")
+		}
+		if !allZero(b.Ref) {
+			return errors.New("proto: starter_grant ref must be 32 zero bytes")
+		}
+		if b.InputTokens != 0 || b.OutputTokens != 0 {
+			return errors.New("proto: starter_grant tokens must be zero")
+		}
+		if b.Flags != 0 {
+			return fmt.Errorf("proto: starter_grant flags must be 0, got %#x", b.Flags)
+		}
+	default:
+		return fmt.Errorf("proto: kind = %v, must be USAGE, TRANSFER_OUT, TRANSFER_IN, or STARTER_GRANT", b.Kind)
+	}
+	return nil
+}
+
+func allZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
+}
