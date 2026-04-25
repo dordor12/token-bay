@@ -235,7 +235,7 @@ func TestAppendUsage_ConsumerSigMissingFlag(t *testing.T) {
 		Model: "claude-sonnet-4-6", CostCredits: 1000,
 		Timestamp: 1714000000, RequestID: bytes.Repeat([]byte{0x33}, 16),
 		ConsumerSigMissing: true,
-		SeederSig: seederSig, SeederPub: sPub,
+		SeederSig:          seederSig, SeederPub: sPub,
 	}
 	e, err := l.AppendUsage(ctx, rec)
 	require.NoError(t, err)

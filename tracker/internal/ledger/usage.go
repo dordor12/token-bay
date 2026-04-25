@@ -56,6 +56,11 @@ func (l *Ledger) AppendUsage(ctx context.Context, r UsageRecord) (*tbproto.Entry
 		}
 	}
 
+	cost, err := signedAmount(r.CostCredits)
+	if err != nil {
+		return nil, err
+	}
+
 	body, err := entry.BuildUsageEntry(entry.UsageInput{
 		PrevHash:           r.PrevHash,
 		Seq:                r.Seq,
@@ -78,8 +83,8 @@ func (l *Ledger) AppendUsage(ctx context.Context, r UsageRecord) (*tbproto.Entry
 		seederSig: r.SeederSig,
 		seederPub: r.SeederPub,
 		deltas: []balanceDelta{
-			{identityID: r.ConsumerID, delta: -int64(r.CostCredits)},
-			{identityID: r.SeederID, delta: int64(r.CostCredits)},
+			{identityID: r.ConsumerID, delta: -cost},
+			{identityID: r.SeederID, delta: cost},
 		},
 	}
 	if !r.ConsumerSigMissing {

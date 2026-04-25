@@ -37,6 +37,10 @@ func (l *Ledger) AppendTransferOut(ctx context.Context, r TransferOutRecord) (*t
 	if r.Amount == 0 {
 		return nil, errors.New("ledger: transfer_out amount must be > 0")
 	}
+	delta, err := signedAmount(r.Amount)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := entry.BuildTransferOutEntry(entry.TransferOutInput{
 		PrevHash:    r.PrevHash,
@@ -54,6 +58,6 @@ func (l *Ledger) AppendTransferOut(ctx context.Context, r TransferOutRecord) (*t
 		body:        body,
 		consumerSig: r.ConsumerSig,
 		consumerPub: r.ConsumerPub,
-		deltas:      []balanceDelta{{identityID: r.ConsumerID, delta: -int64(r.Amount)}},
+		deltas:      []balanceDelta{{identityID: r.ConsumerID, delta: -delta}},
 	})
 }

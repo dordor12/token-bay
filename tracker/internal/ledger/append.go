@@ -84,7 +84,7 @@ func (l *Ledger) appendEntryWithBuilder(
 		nextSeq = 1
 	}
 
-	in, err := build(prev, nextSeq, uint64(l.nowFn().Unix()))
+	in, err := build(prev, nextSeq, unixSecondsU(l.nowFn()))
 	if err != nil {
 		return nil, err
 	}

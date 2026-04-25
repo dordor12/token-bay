@@ -34,7 +34,7 @@ func (l *Ledger) SignedBalance(ctx context.Context, identityID []byte) (*tbproto
 		tipHash = make([]byte, 32)
 	}
 
-	issued := uint64(l.nowFn().Unix())
+	issued := unixSecondsU(l.nowFn())
 	body := &tbproto.BalanceSnapshotBody{
 		IdentityId:   identityID,
 		Credits:      snap.Balance.Credits, // 0 if !BalanceFound

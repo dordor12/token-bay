@@ -22,6 +22,10 @@ func (l *Ledger) IssueStarterGrant(ctx context.Context, identityID []byte, amoun
 	if len(identityID) != 32 {
 		return nil, fmt.Errorf("ledger: identity_id length %d, want 32", len(identityID))
 	}
+	delta, err := signedAmount(amount)
+	if err != nil {
+		return nil, err
+	}
 
 	return l.appendEntryWithBuilder(ctx, func(prev []byte, seq, now uint64) (appendInput, error) {
 		body, err := entry.BuildStarterGrantEntry(entry.StarterGrantInput{
@@ -36,7 +40,7 @@ func (l *Ledger) IssueStarterGrant(ctx context.Context, identityID []byte, amoun
 		}
 		return appendInput{
 			body:   body,
-			deltas: []balanceDelta{{identityID: identityID, delta: int64(amount)}},
+			deltas: []balanceDelta{{identityID: identityID, delta: delta}},
 		}, nil
 	})
 }
