@@ -4,7 +4,9 @@
 PROTO_FILES := exhaustionproof/proof.proto proto/balance.proto proto/envelope.proto
 
 test:
-	go test -race -coverprofile=coverage.out ./...
+	go test -race -coverprofile=coverage.out.raw ./...
+	@grep -v '\.pb\.go:' coverage.out.raw > coverage.out
+	@rm -f coverage.out.raw
 
 lint:
 	golangci-lint run ./...
@@ -15,7 +17,7 @@ build:
 	@echo "shared is a library; nothing to build"
 
 clean:
-	rm -f coverage.out
+	rm -f coverage.out coverage.out.raw
 
 # Regenerate .pb.go files from .proto schemas. Requires protoc + protoc-gen-go on PATH.
 proto-gen:

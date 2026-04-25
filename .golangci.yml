@@ -25,6 +25,14 @@ linters-settings:
       - G104  # errcheck covers this
 
 issues:
+  # Generated protobuf code is exercised end-to-end by round-trip tests
+  # in shared/proto and shared/exhaustionproof; lint findings on it would
+  # only flag protoc-gen-go output, never our code. Excluding it also
+  # removes the inflated .pb.go denominator from the coverage rollup
+  # (the wire-format-v1 spec §7.3 ≥90% target is meant for hand-written
+  # code, not generated boilerplate).
+  exclude-files:
+    - '.*\.pb\.go$'
   exclude-rules:
     - path: _test\.go
       linters:
