@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 )
 
@@ -54,4 +56,9 @@ func labeledKeypair(label string) (ed25519.PublicKey, ed25519.PrivateKey) {
 // entries and snapshots are reproducible.
 func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
+}
+
+// mustEntryHash returns entry.Hash(body) as a slice or fails the test.
+func mustEntryHash(body *tbproto.EntryBody) ([32]byte, error) {
+	return entry.Hash(body)
 }

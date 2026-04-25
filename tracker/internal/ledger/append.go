@@ -50,7 +50,26 @@ type balanceDelta struct {
 // Returning the lock and asking the caller to retry is correct because
 // counterparty sigs (consumer/seeder) are over the body bytes which include
 // PrevHash + Seq; a fresh tip means fresh sigs are required.
+//
+// For tracker-only-signed kinds (STARTER_GRANT) where rebuilding is cheap
+// and there are no counterparty sigs to invalidate, callers should use
+// appendEntryWithBuilder instead — it constructs the body inside the lock
+// and avoids the stale-tip dance entirely.
 func (l *Ledger) appendEntry(ctx context.Context, in appendInput) (*tbproto.Entry, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.appendLocked(ctx, in, true /*verifyPreFilled*/)
+}
+
+// appendEntryWithBuilder reads the current tip inside the lock, calls
+// build(prev, seq) to construct the body + balance deltas, and appends.
+// Used by tracker-only-signed kinds where the body has no external sigs
+// over (prev, seq). Eliminates ErrStaleTip — a winning goroutine always
+// gets the freshest tip.
+func (l *Ledger) appendEntryWithBuilder(
+	ctx context.Context,
+	build func(prev []byte, seq uint64, now uint64) (appendInput, error),
+) (*tbproto.Entry, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -58,19 +77,43 @@ func (l *Ledger) appendEntry(ctx context.Context, in appendInput) (*tbproto.Entr
 	if err != nil {
 		return nil, fmt.Errorf("ledger: read tip: %w", err)
 	}
-
-	expectedPrev := tipHash
-	expectedSeq := tipSeq + 1
+	prev := tipHash
+	nextSeq := tipSeq + 1
 	if !hasTip {
-		expectedPrev = make([]byte, 32)
-		expectedSeq = 1
+		prev = make([]byte, 32)
+		nextSeq = 1
 	}
 
+	in, err := build(prev, nextSeq, uint64(l.nowFn().Unix()))
+	if err != nil {
+		return nil, err
+	}
+	return l.appendLocked(ctx, in, false /*verifyPreFilled*/)
+}
+
+// appendLocked is the lock-already-held core. verifyPreFilled selects
+// between "caller pre-filled body.PrevHash+Seq, mismatch is ErrStaleTip"
+// and "we just filled them inside the lock, mismatch is a programmer
+// error".
+func (l *Ledger) appendLocked(ctx context.Context, in appendInput, verifyPreFilled bool) (*tbproto.Entry, error) {
 	if in.body == nil {
 		return nil, errors.New("ledger: appendEntry requires non-nil body")
 	}
-	if !bytes.Equal(in.body.PrevHash, expectedPrev) || in.body.Seq != expectedSeq {
-		return nil, ErrStaleTip
+
+	if verifyPreFilled {
+		tipSeq, tipHash, hasTip, err := l.store.Tip(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: read tip: %w", err)
+		}
+		expectedPrev := tipHash
+		expectedSeq := tipSeq + 1
+		if !hasTip {
+			expectedPrev = make([]byte, 32)
+			expectedSeq = 1
+		}
+		if !bytes.Equal(in.body.PrevHash, expectedPrev) || in.body.Seq != expectedSeq {
+			return nil, ErrStaleTip
+		}
 	}
 
 	if err := tbproto.ValidateEntryBody(in.body); err != nil {
