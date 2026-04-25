@@ -1,0 +1,15 @@
+data_dir: /tmp
+server:
+  listen_addr: "0.0.0.0:7777"
+  identity_key_path: /etc/token-bay/identity.key
+  tls_cert_path: /etc/token-bay/cert.pem
+  tls_key_path: /etc/token-bay/cert.key
+ledger:
+  storage_path: /tmp/ledger.sqlite
+admission:
+  score_weights:
+    settlement_reliability: 0.30
+    inverse_dispute_rate: 0.10
+    tenure: 0.20
+    net_credit_flow: 0.30
+    balance_cushion: 0.20

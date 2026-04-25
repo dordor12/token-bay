@@ -1,0 +1,11 @@
+data_dir: /var/lib/token-bay
+server:
+  listen_addr: "0.0.0.0:7777"
+  identity_key_path: /etc/token-bay/identity.key
+  tls_cert_path: /etc/token-bay/cert.pem
+  tls_key_path: /etc/token-bay/cert.key
+ledger:
+  storage_path: /var/lib/token-bay/ledger.sqlite
+broker:
+  score_weight:           # typo — should be score_weights
+    reputation: 0.4

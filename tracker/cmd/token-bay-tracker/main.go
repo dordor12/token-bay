@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -19,6 +20,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Token-Bay regional tracker server",
 	}
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newConfigCmd())
 	return root
 }
 
@@ -33,7 +35,10 @@ func newVersionCmd() *cobra.Command {
 }
 
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	root := newRootCmd()
+	ctx := withExitFunc(context.Background(), os.Exit)
+	root.SetContext(ctx)
+	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

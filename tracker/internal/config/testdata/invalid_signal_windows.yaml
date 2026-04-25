@@ -1,0 +1,13 @@
+data_dir: /tmp
+server:
+  listen_addr: "0.0.0.0:7777"
+  identity_key_path: /etc/token-bay/identity.key
+  tls_cert_path: /etc/token-bay/cert.pem
+  tls_key_path: /etc/token-bay/cert.key
+ledger:
+  storage_path: /tmp/ledger.sqlite
+reputation:
+  signal_windows:
+    short_s: 1000000
+    medium_s: 86400
+    long_s: 604800
