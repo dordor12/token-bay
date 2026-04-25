@@ -61,3 +61,82 @@ func TestRegistry_ShardFor_DistributesAcrossShards(t *testing.T) {
 func TestDefaultShardCount_IsPositive(t *testing.T) {
 	assert.Greater(t, DefaultShardCount, 0)
 }
+
+func TestRegistry_RegisterThenGet(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	rec := SeederRecord{
+		IdentityID: ids.IdentityID{0x42},
+		Available:  true,
+		Capabilities: Capabilities{
+			Models: []string{"claude-opus-4-7"},
+		},
+	}
+	require.NoError(t, r.Register(rec))
+
+	got, ok := r.Get(rec.IdentityID)
+	require.True(t, ok)
+	assert.Equal(t, rec.IdentityID, got.IdentityID)
+	assert.True(t, got.Available)
+	assert.Equal(t, []string{"claude-opus-4-7"}, got.Capabilities.Models)
+}
+
+func TestRegistry_Get_Missing(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	_, ok := r.Get(ids.IdentityID{0xFF})
+	assert.False(t, ok)
+}
+
+func TestRegistry_Register_Upserts(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x11}
+	require.NoError(t, r.Register(SeederRecord{IdentityID: id, Load: 1}))
+	require.NoError(t, r.Register(SeederRecord{IdentityID: id, Load: 9}))
+
+	got, ok := r.Get(id)
+	require.True(t, ok)
+	assert.Equal(t, 9, got.Load, "second Register call should overwrite first")
+}
+
+func TestRegistry_Deregister_Removes(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x22}
+	require.NoError(t, r.Register(SeederRecord{IdentityID: id}))
+	r.Deregister(id)
+
+	_, ok := r.Get(id)
+	assert.False(t, ok)
+}
+
+func TestRegistry_Deregister_MissingIsNoOp(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+	assert.NotPanics(t, func() {
+		r.Deregister(ids.IdentityID{0x99})
+	})
+}
+
+func TestRegistry_Get_ReturnedSliceMutationDoesNotAffectStore(t *testing.T) {
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	id := ids.IdentityID{0x33}
+	require.NoError(t, r.Register(SeederRecord{
+		IdentityID:   id,
+		Capabilities: Capabilities{Models: []string{"claude-opus-4-7"}},
+	}))
+
+	got, _ := r.Get(id)
+	got.Capabilities.Models[0] = "INJECTED"
+
+	got2, _ := r.Get(id)
+	assert.Equal(t, "claude-opus-4-7", got2.Capabilities.Models[0],
+		"store must not be aliased through returned record's slice")
+}

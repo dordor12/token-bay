@@ -47,3 +47,22 @@ func (r *Registry) shardIndex(id ids.IdentityID) int {
 func (r *Registry) shardFor(id ids.IdentityID) *shard {
 	return r.shards[r.shardIndex(id)]
 }
+
+// Register inserts or replaces a SeederRecord. Caller is responsible for
+// providing the full record — including LastHeartbeat. Idempotent upsert
+// (no error on existing IdentityID).
+func (r *Registry) Register(rec SeederRecord) error {
+	r.shardFor(rec.IdentityID).put(rec)
+	return nil
+}
+
+// Get returns a deep copy of the seeder's record. ok is false when no record
+// exists for id.
+func (r *Registry) Get(id ids.IdentityID) (SeederRecord, bool) {
+	return r.shardFor(id).get(id)
+}
+
+// Deregister removes the seeder. No-op when no record exists.
+func (r *Registry) Deregister(id ids.IdentityID) {
+	r.shardFor(id).delete(id)
+}
