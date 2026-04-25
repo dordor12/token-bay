@@ -3,6 +3,7 @@ package registry
 import (
 	"math"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -719,4 +720,77 @@ func TestRegistry_Sweep_FreshRecordSurvives(t *testing.T) {
 
 	_, ok := r.Get(ids.IdentityID{0x01})
 	assert.True(t, ok)
+}
+
+func TestRegistry_ConcurrentMixedOps_NoRaces(t *testing.T) {
+	const (
+		numIdentities = 64
+		numWorkers    = 16
+		opsPerWorker  = 200
+	)
+
+	r, err := New(DefaultShardCount)
+	require.NoError(t, err)
+
+	// Pre-seed every identity so update operations have something to find.
+	now := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < numIdentities; i++ {
+		var id ids.IdentityID
+		id[0] = byte(i)
+		r.Register(SeederRecord{
+			IdentityID:    id,
+			Available:     true,
+			LastHeartbeat: now,
+			Capabilities: Capabilities{
+				Models: []string{"claude-opus-4-7"},
+				Tiers:  []proto.PrivacyTier{proto.PrivacyTier_PRIVACY_TIER_STANDARD},
+			},
+			HeadroomEstimate: 0.5,
+		})
+	}
+
+	pickID := func(seed int) ids.IdentityID {
+		var id ids.IdentityID
+		id[0] = byte(seed % numIdentities)
+		return id
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+	for w := 0; w < numWorkers; w++ {
+		go func(workerID int) {
+			defer wg.Done()
+			for op := 0; op < opsPerWorker; op++ {
+				id := pickID(workerID*1000 + op)
+				switch (workerID + op) % 8 {
+				case 0:
+					_, _ = r.Get(id)
+				case 1:
+					_ = r.Heartbeat(id, now.Add(time.Duration(op)*time.Second))
+				case 2:
+					_ = r.UpdateExternalAddr(id, netip.MustParseAddrPort("203.0.113.1:443"))
+				case 3:
+					_ = r.UpdateReputation(id, 0.7)
+				case 4:
+					_, _ = r.IncLoad(id)
+				case 5:
+					_, _ = r.DecLoad(id) // may underflow; allowed
+				case 6:
+					_ = r.Match(Filter{
+						RequireAvailable: true,
+						Model:            "claude-opus-4-7",
+						Tier:             proto.PrivacyTier_PRIVACY_TIER_STANDARD,
+						MinHeadroom:      0.0,
+						MaxLoad:          100,
+					})
+				case 7:
+					_ = r.Snapshot()
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	// Sanity: registry still functional after the storm.
+	assert.NotEmpty(t, r.Snapshot())
 }
