@@ -142,3 +142,34 @@ func TestLoad_UnknownFieldYAMLReturnsParseError(t *testing.T) {
 	require.True(t, errors.As(err, &pe))
 	assert.Equal(t, "testdata/unknown_field.yaml", pe.Path)
 }
+
+func TestLoad_InvalidFixtures_SurfaceExpectedFieldErrors(t *testing.T) {
+	cases := []struct {
+		fixture string
+		field   string
+	}{
+		{"testdata/invalid_log_level.yaml", "log_level"},
+		{"testdata/invalid_listener_collision.yaml", "admin.listen_addr"},
+		{"testdata/invalid_signal_windows.yaml", "reputation.signal_windows"},
+		{"testdata/invalid_score_weights_sum.yaml", "admission.score_weights"},
+		{"testdata/invalid_pressure_inversion.yaml", "admission.pressure_admit_threshold"},
+		{"testdata/invalid_attestation_ttl.yaml", "admission.attestation_max_ttl_seconds"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			c, err := Load(tc.fixture)
+
+			require.Error(t, err)
+			assert.Nil(t, c)
+			var ve *ValidationError
+			require.True(t, errors.As(err, &ve), "got %T: %v", err, err)
+			matched := false
+			for _, fe := range ve.Errors {
+				if fe.Field == tc.field {
+					matched = true
+				}
+			}
+			assert.Truef(t, matched, "expected %s in errors %v", tc.field, ve.Errors)
+		})
+	}
+}

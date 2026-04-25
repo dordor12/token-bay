@@ -1,0 +1,9 @@
+data_dir: /tmp
+log_level: chatty
+server:
+  listen_addr: "0.0.0.0:7777"
+  identity_key_path: /etc/token-bay/identity.key
+  tls_cert_path: /etc/token-bay/cert.pem
+  tls_key_path: /etc/token-bay/cert.key
+ledger:
+  storage_path: /tmp/ledger.sqlite
