@@ -1,6 +1,11 @@
 package proto
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,4 +89,46 @@ func TestEnvelopeSigned_RoundTrip(t *testing.T) {
 
 	assert.Equal(t, first, second)
 	require.True(t, proto.Equal(signed, &parsed), "unmarshal must reproduce original exactly")
+}
+
+const goldenPath = "testdata/envelope_signed.golden.hex"
+
+// goldenKeypair returns the deterministic Ed25519 keypair used to produce
+// the golden fixture. Same seed as shared/signing tests so signatures
+// reproduce across packages.
+func goldenKeypair() (ed25519.PublicKey, ed25519.PrivateKey) {
+	seed := []byte("token-bay-fixture-seed-v1-000000") // 32 bytes
+	priv := ed25519.NewKeyFromSeed(seed)
+	return priv.Public().(ed25519.PublicKey), priv
+}
+
+func TestEnvelopeSigned_GoldenBytes(t *testing.T) {
+	body := fixtureEnvelopeBody()
+
+	bodyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(body)
+	require.NoError(t, err)
+
+	_, priv := goldenKeypair()
+	sig := ed25519.Sign(priv, bodyBytes)
+
+	signed := &EnvelopeSigned{Body: body, ConsumerSig: sig}
+	wireBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+	require.NoError(t, err)
+
+	gotHex := hex.EncodeToString(wireBytes)
+
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(goldenPath), 0o755))
+		require.NoError(t, os.WriteFile(goldenPath, []byte(gotHex+"\n"), 0o644))
+		t.Logf("golden updated at %s", goldenPath)
+		return
+	}
+
+	wantBytes, err := os.ReadFile(goldenPath)
+	require.NoError(t, err, "missing golden file — run: UPDATE_GOLDEN=1 go test ./proto/... -run TestEnvelopeSigned_GoldenBytes")
+	wantHex := strings.TrimSpace(string(wantBytes))
+
+	assert.Equal(t, wantHex, gotHex,
+		"EnvelopeSigned wire bytes differ from golden. If schema/lib intentionally changed, "+
+			"regenerate via UPDATE_GOLDEN=1 and review the diff manually.")
 }
