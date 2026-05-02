@@ -43,6 +43,30 @@ TDD is the discipline across the entire repo — failing test first, green, refa
 
 Commits should be small and should not cross component boundaries unless necessary. A change to `shared/` that requires updates in `plugin/` and `tracker/` is the legitimate exception and goes in a single cross-cutting commit.
 
+## Submitting a PR
+
+Open a PR only after **all session tasks are finished** and **`make check` is green locally** (`make test` + `make lint`). Then use the `gh` CLI:
+
+1. Confirm local state is clean and the branch is pushed:
+   ```
+   git status
+   git push -u origin HEAD
+   ```
+2. Create the PR against `main` with `gh`:
+   ```
+   gh pr create --base main --fill
+   ```
+   Use `--title` / `--body` (HEREDOC) when the auto-filled message isn't sufficient. Keep titles under ~70 chars; put detail in the body.
+3. Watch CI until it finishes:
+   ```
+   gh pr checks --watch
+   ```
+4. **Merge only when CI is green.** Confirm via `gh pr checks` (all checks `pass`) before merging:
+   ```
+   gh pr merge --squash --delete-branch
+   ```
+   Never merge with failing or pending checks, and never bypass branch protections (`--admin`, `--no-verify`) without explicit user approval.
+
 ## Where to ask questions
 
 Open a GitHub issue. Architecture discussion on the issue; the spec is the source of truth. If the spec is wrong or ambiguous, fix it in a PR alongside any code change.
