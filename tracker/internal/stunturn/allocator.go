@@ -65,8 +65,8 @@ type Session struct {
 type Allocator struct {
 	cfg AllocatorConfig
 
-	mu      sync.Mutex //nolint:unused // used by Allocate/Release/ResolveAndCharge/Sweep in later tasks
-	nextID  uint64     //nolint:unused // incremented by Allocate in later tasks
+	mu      sync.Mutex
+	nextID  uint64
 	byToken map[Token]*sessionEntry
 	bySID   map[uint64]*sessionEntry
 	byReq   map[[16]byte]*sessionEntry
@@ -76,7 +76,7 @@ type Allocator struct {
 // sessionEntry is the internal heap record. The same pointer is shared
 // across byToken / bySID / byReq.
 type sessionEntry struct {
-	session Session //nolint:unused // read by Resolve/ResolveAndCharge in later tasks
+	session Session
 }
 
 // tokenBucket models per-seeder kbps rate limiting. capacityBytes is one
@@ -87,6 +87,75 @@ type tokenBucket struct {
 	refillPerSec  float64   //nolint:unused // used by refill logic in later tasks
 	available     float64   //nolint:unused // debited by Charge in later tasks
 	lastRefill    time.Time //nolint:unused // updated by refill logic in later tasks
+}
+
+// Allocate creates a new TURN session for the given consumer, seeder,
+// and requestID. Returns ErrDuplicateRequest if a live session already
+// exists for requestID; ErrRandFailed if the injected Rand fails.
+//
+// The returned Session is a value copy; mutating it does not affect
+// allocator state.
+func (a *Allocator) Allocate(consumer, seeder ids.IdentityID, requestID [16]byte, now time.Time) (Session, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if _, dup := a.byReq[requestID]; dup {
+		return Session{}, ErrDuplicateRequest
+	}
+	var tokBuf [16]byte
+	if _, err := io.ReadFull(a.cfg.Rand, tokBuf[:]); err != nil {
+		return Session{}, fmt.Errorf("%w: %v", ErrRandFailed, err)
+	}
+	tok := Token(tokBuf)
+	if _, collide := a.byToken[tok]; collide {
+		// 2^-128 with crypto/rand; treat as a hard error rather than
+		// retry-loop. Tests inject deterministic streams, so a real
+		// collision would be a test bug we want to surface.
+		return Session{}, fmt.Errorf("%w: token collision", ErrRandFailed)
+	}
+
+	a.nextID++
+	entry := &sessionEntry{session: Session{
+		Token:       tok,
+		SessionID:   a.nextID,
+		ConsumerID:  consumer,
+		SeederID:    seeder,
+		RequestID:   requestID,
+		AllocatedAt: now,
+		LastActive:  now,
+	}}
+	a.byToken[tok] = entry
+	a.bySID[entry.session.SessionID] = entry
+	a.byReq[requestID] = entry
+	a.ensureBucket(seeder, now)
+	return entry.session, nil
+}
+
+// ensureBucket initializes the per-seeder token bucket if absent.
+// Must be called with a.mu held.
+func (a *Allocator) ensureBucket(seederID ids.IdentityID, now time.Time) *tokenBucket {
+	if b, ok := a.buckets[seederID]; ok {
+		return b
+	}
+	cap := float64(a.cfg.MaxKbpsPerSeeder) * 1024.0 / 8.0
+	b := &tokenBucket{
+		capacityBytes: cap,
+		refillPerSec:  cap, // 1s of burst, refilled at the cap rate
+		available:     cap, // start full
+		lastRefill:    now,
+	}
+	a.buckets[seederID] = b
+	return b
+}
+
+// deleteIndexes removes entry from byToken / bySID / byReq. The
+// caller must hold a.mu. Buckets are not touched.
+//
+//nolint:unused // used by Release/Sweep in later tasks
+func (a *Allocator) deleteIndexes(entry *sessionEntry) {
+	delete(a.byToken, entry.session.Token)
+	delete(a.bySID, entry.session.SessionID)
+	delete(a.byReq, entry.session.RequestID)
 }
 
 // NewAllocator validates cfg and returns an empty Allocator.
