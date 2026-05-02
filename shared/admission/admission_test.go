@@ -1,6 +1,11 @@
 package admission
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -131,4 +136,55 @@ func TestTickSource_AllValuesRoundTrip(t *testing.T) {
 			assert.Equal(t, src, parsed.Source)
 		})
 	}
+}
+
+const admissionGoldenPath = "testdata/credit_attestation.golden.hex"
+
+// fixtureKeypair derives a deterministic Ed25519 keypair from a fixed seed.
+// Used by the golden fixture so signatures are reproducible. Mirrors the
+// helper of the same name in shared/signing/proto_test.go.
+func fixtureKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	seed := []byte("token-bay-fixture-seed-v1-000000") // 32 bytes
+	if len(seed) != ed25519.SeedSize {
+		t.Fatalf("fixture seed must be %d bytes, got %d", ed25519.SeedSize, len(seed))
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	return priv.Public().(ed25519.PublicKey), priv
+}
+
+// TestSignedCreditAttestation_GoldenBytes pins the v1 wire bytes for a
+// fully-signed attestation. Regenerate with UPDATE_GOLDEN=1 and review the
+// diff manually.
+func TestSignedCreditAttestation_GoldenBytes(t *testing.T) {
+	body := fixtureCreditAttestationBody()
+
+	bodyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(body)
+	require.NoError(t, err)
+
+	_, priv := fixtureKeypair(t)
+
+	signed := &SignedCreditAttestation{
+		Body:       body,
+		TrackerSig: ed25519.Sign(priv, bodyBytes),
+	}
+	wireBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+	require.NoError(t, err)
+
+	gotHex := hex.EncodeToString(wireBytes)
+
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(admissionGoldenPath), 0o755))
+		require.NoError(t, os.WriteFile(admissionGoldenPath, []byte(gotHex+"\n"), 0o644))
+		t.Logf("golden updated at %s", admissionGoldenPath)
+		return
+	}
+
+	wantBytes, err := os.ReadFile(admissionGoldenPath)
+	require.NoError(t, err, "missing golden file — run: UPDATE_GOLDEN=1 go test ./admission/... -run TestSignedCreditAttestation_GoldenBytes")
+	wantHex := strings.TrimSpace(string(wantBytes))
+
+	assert.Equal(t, wantHex, gotHex,
+		"SignedCreditAttestation wire bytes differ from golden. If schema/lib intentionally changed, "+
+			"regenerate via UPDATE_GOLDEN=1 and review the diff manually.")
 }
