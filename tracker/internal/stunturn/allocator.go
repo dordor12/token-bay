@@ -83,10 +83,10 @@ type sessionEntry struct {
 // second of burst at MaxKbpsPerSeeder; refillPerSec equals capacityBytes
 // (steady-state matches the cap).
 type tokenBucket struct {
-	capacityBytes float64   //nolint:unused // used by Charge/ResolveAndCharge in later tasks
-	refillPerSec  float64   //nolint:unused // used by refill logic in later tasks
-	available     float64   //nolint:unused // debited by Charge in later tasks
-	lastRefill    time.Time //nolint:unused // updated by refill logic in later tasks
+	capacityBytes float64
+	refillPerSec  float64
+	available     float64
+	lastRefill    time.Time
 }
 
 // Allocate creates a new TURN session for the given consumer, seeder,
@@ -150,8 +150,6 @@ func (a *Allocator) ensureBucket(seederID ids.IdentityID, now time.Time) *tokenB
 
 // deleteIndexes removes entry from byToken / bySID / byReq. The
 // caller must hold a.mu. Buckets are not touched.
-//
-//nolint:unused // used by Release/Sweep in later tasks
 func (a *Allocator) deleteIndexes(entry *sessionEntry) {
 	delete(a.byToken, entry.session.Token)
 	delete(a.bySID, entry.session.SessionID)
@@ -172,6 +170,66 @@ func (a *Allocator) Resolve(tok Token, _ time.Time) (Session, bool) {
 		return Session{}, false
 	}
 	return entry.session, true
+}
+
+// ResolveAndCharge atomically (under one mutex acquisition) resolves
+// tok, refreshes the seeder's bucket, debits n bytes if n > 0,
+// updates LastActive, and returns the session.
+//
+// Errors:
+//
+//	ErrUnknownToken   — tok not in allocator (or expired and deleted)
+//	ErrSessionExpired — LastActive older than SessionTTL; entry deleted
+//	                    on this call (subsequent calls return
+//	                    ErrUnknownToken)
+//	ErrThrottled      — bucket has < n bytes available; bucket NOT
+//	                    debited
+//
+// n <= 0 skips the bucket check and debit but DOES update LastActive
+// (the listener observed a packet — the session is alive even if the
+// payload is a zero-byte keepalive).
+func (a *Allocator) ResolveAndCharge(tok Token, n int, now time.Time) (Session, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	entry, ok := a.byToken[tok]
+	if !ok {
+		return Session{}, ErrUnknownToken
+	}
+	if now.Sub(entry.session.LastActive) > a.cfg.SessionTTL {
+		a.deleteIndexes(entry)
+		return Session{}, ErrSessionExpired
+	}
+	if n > 0 {
+		b := a.buckets[entry.session.SeederID]
+		if b == nil {
+			// Allocate created the bucket; this is an internal
+			// invariant. Surface it loudly.
+			panic("stunturn: bucket missing for known seeder; allocator invariants violated")
+		}
+		refill(b, now)
+		if b.available < float64(n) {
+			return Session{}, ErrThrottled
+		}
+		b.available -= float64(n)
+	}
+	entry.session.LastActive = now
+	return entry.session, nil
+}
+
+// refill brings b.available up to date based on elapsed time since
+// b.lastRefill. Caller must hold the allocator's mutex. Capped at
+// b.capacityBytes; clock-backwards is a no-op.
+func refill(b *tokenBucket, now time.Time) {
+	elapsed := now.Sub(b.lastRefill).Seconds()
+	if elapsed <= 0 {
+		return
+	}
+	b.available += elapsed * b.refillPerSec
+	if b.available > b.capacityBytes {
+		b.available = b.capacityBytes
+	}
+	b.lastRefill = now
 }
 
 // NewAllocator validates cfg and returns an empty Allocator.

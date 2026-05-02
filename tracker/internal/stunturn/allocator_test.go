@@ -272,3 +272,162 @@ func TestResolve_ReturnsCopy(t *testing.T) {
 	assert.Equal(t, t0, second.LastActive,
 		"allocator state must not be mutable through a returned Session")
 }
+
+func TestResolveAndCharge_Happy(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	got, err := a.ResolveAndCharge(want.Token, 1500, t0)
+
+	require.NoError(t, err)
+	assert.Equal(t, want.SessionID, got.SessionID)
+	assert.Equal(t, t0, got.LastActive)
+}
+
+func TestResolveAndCharge_UnknownToken(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	_, err = a.ResolveAndCharge(Token{0xff}, 1500, t0)
+
+	require.True(t, errors.Is(err, ErrUnknownToken), "want ErrUnknownToken, got %v", err)
+}
+
+// TestResolveAndCharge_Throttled: at MaxKbpsPerSeeder=1024, capacity
+// is 1024*1024/8 = 131072 bytes. Charge 200_000 fails; bucket is NOT
+// debited so a follow-up small charge succeeds.
+func TestResolveAndCharge_Throttled(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	_, err = a.ResolveAndCharge(want.Token, 200_000, t0)
+	require.True(t, errors.Is(err, ErrThrottled))
+
+	// Bucket was not debited — a small charge still succeeds.
+	_, err = a.ResolveAndCharge(want.Token, 100, t0)
+	require.NoError(t, err)
+}
+
+// TestResolveAndCharge_RefillsOverTime: exhaust the bucket, advance
+// 0.5s, half-capacity should be available.
+func TestResolveAndCharge_RefillsOverTime(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	// 131072 = capacity; drain it.
+	_, err = a.ResolveAndCharge(want.Token, 131072, t0)
+	require.NoError(t, err)
+	// Same instant — fully drained.
+	_, err = a.ResolveAndCharge(want.Token, 1, t0)
+	require.True(t, errors.Is(err, ErrThrottled))
+
+	// Half a second later — half capacity (65536) refilled.
+	half := t0.Add(500 * time.Millisecond)
+	_, err = a.ResolveAndCharge(want.Token, 65000, half)
+	require.NoError(t, err)
+	_, err = a.ResolveAndCharge(want.Token, 1000, half)
+	require.True(t, errors.Is(err, ErrThrottled), "remaining bucket should be ~536 bytes; 1000 must throttle")
+}
+
+// TestResolveAndCharge_ExpiresOnIdle: SessionTTL=30s; advance 31s
+// without activity; first call returns ErrSessionExpired (and deletes
+// the entry); follow-up returns ErrUnknownToken.
+func TestResolveAndCharge_ExpiresOnIdle(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	expired := t0.Add(31 * time.Second)
+	_, err = a.ResolveAndCharge(want.Token, 100, expired)
+	require.True(t, errors.Is(err, ErrSessionExpired))
+
+	_, err = a.ResolveAndCharge(want.Token, 100, expired)
+	require.True(t, errors.Is(err, ErrUnknownToken),
+		"after ErrSessionExpired the entry must be deleted")
+}
+
+// TestResolveAndCharge_LastActiveAdvances: a session that gets touched
+// every 10s does not expire at the 30s mark.
+func TestResolveAndCharge_LastActiveAdvances(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	for i := 1; i <= 4; i++ {
+		_, err := a.ResolveAndCharge(want.Token, 100, t0.Add(time.Duration(i*10)*time.Second))
+		require.NoError(t, err, "call %d at +%ds must succeed", i, i*10)
+	}
+}
+
+// TestResolveAndCharge_ClockBackwards: a clock that goes backward must
+// not produce negative refill (no underflow).
+func TestResolveAndCharge_ClockBackwards(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	// Drain the bucket at t0.
+	_, err = a.ResolveAndCharge(want.Token, 131072, t0)
+	require.NoError(t, err)
+
+	// Time goes backwards; available must remain 0 (no negative refill,
+	// no overflow). The 1-byte ask still throttles.
+	_, err = a.ResolveAndCharge(want.Token, 1, t0.Add(-1*time.Second))
+	require.True(t, errors.Is(err, ErrThrottled))
+}
+
+// TestResolveAndCharge_NoBytes_KeepsAlive: charging 0 bytes (or
+// negative) does not throttle and DOES update LastActive — the listener
+// observed a packet, the session is alive.
+func TestResolveAndCharge_NoBytes_KeepsAlive(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	// Drain the bucket so any debit would throttle.
+	_, err = a.ResolveAndCharge(want.Token, 131072, t0)
+	require.NoError(t, err)
+
+	got, err := a.ResolveAndCharge(want.Token, 0, t0.Add(20*time.Second))
+	require.NoError(t, err, "n=0 should never throttle")
+	assert.Equal(t, t0.Add(20*time.Second), got.LastActive)
+}
