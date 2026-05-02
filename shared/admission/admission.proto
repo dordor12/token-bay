@@ -1,0 +1,62 @@
+syntax = "proto3";
+package tokenbay.admission.v1;
+
+option go_package = "github.com/token-bay/token-bay/shared/admission";
+
+// TickSource classifies how a seeder produced its headroom_estimate.
+// TICK_SOURCE_UNSPECIFIED is rejected by ValidateFetchHeadroomResponse.
+// Imported by tracker heartbeat once that proto exists (admission-design
+// §11.1).
+enum TickSource {
+  TICK_SOURCE_UNSPECIFIED = 0;
+  TICK_SOURCE_HEURISTIC   = 1;
+  TICK_SOURCE_USAGE_PROBE = 2;
+}
+
+// CreditAttestationBody — tracker-signed portable credit-history
+// attestation. Spec:
+// docs/superpowers/specs/admission/2026-04-25-admission-design.md §4.1.
+// Two-message split for canonical signing: tracker signs
+// DeterministicMarshal(body).
+message CreditAttestationBody {
+  bytes  identity_id            = 1;   // 32 bytes — consumer Ed25519 pubkey hash
+  bytes  issuer_tracker_id      = 2;   // 32 bytes — issuing tracker pubkey hash
+  uint32 score                  = 3;   // fixed-point 0..10000 (= 0.0..1.0)
+
+  uint32 tenure_days            = 4;   // capped 365
+  uint32 settlement_reliability = 5;   // fixed-point 0..10000
+  uint32 dispute_rate           = 6;   // fixed-point 0..10000 (low = good)
+  int64  net_credit_flow_30d    = 7;   // signed credit delta over rolling 30d
+  int32  balance_cushion_log2   = 8;   // log2(balance/starter_grant), clamped [-8, 8]
+
+  uint64 computed_at            = 9;   // unix seconds; tracker wall-clock
+  uint64 expires_at             = 10;  // computed_at + ttl
+}
+
+// SignedCreditAttestation — wire form. Verifier recovers signed bytes via
+// shared/signing.DeterministicMarshal(body).
+message SignedCreditAttestation {
+  CreditAttestationBody body        = 1;
+  bytes                 tracker_sig = 2;  // 64 bytes — Ed25519 signature
+}
+
+// FetchHeadroomRequest — tracker-initiated, unsigned (rides the
+// already-authenticated tracker↔seeder connection). Spec §3.2.
+message FetchHeadroomRequest {
+  uint64 request_nonce = 1;
+  string model_filter  = 2;   // optional; "" for any model
+}
+
+message FetchHeadroomResponse {
+  uint64     request_nonce      = 1;
+  uint32     headroom_estimate  = 2;   // fixed-point 0..10000
+  TickSource source             = 3;
+  uint32     probe_age_s        = 4;
+  bool       can_probe_usage    = 5;
+  repeated PerModelHeadroom per_model = 6;
+}
+
+message PerModelHeadroom {
+  string model              = 1;
+  uint32 headroom_estimate  = 2;   // fixed-point 0..10000
+}
