@@ -202,3 +202,73 @@ func TestAllocate_RandFailure(t *testing.T) {
 	require.True(t, errors.Is(err, ErrRandFailed), "want ErrRandFailed, got %v", err)
 	assert.Contains(t, err.Error(), "simulated rand failure")
 }
+
+func TestResolve_Hit(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	got, ok := a.Resolve(want.Token, t0)
+
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestResolve_UnknownToken(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	got, ok := a.Resolve(Token{0xff}, t0)
+
+	assert.False(t, ok)
+	assert.Equal(t, Session{}, got)
+}
+
+// TestResolve_DoesNotUpdateLastActive: Resolve is a peek only; it
+// must not extend the session's life. Session expires at LastActive +
+// SessionTTL regardless of Resolve calls.
+func TestResolve_DoesNotUpdateLastActive(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	// Resolve at a later time.
+	later := t0.Add(10 * time.Second)
+	got, ok := a.Resolve(want.Token, later)
+
+	require.True(t, ok)
+	assert.Equal(t, t0, got.LastActive,
+		"Resolve must not advance LastActive (peek-only contract)")
+}
+
+// TestResolve_ReturnsCopy: mutating the returned Session must not
+// change subsequent Resolve results.
+func TestResolve_ReturnsCopy(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	want := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	first, _ := a.Resolve(want.Token, t0)
+	first.LastActive = first.LastActive.Add(1000 * time.Hour) // mutate caller copy
+
+	second, ok := a.Resolve(want.Token, t0)
+	require.True(t, ok)
+	assert.Equal(t, t0, second.LastActive,
+		"allocator state must not be mutable through a returned Session")
+}

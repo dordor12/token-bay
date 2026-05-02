@@ -158,6 +158,22 @@ func (a *Allocator) deleteIndexes(entry *sessionEntry) {
 	delete(a.byReq, entry.session.RequestID)
 }
 
+// Resolve looks up a session by token without updating LastActive and
+// without expiring an idle entry. Returns (Session{}, false) when the
+// token is unknown. The returned Session is a value copy.
+//
+// Resolve is intended for diagnostics / admin paths. The hot
+// per-datagram path is ResolveAndCharge.
+func (a *Allocator) Resolve(tok Token, _ time.Time) (Session, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.byToken[tok]
+	if !ok {
+		return Session{}, false
+	}
+	return entry.session, true
+}
+
 // NewAllocator validates cfg and returns an empty Allocator.
 func NewAllocator(cfg AllocatorConfig) (*Allocator, error) {
 	if cfg.MaxKbpsPerSeeder <= 0 {
