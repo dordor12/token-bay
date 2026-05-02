@@ -80,3 +80,29 @@ func TestValidateCreditAttestationBody_BoundaryValues(t *testing.T) {
 		require.NoError(t, ValidateCreditAttestationBody(b))
 	})
 }
+
+func TestValidateFetchHeadroomRequest_HappyPath(t *testing.T) {
+	require.NoError(t, ValidateFetchHeadroomRequest(&FetchHeadroomRequest{
+		RequestNonce: 1,
+		ModelFilter:  "claude-sonnet-4-6",
+	}))
+}
+
+func TestValidateFetchHeadroomRequest_EmptyModelFilterOk(t *testing.T) {
+	require.NoError(t, ValidateFetchHeadroomRequest(&FetchHeadroomRequest{
+		RequestNonce: 1,
+		ModelFilter:  "",
+	}))
+}
+
+func TestValidateFetchHeadroomRequest_NilBody(t *testing.T) {
+	err := ValidateFetchHeadroomRequest(nil)
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "nil")
+}
+
+func TestValidateFetchHeadroomRequest_ZeroNonce(t *testing.T) {
+	err := ValidateFetchHeadroomRequest(&FetchHeadroomRequest{RequestNonce: 0})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request_nonce")
+}

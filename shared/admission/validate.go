@@ -69,3 +69,16 @@ func ValidateCreditAttestationBody(b *CreditAttestationBody) error {
 	}
 	return nil
 }
+
+// ValidateFetchHeadroomRequest enforces admission-design §6.1 invariants on a
+// FetchHeadroomRequest. RequestNonce must be non-zero (zero is the proto-default
+// indicating "not set"). ModelFilter is optional ("" means any model).
+func ValidateFetchHeadroomRequest(r *FetchHeadroomRequest) error {
+	if r == nil {
+		return errors.New("admission: nil FetchHeadroomRequest")
+	}
+	if r.RequestNonce == 0 {
+		return errors.New("admission: request_nonce is zero")
+	}
+	return nil
+}
