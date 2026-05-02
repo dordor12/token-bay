@@ -190,6 +190,9 @@ func ApplyDefaults(c *Config) {
 	if c.STUNTURN.TURNRelayMaxKbps == 0 {
 		c.STUNTURN.TURNRelayMaxKbps = d.STUNTURN.TURNRelayMaxKbps
 	}
+	if c.STUNTURN.SessionTTLSeconds == 0 {
+		c.STUNTURN.SessionTTLSeconds = d.STUNTURN.SessionTTLSeconds
+	}
 
 	// Metrics
 	if c.Metrics.ListenAddr == "" {

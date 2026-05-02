@@ -127,9 +127,10 @@ type AdmissionScoreWeights struct {
 }
 
 type STUNTURNConfig struct {
-	STUNListenAddr   string `yaml:"stun_listen_addr"`
-	TURNListenAddr   string `yaml:"turn_listen_addr"`
-	TURNRelayMaxKbps int    `yaml:"turn_relay_max_kbps"`
+	STUNListenAddr    string `yaml:"stun_listen_addr"`
+	TURNListenAddr    string `yaml:"turn_listen_addr"`
+	TURNRelayMaxKbps  int    `yaml:"turn_relay_max_kbps"`
+	SessionTTLSeconds int    `yaml:"session_ttl_seconds"`
 }
 
 type MetricsConfig struct {
@@ -216,9 +217,10 @@ func DefaultConfig() *Config {
 			HeartbeatFreshnessDecayMaxS:           300,
 		},
 		STUNTURN: STUNTURNConfig{
-			STUNListenAddr:   ":3478",
-			TURNListenAddr:   ":3479",
-			TURNRelayMaxKbps: 1024,
+			STUNListenAddr:    ":3478",
+			TURNListenAddr:    ":3479",
+			TURNRelayMaxKbps:  1024,
+			SessionTTLSeconds: 30,
 		},
 		Metrics: MetricsConfig{
 			ListenAddr: ":9100",

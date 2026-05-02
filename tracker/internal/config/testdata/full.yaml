@@ -85,6 +85,7 @@ stun_turn:
   stun_listen_addr: ":3478"
   turn_listen_addr: ":3479"
   turn_relay_max_kbps: 1024
+  session_ttl_seconds: 30
 
 metrics:
   listen_addr: ":9100"
