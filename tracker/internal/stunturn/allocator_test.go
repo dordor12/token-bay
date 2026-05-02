@@ -534,3 +534,77 @@ func TestRelease_Idempotent(t *testing.T) {
 	a.Release(s.SessionID)
 	assert.NotPanics(t, func() { a.Release(s.SessionID) })
 }
+
+func TestSweep_Empty(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, a.Sweep(t0))
+}
+
+func TestSweep_RemovesIdleSessions(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 32) // two tokens
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	s1 := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+	s2 := mustAlloc(t, a, id8(1), id8(2), req8(2), t0)
+
+	swept := a.Sweep(t0.Add(31 * time.Second))
+
+	assert.Equal(t, 2, swept)
+	_, ok := a.Resolve(s1.Token, t0)
+	assert.False(t, ok)
+	_, ok = a.Resolve(s2.Token, t0)
+	assert.False(t, ok)
+}
+
+func TestSweep_KeepsActiveSessions(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	s := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	// Touch the session at +15s.
+	_, err = a.ResolveAndCharge(s.Token, 100, t0.Add(15*time.Second))
+	require.NoError(t, err)
+
+	// Sweep at +31s — LastActive is +15s, so age is 16s < 30s TTL: keep.
+	swept := a.Sweep(t0.Add(31 * time.Second))
+	assert.Equal(t, 0, swept)
+	_, ok := a.Resolve(s.Token, t0)
+	assert.True(t, ok)
+}
+
+func TestSweep_DoesNotTouchBuckets(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	s := mustAlloc(t, a, id8(1), id8(2), req8(1), t0)
+
+	// Drain the bucket so we can detect bucket re-init.
+	_, err = a.ResolveAndCharge(s.Token, 131072, t0)
+	require.NoError(t, err)
+
+	// Sweep removes the session.
+	require.Equal(t, 1, a.Sweep(t0.Add(31*time.Second)))
+
+	// The bucket survived. Charge at the time of drain verifies the bucket
+	// persists in its drained state (would succeed if Sweep had wiped
+	// buckets and re-init filled it).
+	err = a.Charge(id8(2), 1, t0)
+	require.True(t, errors.Is(err, ErrThrottled),
+		"bucket should persist post-Sweep; got %v", err)
+}

@@ -269,6 +269,24 @@ func (a *Allocator) Release(sessionID uint64) {
 	a.deleteIndexes(entry)
 }
 
+// Sweep removes every session whose LastActive is older than
+// SessionTTL. Returns the count removed. Buckets are not touched.
+//
+// Intended to run from a single goroutine on a periodic timer (e.g.,
+// every 1s). Calling from multiple goroutines is correct but wasteful.
+func (a *Allocator) Sweep(now time.Time) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, entry := range a.byToken {
+		if now.Sub(entry.session.LastActive) > a.cfg.SessionTTL {
+			a.deleteIndexes(entry)
+			n++
+		}
+	}
+	return n
+}
+
 // NewAllocator validates cfg and returns an empty Allocator.
 func NewAllocator(cfg AllocatorConfig) (*Allocator, error) {
 	if cfg.MaxKbpsPerSeeder <= 0 {
