@@ -255,6 +255,20 @@ func (a *Allocator) Charge(seederID ids.IdentityID, n int, now time.Time) error 
 	return nil
 }
 
+// Release deletes the session by SessionID. Idempotent — a no-op for
+// unknown SessionIDs. The seeder's bucket is left in place (it is
+// shared across that seeder's sessions and self-decays via refill
+// arithmetic).
+func (a *Allocator) Release(sessionID uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.bySID[sessionID]
+	if !ok {
+		return
+	}
+	a.deleteIndexes(entry)
+}
+
 // NewAllocator validates cfg and returns an empty Allocator.
 func NewAllocator(cfg AllocatorConfig) (*Allocator, error) {
 	if cfg.MaxKbpsPerSeeder <= 0 {

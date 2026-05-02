@@ -471,3 +471,66 @@ func TestCharge_Throttled(t *testing.T) {
 	err = a.Charge(id8(2), 1, t0)
 	require.True(t, errors.Is(err, ErrThrottled), "want ErrThrottled, got %v", err)
 }
+
+func TestRelease_RemovesAllIndexes(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	s := mustAlloc(t, a, id8(1), id8(2), req8(7), t0)
+
+	a.Release(s.SessionID)
+
+	// All three indexes report unknown.
+	_, ok := a.Resolve(s.Token, t0)
+	assert.False(t, ok, "byToken should be empty")
+	_, err = a.ResolveAndCharge(s.Token, 100, t0)
+	assert.True(t, errors.Is(err, ErrUnknownToken))
+
+	// byReq is freed too — we can re-Allocate the same RequestID.
+	tokBytes2 := []byte{
+		0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,
+		0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+	}
+	cfg := fixedClockCfg(t0, tokBytes2)
+	a2, err := NewAllocator(cfg)
+	require.NoError(t, err)
+	s1 := mustAlloc(t, a2, id8(1), id8(2), req8(7), t0)
+	a2.Release(s1.SessionID)
+	// Allocate again with the same RequestID; must not return
+	// ErrDuplicateRequest.
+	cfg.Rand = bytes.NewReader([]byte{
+		0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
+		0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x01,
+	})
+	a3, err := NewAllocator(cfg)
+	require.NoError(t, err)
+	_, err = a3.Allocate(id8(1), id8(2), req8(7), t0)
+	require.NoError(t, err)
+}
+
+func TestRelease_UnknownSID_NoPanic(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	assert.NotPanics(t, func() { a.Release(0) })
+	assert.NotPanics(t, func() { a.Release(99999) })
+}
+
+func TestRelease_Idempotent(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	tokBytes := make([]byte, 16)
+	for i := range tokBytes {
+		tokBytes[i] = byte(i + 1)
+	}
+	a, err := NewAllocator(fixedClockCfg(t0, tokBytes))
+	require.NoError(t, err)
+	s := mustAlloc(t, a, id8(1), id8(2), req8(7), t0)
+
+	a.Release(s.SessionID)
+	assert.NotPanics(t, func() { a.Release(s.SessionID) })
+}
