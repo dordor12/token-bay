@@ -232,6 +232,29 @@ func refill(b *tokenBucket, now time.Time) {
 	b.lastRefill = now
 }
 
+// Charge debits n bytes from the seeder's bucket without touching
+// session state. Use this only when the listener has already resolved
+// the session and just needs to bill more bytes; otherwise use
+// ResolveAndCharge.
+//
+// n <= 0 returns nil without modifying the bucket. The seeder's bucket
+// is lazy-initialized on first use, so Charge succeeds for seeders that
+// never had Allocate called.
+func (a *Allocator) Charge(seederID ids.IdentityID, n int, now time.Time) error {
+	if n <= 0 {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.ensureBucket(seederID, now)
+	refill(b, now)
+	if b.available < float64(n) {
+		return ErrThrottled
+	}
+	b.available -= float64(n)
+	return nil
+}
+
 // NewAllocator validates cfg and returns an empty Allocator.
 func NewAllocator(cfg AllocatorConfig) (*Allocator, error) {
 	if cfg.MaxKbpsPerSeeder <= 0 {

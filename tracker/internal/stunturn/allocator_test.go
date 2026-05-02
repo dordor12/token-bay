@@ -431,3 +431,43 @@ func TestResolveAndCharge_NoBytes_KeepsAlive(t *testing.T) {
 	require.NoError(t, err, "n=0 should never throttle")
 	assert.Equal(t, t0.Add(20*time.Second), got.LastActive)
 }
+
+func TestCharge_Happy(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	require.NoError(t, a.Charge(id8(2), 1000, t0))
+}
+
+func TestCharge_ZeroAndNegativeAreNoOps(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	// Drain bucket via a real Charge.
+	require.NoError(t, a.Charge(id8(2), 131072, t0))
+
+	// 0 and negative must not return ErrThrottled even though bucket is empty.
+	require.NoError(t, a.Charge(id8(2), 0, t0))
+	require.NoError(t, a.Charge(id8(2), -1, t0))
+}
+
+func TestCharge_LazyBucketInitForUnknownSeeder(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	// Seeder never had Allocate called; Charge still works.
+	require.NoError(t, a.Charge(id8(99), 1000, t0))
+}
+
+func TestCharge_Throttled(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	a, err := NewAllocator(fixedClockCfg(t0, make([]byte, 16)))
+	require.NoError(t, err)
+
+	require.NoError(t, a.Charge(id8(2), 131072, t0)) // drain
+	err = a.Charge(id8(2), 1, t0)
+	require.True(t, errors.Is(err, ErrThrottled), "want ErrThrottled, got %v", err)
+}
