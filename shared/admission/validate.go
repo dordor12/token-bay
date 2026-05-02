@@ -82,3 +82,34 @@ func ValidateFetchHeadroomRequest(r *FetchHeadroomRequest) error {
 	}
 	return nil
 }
+
+// ValidateFetchHeadroomResponse enforces admission-design §6.1 invariants on a
+// FetchHeadroomResponse. Source must be a known non-UNSPECIFIED value; all
+// fixed-point headroom fields are bounded by scoreMax. Per-model entries
+// (when present) must have a non-empty model name.
+func ValidateFetchHeadroomResponse(r *FetchHeadroomResponse) error {
+	if r == nil {
+		return errors.New("admission: nil FetchHeadroomResponse")
+	}
+	switch r.Source {
+	case TickSource_TICK_SOURCE_HEURISTIC, TickSource_TICK_SOURCE_USAGE_PROBE:
+		// ok
+	default:
+		return fmt.Errorf("admission: source = %v, must be HEURISTIC or USAGE_PROBE", r.Source)
+	}
+	if r.HeadroomEstimate > scoreMax {
+		return fmt.Errorf("admission: headroom_estimate %d exceeds %d", r.HeadroomEstimate, scoreMax)
+	}
+	for i, pm := range r.PerModel {
+		if pm == nil {
+			return fmt.Errorf("admission: per_model[%d] is nil", i)
+		}
+		if pm.Model == "" {
+			return fmt.Errorf("admission: per_model[%d] model is empty", i)
+		}
+		if pm.HeadroomEstimate > scoreMax {
+			return fmt.Errorf("admission: per_model[%d] headroom_estimate %d exceeds %d", i, pm.HeadroomEstimate, scoreMax)
+		}
+	}
+	return nil
+}

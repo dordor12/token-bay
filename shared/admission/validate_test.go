@@ -106,3 +106,71 @@ func TestValidateFetchHeadroomRequest_ZeroNonce(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request_nonce")
 }
+
+func fixtureFetchHeadroomResponse() *FetchHeadroomResponse {
+	return &FetchHeadroomResponse{
+		RequestNonce:     42,
+		HeadroomEstimate: 7200,
+		Source:           TickSource_TICK_SOURCE_USAGE_PROBE,
+		ProbeAgeS:        15,
+		CanProbeUsage:    true,
+		PerModel: []*PerModelHeadroom{
+			{Model: "claude-sonnet-4-6", HeadroomEstimate: 7000},
+			{Model: "claude-opus-4-7", HeadroomEstimate: 8500},
+		},
+	}
+}
+
+func TestValidateFetchHeadroomResponse_HappyPath(t *testing.T) {
+	require.NoError(t, ValidateFetchHeadroomResponse(fixtureFetchHeadroomResponse()))
+}
+
+func TestValidateFetchHeadroomResponse_NoPerModelOk(t *testing.T) {
+	r := fixtureFetchHeadroomResponse()
+	r.PerModel = nil
+	require.NoError(t, ValidateFetchHeadroomResponse(r))
+}
+
+func TestValidateFetchHeadroomResponse_NilBody(t *testing.T) {
+	err := ValidateFetchHeadroomResponse(nil)
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "nil")
+}
+
+func TestValidateFetchHeadroomResponse_Rejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*FetchHeadroomResponse)
+		errFrag string
+	}{
+		{"unspecified source", func(r *FetchHeadroomResponse) { r.Source = TickSource_TICK_SOURCE_UNSPECIFIED }, "source"},
+		{"unknown source value", func(r *FetchHeadroomResponse) { r.Source = TickSource(99) }, "source"},
+		{"headroom over 10000", func(r *FetchHeadroomResponse) { r.HeadroomEstimate = 10001 }, "headroom_estimate"},
+		{"per_model headroom over 10000", func(r *FetchHeadroomResponse) {
+			r.PerModel[0].HeadroomEstimate = 10001
+		}, "per_model"},
+		{"per_model empty model name", func(r *FetchHeadroomResponse) {
+			r.PerModel[0].Model = ""
+		}, "model"},
+		{"per_model nil entry", func(r *FetchHeadroomResponse) {
+			r.PerModel[0] = nil
+		}, "per_model"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := fixtureFetchHeadroomResponse()
+			tc.mutate(r)
+			err := ValidateFetchHeadroomResponse(r)
+			require.Error(t, err, "case %q should fail validation", tc.name)
+			assert.Contains(t, err.Error(), tc.errFrag, "error should mention %q", tc.errFrag)
+		})
+	}
+}
+
+func TestValidateFetchHeadroomResponse_BoundaryHeadroom(t *testing.T) {
+	r := fixtureFetchHeadroomResponse()
+	r.HeadroomEstimate = 10000
+	r.PerModel[0].HeadroomEstimate = 10000
+	require.NoError(t, ValidateFetchHeadroomResponse(r))
+}
