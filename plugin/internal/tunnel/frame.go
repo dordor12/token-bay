@@ -15,10 +15,8 @@ const (
 	statusError status = 0x01
 )
 
-const (
-	requestHeaderLen = 4 // big-endian uint32 length prefix
-	defaultMaxBytes  = 1 << 20
-)
+// requestHeaderLen is the wire-format length-prefix size in bytes.
+const requestHeaderLen = 4
 
 // writeRequest writes [4 BE length] [body] to w.
 func writeRequest(w io.Writer, body []byte) error {
