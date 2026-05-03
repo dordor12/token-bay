@@ -26,7 +26,7 @@ shared/
     rpc.pb.go                                 -- new (generated)
     rpc.go                                    -- new (constants, doc)
     rpc_test.go                               -- new (round-trip + nil-safety)
-    validate.go                               -- modify (add ValidateRpc* + push validators)
+    validate.go                               -- modify (add ValidateRPC* + push validators)
     validate_test.go                          -- modify (add cases)
     testdata/rpc_request_broker.golden.hex    -- new
     testdata/rpc_response_broker_ok.golden.hex -- new
@@ -295,25 +295,25 @@ Expected: creates `shared/proto/rpc.pb.go`. Commit it (see step 1.13).
 ```go
 // Package proto: rpc-message metadata.
 //
-// MaxRpcPayloadSize bounds the proto-encoded payload bytes inside an
+// MaxRPCPayloadSize bounds the proto-encoded payload bytes inside an
 // RpcRequest or RpcResponse. The framing layer enforces a 1 MiB outer
 // frame cap; this constant exists for callers that want to validate
 // payloads before they reach the framer.
 package proto
 
-const MaxRpcPayloadSize = 1 << 20 // 1 MiB
+const MaxRPCPayloadSize = 1 << 20 // 1 MiB
 ```
 
-- [ ] **Step 1.5: Write `ValidateRpcRequest` and `ValidateRpcResponse` in `shared/proto/validate.go`**
+- [ ] **Step 1.5: Write `ValidateRPCRequest` and `ValidateRPCResponse` in `shared/proto/validate.go`**
 
 Append to `shared/proto/validate.go`:
 
 ```go
-// ValidateRpcRequest enforces structural invariants on an incoming
+// ValidateRPCRequest enforces structural invariants on an incoming
 // RpcRequest. method must be one of the defined non-zero values
 // (method zero is the heartbeat-channel marker, validated separately).
-// payload must not exceed MaxRpcPayloadSize.
-func ValidateRpcRequest(r *RpcRequest) error {
+// payload must not exceed MaxRPCPayloadSize.
+func ValidateRPCRequest(r *RpcRequest) error {
     if r == nil {
         return errors.New("proto: RpcRequest is nil")
     }
@@ -330,16 +330,16 @@ func ValidateRpcRequest(r *RpcRequest) error {
     default:
         return fmt.Errorf("proto: RpcRequest.Method invalid: %v", r.Method)
     }
-    if len(r.Payload) > MaxRpcPayloadSize {
-        return fmt.Errorf("proto: RpcRequest.Payload %d > %d", len(r.Payload), MaxRpcPayloadSize)
+    if len(r.Payload) > MaxRPCPayloadSize {
+        return fmt.Errorf("proto: RpcRequest.Payload %d > %d", len(r.Payload), MaxRPCPayloadSize)
     }
     return nil
 }
 
-// ValidateRpcResponse enforces invariants on an RpcResponse. status must
+// ValidateRPCResponse enforces invariants on an RpcResponse. status must
 // be one of the defined non-zero values. If status != OK, error must be
 // non-nil and have a non-empty code.
-func ValidateRpcResponse(r *RpcResponse) error {
+func ValidateRPCResponse(r *RpcResponse) error {
     if r == nil {
         return errors.New("proto: RpcResponse is nil")
     }
@@ -359,8 +359,8 @@ func ValidateRpcResponse(r *RpcResponse) error {
             return errors.New("proto: RpcResponse.Error required when Status != OK")
         }
     }
-    if len(r.Payload) > MaxRpcPayloadSize {
-        return fmt.Errorf("proto: RpcResponse.Payload %d > %d", len(r.Payload), MaxRpcPayloadSize)
+    if len(r.Payload) > MaxRPCPayloadSize {
+        return fmt.Errorf("proto: RpcResponse.Payload %d > %d", len(r.Payload), MaxRPCPayloadSize)
     }
     return nil
 }
@@ -468,12 +468,12 @@ func TestValidateRpcRequestRejections(t *testing.T) {
         {"out_of_range", &RpcRequest{Method: 999}, "Method invalid"},
         {"oversize", &RpcRequest{
             Method:  RpcMethod_RPC_METHOD_BROKER_REQUEST,
-            Payload: make([]byte, MaxRpcPayloadSize+1),
+            Payload: make([]byte, MaxRPCPayloadSize+1),
         }, "Payload"},
     }
     for _, c := range cases {
         t.Run(c.name, func(t *testing.T) {
-            err := ValidateRpcRequest(c.in)
+            err := ValidateRPCRequest(c.in)
             require.Error(t, err)
             assert.Contains(t, err.Error(), c.msg)
         })
@@ -481,7 +481,7 @@ func TestValidateRpcRequestRejections(t *testing.T) {
 }
 
 func TestValidateRpcRequestAccepts(t *testing.T) {
-    require.NoError(t, ValidateRpcRequest(&RpcRequest{Method: RpcMethod_RPC_METHOD_BALANCE}))
+    require.NoError(t, ValidateRPCRequest(&RpcRequest{Method: RpcMethod_RPC_METHOD_BALANCE}))
 }
 
 func TestValidateRpcResponseRejections(t *testing.T) {
@@ -500,7 +500,7 @@ func TestValidateRpcResponseRejections(t *testing.T) {
     }
     for _, c := range cases {
         t.Run(c.name, func(t *testing.T) {
-            err := ValidateRpcResponse(c.in)
+            err := ValidateRPCResponse(c.in)
             require.Error(t, err)
             assert.Contains(t, err.Error(), c.msg)
         })
@@ -529,7 +529,7 @@ func TestValidateOfferAndSettlementPush(t *testing.T) {
 ```bash
 cd shared && go test ./proto/... -run 'ValidateRpc|OfferAndSettlement' -v
 ```
-Expected: tests fail with "ValidateRpcRequest undefined" until the helpers in step 1.5 land — they should land in the same commit so this step verifies the green state instead.
+Expected: tests fail with "ValidateRPCRequest undefined" until the helpers in step 1.5 land — they should land in the same commit so this step verifies the green state instead.
 
 - [ ] **Step 1.9: Run validator tests, expect PASS**
 
@@ -3096,7 +3096,7 @@ func (c *Client) callUnary(ctx context.Context, method tbproto.RpcMethod, payloa
     if err != nil {
         return err
     }
-    if err := tbproto.ValidateRpcRequest(req); err != nil {
+    if err := tbproto.ValidateRPCRequest(req); err != nil {
         return fmt.Errorf("trackerclient: validate request: %w", err)
     }
     if err := wire.Write(stream, req, c.cfg.MaxFrameSize); err != nil {
@@ -3111,7 +3111,7 @@ func (c *Client) callUnary(ctx context.Context, method tbproto.RpcMethod, payloa
         }
         return fmt.Errorf("trackerclient: read response: %w", err)
     }
-    if err := tbproto.ValidateRpcResponse(&resp); err != nil {
+    if err := tbproto.ValidateRPCResponse(&resp); err != nil {
         return fmt.Errorf("%w: %v", ErrInvalidResponse, err)
     }
     if err := statusToErr(resp.Status, resp.Error); err != nil {
