@@ -1,9 +1,13 @@
 package admission
 
 import (
+	"crypto/ed25519"
 	"math"
 	"time"
 
+	admission "github.com/token-bay/token-bay/shared/admission"
+	"github.com/token-bay/token-bay/shared/ids"
+	signing "github.com/token-bay/token-bay/shared/signing"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 )
 
@@ -165,4 +169,99 @@ func floorLog2Ratio(num, den int64) int {
 		return math.MinInt
 	}
 	return int(math.Floor(math.Log2(float64(num) / float64(den))))
+}
+
+// ---------------------------------------------------------------------------
+// resolveCreditScore — admission-design §5.1 step 1
+// ---------------------------------------------------------------------------
+
+// ScoreSource indicates which path resolveCreditScore took. Returned to
+// callers (Decide) for logging / metrics; not part of the admission
+// decision itself.
+type ScoreSource uint8
+
+const (
+	// ScoreSourceUnspecified is the zero value; never returned by
+	// resolveCreditScore itself.
+	ScoreSourceUnspecified ScoreSource = iota
+	// ScoreSourceAttestation means a valid peer attestation was used, post-clamp.
+	ScoreSourceAttestation
+	// ScoreSourceLocal means local ConsumerCreditState was present and used.
+	ScoreSourceLocal
+	// ScoreSourceTrialTier means no attestation and no local history —
+	// cfg.TrialTierScore was returned.
+	ScoreSourceTrialTier
+)
+
+// resolveCreditScore implements admission-design §5.1 step 1. Five
+// fall-through checks on the attestation; on any miss falls through to
+// local-history compute; on empty local returns cfg.TrialTierScore.
+//
+// The MaxAttestationScoreImported clamp (§8.6) bounds peer-issued scores
+// so a malicious-but-undetected peer cannot inflate above the regional
+// ceiling for an arbitrary consumer.
+func (s *Subsystem) resolveCreditScore(consumerID ids.IdentityID, att *admission.SignedCreditAttestation, now time.Time) (float64, ScoreSource) {
+	if att != nil {
+		if score, ok := s.tryAttestation(att, now); ok {
+			return score, ScoreSourceAttestation
+		}
+	}
+	// Local fall-through.
+	if st, ok := consumerShardFor(s.consumerShards, consumerID).get(consumerID); ok {
+		score, sigs := ComputeLocalScore(st, s.cfg, now)
+		// "≥ 1 settled entry" gate per §5.1 step 1: only honor local if
+		// the consumer has done real work.
+		if hasAnySettlement(sigs) {
+			return score, ScoreSourceLocal
+		}
+	}
+	return s.cfg.TrialTierScore, ScoreSourceTrialTier
+}
+
+// tryAttestation runs the four §5.1 step-1 checks. Returns (score, true)
+// on success and (0, false) on any miss — caller treats the latter as
+// "fall through to local".
+func (s *Subsystem) tryAttestation(att *admission.SignedCreditAttestation, now time.Time) (float64, bool) {
+	if att.Body == nil {
+		return 0, false
+	}
+	if err := admission.ValidateCreditAttestationBody(att.Body); err != nil {
+		return 0, false
+	}
+	// Federation peer-set check.
+	var issuer ids.IdentityID
+	if len(att.Body.IssuerTrackerId) != len(issuer) {
+		return 0, false
+	}
+	copy(issuer[:], att.Body.IssuerTrackerId)
+	if !s.peers.Contains(issuer) {
+		return 0, false
+	}
+	// Expiry. Wall-clock comparison; the validator already enforced
+	// expires_at > computed_at and ttl ≤ 7d.
+	if uint64(now.Unix()) >= att.Body.ExpiresAt {
+		return 0, false
+	}
+	// Signature verification — pubkey reconstructed from issuer ID. v1
+	// uses the raw IdentityID bytes as the pubkey; tracker spec §5.2 will
+	// resolve a proper "issuer pubkey from federation roster" lookup once
+	// federation is wired (see admission.go.trackerIDFromPubkey for the
+	// matching v1 substitution on the issuer side).
+	pub := ed25519.PublicKey(issuer[:])
+	if !signing.VerifyCreditAttestation(pub, att) {
+		return 0, false
+	}
+	score := float64(att.Body.Score) / 10000.0
+	if score > s.cfg.MaxAttestationScoreImported {
+		score = s.cfg.MaxAttestationScoreImported
+	}
+	return score, true
+}
+
+// hasAnySettlement reports whether ComputeLocalScore's signal output came
+// from a non-trivial state (≥ 1 settlement) — used to gate the local
+// score path. Reliability is the canonical "I have settlement history"
+// indicator (set to ≥ 0 only when totalSettled > 0).
+func hasAnySettlement(s Signals) bool {
+	return s.SettlementReliability >= 0
 }

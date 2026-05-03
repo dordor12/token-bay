@@ -1,13 +1,19 @@
 package admission
 
 import (
+	"crypto/ed25519"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	admission "github.com/token-bay/token-bay/shared/admission"
+	"github.com/token-bay/token-bay/shared/ids"
+	signing "github.com/token-bay/token-bay/shared/signing"
 	"github.com/token-bay/token-bay/tracker/internal/config"
+	"github.com/token-bay/token-bay/tracker/internal/registry"
 )
 
 func defaultScoreConfig() config.AdmissionConfig {
@@ -154,4 +160,186 @@ func TestFloorLog2Ratio(t *testing.T) {
 	assert.Equal(t, 3, floorLog2Ratio(8000, 1000)) // log2(8)
 	assert.Equal(t, -1, floorLog2Ratio(500, 1000)) // log2(0.5)
 	assert.Equal(t, math.MinInt, floorLog2Ratio(0, 1000))
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: resolveCreditScore tests
+// ---------------------------------------------------------------------------
+
+func TestResolveCreditScore_NilAttestation_NoLocal_ReturnsTrialTier(t *testing.T) {
+	s, _ := openTempSubsystem(t)
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	score, source := s.resolveCreditScore(makeID(0x11), nil, now)
+	assert.InDelta(t, s.cfg.TrialTierScore, score, 1e-9)
+	assert.Equal(t, ScoreSourceTrialTier, source)
+}
+
+func TestResolveCreditScore_NilAttestation_LocalHistory_UsesLocal(t *testing.T) {
+	s, _ := openTempSubsystem(t)
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	id := makeID(0x11)
+
+	// Seed local history.
+	st := consumerShardFor(s.consumerShards, id).getOrInit(id, now.AddDate(0, 0, -10))
+	st.SettlementBuckets[0] = DayBucket{Total: 50, A: 50, DayStamp: stripToDay(now)}
+	st.LastBalanceSeen = 1000
+
+	score, source := s.resolveCreditScore(id, nil, now)
+	assert.Greater(t, score, s.cfg.TrialTierScore, "local should outrank trial-tier")
+	assert.Equal(t, ScoreSourceLocal, source)
+}
+
+func TestResolveCreditScore_ValidAttestationFromPeer_UsedAndClamped(t *testing.T) {
+	peerPriv, peerID := fixturePeerKeypair(t)
+	s, _ := openTempSubsystem(t, WithPeerSet(staticPeers{peerID: true}))
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	consumerID := makeID(0x11)
+	body := &admission.CreditAttestationBody{
+		IdentityId:            consumerID[:],
+		IssuerTrackerId:       peerID[:],
+		Score:                 9800,           // 0.98 — exceeds 0.95 default cap
+		TenureDays:            120,
+		SettlementReliability: 9700,
+		DisputeRate:           50,
+		NetCreditFlow_30D:     250000,
+		BalanceCushionLog2:    3,
+		ComputedAt:            uint64(now.Add(-time.Hour).Unix()),
+		ExpiresAt:             uint64(now.Add(23 * time.Hour).Unix()),
+	}
+	att := signFixtureAttestation(t, peerPriv, body)
+
+	score, source := s.resolveCreditScore(makeID(0x11), att, now)
+	assert.InDelta(t, s.cfg.MaxAttestationScoreImported, score, 1e-9, "clamp at MaxAttestationScoreImported")
+	assert.Equal(t, ScoreSourceAttestation, source)
+}
+
+func TestResolveCreditScore_ValidAttestationBelowClamp_PassThrough(t *testing.T) {
+	peerPriv, peerID := fixturePeerKeypair(t)
+	s, _ := openTempSubsystem(t, WithPeerSet(staticPeers{peerID: true}))
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	body := validAttestationBody(now, peerID, 0x11)
+	body.Score = 7000 // 0.70 — below clamp
+	att := signFixtureAttestation(t, peerPriv, body)
+
+	score, _ := s.resolveCreditScore(makeID(0x11), att, now)
+	assert.InDelta(t, 0.70, score, 1e-9)
+}
+
+func TestResolveCreditScore_AttestationFromUnknownPeer_FallsThrough(t *testing.T) {
+	otherPriv, otherID := fixturePeerKeypair(t)
+	s, _ := openTempSubsystem(t) // default peer-set is always-false
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	body := validAttestationBody(now, otherID, 0x11)
+	body.Score = 9000
+	att := signFixtureAttestation(t, otherPriv, body)
+
+	score, source := s.resolveCreditScore(makeID(0x11), att, now)
+	// no local history → trial tier
+	assert.InDelta(t, s.cfg.TrialTierScore, score, 1e-9)
+	assert.Equal(t, ScoreSourceTrialTier, source)
+}
+
+func TestResolveCreditScore_ExpiredAttestation_FallsThrough(t *testing.T) {
+	peerPriv, peerID := fixturePeerKeypair(t)
+	s, _ := openTempSubsystem(t, WithPeerSet(staticPeers{peerID: true}))
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	body := validAttestationBody(now.Add(-48*time.Hour), peerID, 0x11)
+	body.ExpiresAt = uint64(now.Add(-1 * time.Hour).Unix()) // expired 1h ago
+	att := signFixtureAttestation(t, peerPriv, body)
+
+	score, source := s.resolveCreditScore(makeID(0x11), att, now)
+	assert.InDelta(t, s.cfg.TrialTierScore, score, 1e-9)
+	assert.Equal(t, ScoreSourceTrialTier, source)
+}
+
+func TestResolveCreditScore_TamperedAttestation_FallsThrough(t *testing.T) {
+	peerPriv, peerID := fixturePeerKeypair(t)
+	s, _ := openTempSubsystem(t, WithPeerSet(staticPeers{peerID: true}))
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	body := validAttestationBody(now, peerID, 0x11)
+	att := signFixtureAttestation(t, peerPriv, body)
+	att.Body.Score = 9999 // post-sign mutation invalidates sig
+
+	score, source := s.resolveCreditScore(makeID(0x11), att, now)
+	assert.InDelta(t, s.cfg.TrialTierScore, score, 1e-9)
+	assert.Equal(t, ScoreSourceTrialTier, source)
+}
+
+func TestResolveCreditScore_MalformedAttestationBody_FallsThrough(t *testing.T) {
+	peerPriv, peerID := fixturePeerKeypair(t)
+	s, _ := openTempSubsystem(t, WithPeerSet(staticPeers{peerID: true}))
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+
+	body := validAttestationBody(now, peerID, 0x11)
+	body.IdentityId = []byte{1, 2, 3} // wrong length — ValidateCreditAttestationBody rejects
+	att := signFixtureAttestation(t, peerPriv, body)
+
+	score, source := s.resolveCreditScore(makeID(0x11), att, now)
+	assert.InDelta(t, s.cfg.TrialTierScore, score, 1e-9)
+	assert.Equal(t, ScoreSourceTrialTier, source)
+}
+
+// ---------------------------------------------------------------------------
+// Task 5 inline helpers (extracted into helpers_test.go in Task 14)
+// ---------------------------------------------------------------------------
+
+func validAttestationBody(now time.Time, peerID ids.IdentityID, consumerByte byte) *admission.CreditAttestationBody {
+	cid := makeID(consumerByte)
+	return &admission.CreditAttestationBody{
+		IdentityId:            cid[:],
+		IssuerTrackerId:       peerID[:],
+		Score:                 7000,
+		TenureDays:            60,
+		SettlementReliability: 9000,
+		DisputeRate:           100,
+		NetCreditFlow_30D:     50000,
+		BalanceCushionLog2:    1,
+		ComputedAt:            uint64(now.Add(-time.Hour).Unix()),
+		ExpiresAt:             uint64(now.Add(23 * time.Hour).Unix()),
+	}
+}
+
+func signFixtureAttestation(t *testing.T, priv ed25519.PrivateKey, body *admission.CreditAttestationBody) *admission.SignedCreditAttestation {
+	t.Helper()
+	sig, err := signing.SignCreditAttestation(priv, body)
+	require.NoError(t, err)
+	return &admission.SignedCreditAttestation{Body: body, TrackerSig: sig}
+}
+
+func fixturePeerKeypair(t *testing.T) (ed25519.PrivateKey, ids.IdentityID) {
+	t.Helper()
+	seed := []byte("admission-fixture-peer-seed-v1-x") // 32 bytes
+	require.Len(t, seed, ed25519.SeedSize)
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := priv.Public().(ed25519.PublicKey)
+	var id ids.IdentityID
+	copy(id[:], pub[:32])
+	return priv, id
+}
+
+// staticPeers is a map-backed PeerSet used in Task 5 tests.
+type staticPeers map[ids.IdentityID]bool
+
+func (s staticPeers) Contains(id ids.IdentityID) bool { return s[id] }
+
+func openTempSubsystem(t *testing.T, opts ...Option) (*Subsystem, ids.IdentityID) {
+	t.Helper()
+	seed := []byte("admission-fixture-tracker-seed-1") // 32 bytes
+	require.Len(t, seed, ed25519.SeedSize)
+	priv := ed25519.NewKeyFromSeed(seed)
+
+	cfg := defaultScoreConfig()
+	reg, err := registry.New(16)
+	require.NoError(t, err)
+
+	s, err := Open(cfg, reg, priv, opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s, s.trackerID
 }
