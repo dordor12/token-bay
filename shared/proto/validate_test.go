@@ -249,6 +249,10 @@ func TestValidateRpcResponseRejections(t *testing.T) {
 			Status: RpcStatus_RPC_STATUS_INVALID,
 			Error:  &RpcError{Code: "", Message: "x"},
 		}, "required"},
+		{"oversize", &RpcResponse{
+			Status:  RpcStatus_RPC_STATUS_OK,
+			Payload: make([]byte, MaxRPCPayloadSize+1),
+		}, "Payload"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

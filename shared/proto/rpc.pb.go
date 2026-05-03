@@ -1512,7 +1512,7 @@ var File_proto_rpc_proto protoreflect.FileDescriptor
 
 const file_proto_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\x0fproto/rpc.proto\x12\x11tokenbay.proto.v1\x1a\x13proto/balance.proto\x1a\x14proto/envelope.proto\"8\n" +
+	"\x0fproto/rpc.proto\x12\x11tokenbay.proto.v1\"8\n" +
 	"\bRpcError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\\\n" +
@@ -1689,8 +1689,6 @@ func file_proto_rpc_proto_init() {
 	if File_proto_rpc_proto != nil {
 		return
 	}
-	file_proto_balance_proto_init()
-	file_proto_envelope_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

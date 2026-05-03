@@ -3,9 +3,6 @@ package tokenbay.proto.v1;
 
 option go_package = "github.com/token-bay/token-bay/shared/proto";
 
-import "proto/balance.proto";
-import "proto/envelope.proto";
-
 // RpcMethod identifies the unary RPC the client is invoking.
 //
 // Method 0 (RPC_METHOD_UNSPECIFIED) is reserved as the heartbeat-channel
