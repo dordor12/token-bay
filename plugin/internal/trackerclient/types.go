@@ -146,3 +146,26 @@ type SettlementRequest struct {
 	PreimageHash [32]byte
 	PreimageBody []byte
 }
+
+// Transport is the network seam between the client and a tracker.
+// Concrete implementations live under internal/transport/.
+type Transport interface {
+	Dial(ctx Ctx, ep TrackerEndpoint, signer Signer) (Conn, error)
+}
+
+// Conn is a connected, mTLS-authenticated transport session.
+type Conn interface {
+	OpenStreamSync(ctx Ctx) (Stream, error)
+	AcceptStream(ctx Ctx) (Stream, error)
+	PeerIdentityID() ids.IdentityID
+	Close() error
+	Done() <-chan struct{}
+}
+
+// Stream is a bidirectional byte stream within a Conn.
+type Stream interface {
+	Read(p []byte) (int, error)
+	Write(p []byte) (int, error)
+	Close() error
+	CloseWrite() error
+}
