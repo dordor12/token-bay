@@ -538,3 +538,12 @@ func TestValidate_AdmissionStunTurnRelayKbps(t *testing.T) {
 
 	assertOneFieldError(t, err, "stun_turn.turn_relay_max_kbps")
 }
+
+func TestValidate_STUNTurn_SessionTTLSecondsZero(t *testing.T) {
+	c := validConfig(t)
+	c.STUNTURN.SessionTTLSeconds = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "stun_turn.session_ttl_seconds")
+}
