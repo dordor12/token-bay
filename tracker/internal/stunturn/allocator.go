@@ -137,11 +137,11 @@ func (a *Allocator) ensureBucket(seederID ids.IdentityID, now time.Time) *tokenB
 	if b, ok := a.buckets[seederID]; ok {
 		return b
 	}
-	cap := float64(a.cfg.MaxKbpsPerSeeder) * 1024.0 / 8.0
+	capBytes := float64(a.cfg.MaxKbpsPerSeeder) * 1024.0 / 8.0
 	b := &tokenBucket{
-		capacityBytes: cap,
-		refillPerSec:  cap, // 1s of burst, refilled at the cap rate
-		available:     cap, // start full
+		capacityBytes: capBytes,
+		refillPerSec:  capBytes, // 1s of burst, refilled at the cap rate
+		available:     capBytes, // start full
 		lastRefill:    now,
 	}
 	a.buckets[seederID] = b
@@ -200,14 +200,14 @@ func (a *Allocator) ResolveAndCharge(tok Token, n int, now time.Time) (Session, 
 		a.deleteIndexes(entry)
 		return Session{}, ErrSessionExpired
 	}
+	b := a.buckets[entry.session.SeederID]
+	if b == nil {
+		// Allocate created the bucket; this is an internal
+		// invariant. Surface it loudly.
+		panic("stunturn: bucket missing for known seeder; allocator invariants violated")
+	}
+	refill(b, now)
 	if n > 0 {
-		b := a.buckets[entry.session.SeederID]
-		if b == nil {
-			// Allocate created the bucket; this is an internal
-			// invariant. Surface it loudly.
-			panic("stunturn: bucket missing for known seeder; allocator invariants violated")
-		}
-		refill(b, now)
 		if b.available < float64(n) {
 			return Session{}, ErrThrottled
 		}
