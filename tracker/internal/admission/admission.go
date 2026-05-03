@@ -162,10 +162,6 @@ func trackerIDFromPubkey(pub ed25519.PublicKey) ids.IdentityID {
 	return out
 }
 
-// Forward declarations satisfied by later tasks. Stubs here so Open compiles.
-type consumerShard struct{}
-type seederShard struct{}
-
 // SupplySnapshot holds an aggregated view of regional supply pressure.
 // Replaced by the real implementation in Task 7.
 type SupplySnapshot struct{}
@@ -174,18 +170,20 @@ type SupplySnapshot struct{}
 // Replaced by the real implementation in Task 8.
 type queueHeap struct{}
 
+// newConsumerShards constructs n independently-locked consumer shards.
 func newConsumerShards(n int) []*consumerShard {
 	out := make([]*consumerShard, n)
 	for i := range out {
-		out[i] = &consumerShard{}
+		out[i] = newConsumerShard()
 	}
 	return out
 }
 
+// newSeederShards constructs n independently-locked seeder shards.
 func newSeederShards(n int) []*seederShard {
 	out := make([]*seederShard, n)
 	for i := range out {
-		out[i] = &seederShard{}
+		out[i] = newSeederShard()
 	}
 	return out
 }
