@@ -6,6 +6,7 @@ toolchain go1.26.2
 
 require (
 	github.com/creack/pty v1.1.9
+	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
