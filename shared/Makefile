@@ -1,7 +1,7 @@
 .PHONY: test lint check clean build proto-gen proto-check
 
 # Source-relative outputs land .pb.go next to the .proto file.
-PROTO_FILES := exhaustionproof/proof.proto proto/balance.proto proto/envelope.proto proto/ledger.proto
+PROTO_FILES := exhaustionproof/proof.proto proto/balance.proto proto/envelope.proto proto/ledger.proto admission/admission.proto
 
 test:
 	go test -race -coverprofile=coverage.out.raw ./...

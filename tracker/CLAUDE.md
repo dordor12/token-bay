@@ -54,7 +54,7 @@ Authoritative spec: `docs/superpowers/specs/tracker/2026-04-22-tracker-design.md
 Same repo-wide TDD discipline. Additional notes:
 
 - Tests that hit the SQLite backend use a tempdir-backed DB per test (`t.TempDir()` + in-memory `file::memory:?cache=shared`). Do not share a DB file across tests.
-- `internal/broker` and `internal/federation` are the most concurrent modules. Run `go test -race` by default; flakes there are always real bugs.
+- `internal/broker`, `internal/federation`, and `internal/admission` are the most concurrent modules. Run `go test -race` by default; flakes there are always real bugs.
 - Use the Go workspace: a change in `shared/` that touches a proto struct will affect the tracker's compilation immediately; fix both sides in the same commit.
 
 ## Things that look surprising and aren't bugs
