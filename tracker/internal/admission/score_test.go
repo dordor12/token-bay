@@ -6,16 +6,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/tracker/internal/config"
 )
 
 func defaultScoreConfig() config.AdmissionConfig {
 	return config.AdmissionConfig{
-		TrialTierScore:               0.4,
-		AgingAlphaPerMinute:          0.05,
-		QueueTimeoutS:                300,
+		TrialTierScore:      0.4,
+		AgingAlphaPerMinute: 0.05,
+		QueueTimeoutS:       300,
 		ScoreWeights: config.AdmissionScoreWeights{
 			SettlementReliability: 0.30,
 			InverseDisputeRate:    0.10,
@@ -150,12 +149,9 @@ func TestClampInt_OutsideRange(t *testing.T) {
 }
 
 func TestFloorLog2Ratio(t *testing.T) {
-	assert.Equal(t, 0, floorLog2Ratio(1000, 1000))   // log2(1)
-	assert.Equal(t, 1, floorLog2Ratio(2000, 1000))   // log2(2)
-	assert.Equal(t, 3, floorLog2Ratio(8000, 1000))   // log2(8)
-	assert.Equal(t, -1, floorLog2Ratio(500, 1000))   // log2(0.5)
+	assert.Equal(t, 0, floorLog2Ratio(1000, 1000)) // log2(1)
+	assert.Equal(t, 1, floorLog2Ratio(2000, 1000)) // log2(2)
+	assert.Equal(t, 3, floorLog2Ratio(8000, 1000)) // log2(8)
+	assert.Equal(t, -1, floorLog2Ratio(500, 1000)) // log2(0.5)
 	assert.Equal(t, math.MinInt, floorLog2Ratio(0, 1000))
 }
-
-// Ensure require is used so the import isn't flagged as unused.
-var _ = require.New

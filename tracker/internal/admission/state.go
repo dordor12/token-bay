@@ -142,7 +142,11 @@ func consumerShardFor(shards []*consumerShard, id ids.IdentityID) *consumerShard
 	return shards[shardIndex(id, len(shards))]
 }
 
-// seederShardFor routes an ID to its shard.
+// seederShardFor — sibling of consumerShardFor for the seeder map.
+// First caller lands in Task 7 (supply aggregator); kept here so the
+// shard-routing pair is symmetric and one place to read.
+//
+//nolint:unused // wired up in Task 7 (supply aggregator)
 func seederShardFor(shards []*seederShard, id ids.IdentityID) *seederShard {
 	return shards[shardIndex(id, len(shards))]
 }
