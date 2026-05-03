@@ -61,8 +61,11 @@ func statusToErr(status tbproto.RpcStatus, e *tbproto.RpcError) error {
 	case tbproto.RpcStatus_RPC_STATUS_INVALID:
 		sentinel = ErrInvalidResponse
 	default:
-		// INTERNAL, NOT_FOUND, UNSPECIFIED — surface via RpcError only
+		// INTERNAL, NOT_FOUND, UNSPECIFIED — surface via RpcError only.
+		// (UNSPECIFIED can arise from a buggy or older tracker emitting the
+		// zero-value enum; we don't elevate it to a sentinel because it
+		// signals a wire-protocol violation rather than a typed condition.)
 		return rpcErr
 	}
-	return fmt.Errorf("%w: %s", sentinel, rpcErr.Error())
+	return fmt.Errorf("%w: %w", sentinel, rpcErr)
 }
