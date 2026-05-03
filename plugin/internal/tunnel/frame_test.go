@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -134,4 +135,35 @@ func TestWriteResponseError_EmptyMessage(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, writeResponseError(&buf, ""))
 	assert.Equal(t, []byte{0x01}, buf.Bytes())
+}
+
+func TestWriteResponseError_TruncatesAt4KiB(t *testing.T) {
+	var buf bytes.Buffer
+	overlong := strings.Repeat("x", 4096+128)
+	require.NoError(t, writeResponseError(&buf, overlong))
+
+	// status byte + at most 4 KiB of payload.
+	assert.Equal(t, byte(0x01), buf.Bytes()[0])
+	assert.LessOrEqual(t, buf.Len()-1, maxErrorBytes)
+	assert.Equal(t, maxErrorBytes, buf.Len()-1)
+}
+
+func TestReadErrorMessage_HappyPath(t *testing.T) {
+	r := bytes.NewReader([]byte("rate limited"))
+	got, err := readErrorMessage(r)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("rate limited"), got)
+}
+
+func TestReadErrorMessage_TruncatesAt4KiB(t *testing.T) {
+	overlong := bytes.Repeat([]byte("y"), maxErrorBytes+50)
+	got, err := readErrorMessage(bytes.NewReader(overlong))
+	require.NoError(t, err)
+	assert.Equal(t, maxErrorBytes, len(got))
+}
+
+func TestReadErrorMessage_EmptyOK(t *testing.T) {
+	got, err := readErrorMessage(bytes.NewReader(nil))
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }

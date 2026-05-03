@@ -18,6 +18,11 @@ const (
 // requestHeaderLen is the wire-format length-prefix size in bytes.
 const requestHeaderLen = 4
 
+// maxErrorBytes caps the length of the seeder→consumer error message
+// payload (in bytes). Both writer and reader enforce it, matching
+// the doc.go promise of "UTF-8 error message (≤ 4 KiB)".
+const maxErrorBytes = 4 << 10
+
 // writeRequest writes [4 BE length] [body] to w.
 func writeRequest(w io.Writer, body []byte) error {
 	var hdr [requestHeaderLen]byte
@@ -60,8 +65,9 @@ func writeResponseStatus(w io.Writer, s status) error {
 	return err
 }
 
-// writeResponseError writes [0x01] followed by msg's UTF-8 bytes.
-// The caller is expected to close the stream after writing.
+// writeResponseError writes [0x01] followed by msg's UTF-8 bytes,
+// truncated to maxErrorBytes. The caller is expected to close the
+// stream after writing.
 func writeResponseError(w io.Writer, msg string) error {
 	if _, err := w.Write([]byte{byte(statusError)}); err != nil {
 		return err
@@ -69,8 +75,20 @@ func writeResponseError(w io.Writer, msg string) error {
 	if msg == "" {
 		return nil
 	}
+	if len(msg) > maxErrorBytes {
+		msg = msg[:maxErrorBytes]
+	}
 	_, err := w.Write([]byte(msg))
 	return err
+}
+
+// readErrorMessage drains up to maxErrorBytes from r and returns
+// the bytes. Used by consumer-side Receive after readResponseStatus
+// reports statusError. EOF is not an error — the peer closing write
+// signals end-of-message.
+func readErrorMessage(r io.Reader) ([]byte, error) {
+	limited := io.LimitReader(r, int64(maxErrorBytes))
+	return io.ReadAll(limited)
 }
 
 // readResponseStatus consumes the first byte of the seeder→consumer
