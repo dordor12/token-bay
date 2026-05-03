@@ -3,8 +3,10 @@ package stunturn
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -607,4 +609,147 @@ func TestSweep_DoesNotTouchBuckets(t *testing.T) {
 	err = a.Charge(id8(2), 1, t0)
 	require.True(t, errors.Is(err, ErrThrottled),
 		"bucket should persist post-Sweep; got %v", err)
+}
+
+// TestConcurrent_AllocateResolveCharge fans out N goroutines that each
+// allocate, hit the session with K ResolveAndCharge calls, then release.
+// Race detector must stay clean and the final state must be empty.
+func TestConcurrent_AllocateResolveCharge(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	const N, K = 16, 32
+	cfg := AllocatorConfig{
+		MaxKbpsPerSeeder: 1024,
+		SessionTTL:       30 * time.Second,
+		Now:              func() time.Time { return t0 },
+		Rand:             rand.Reader, // real randomness for unique tokens
+	}
+	a, err := NewAllocator(cfg)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var reqID [16]byte
+			binary.BigEndian.PutUint64(reqID[:], uint64(i))
+			s, err := a.Allocate(id8(byte(i+1)), id8(byte(i+1)), reqID, t0)
+			if err != nil {
+				t.Errorf("Allocate: %v", err)
+				return
+			}
+			for j := 0; j < K; j++ {
+				if _, err := a.ResolveAndCharge(s.Token, 100, t0); err != nil {
+					t.Errorf("RAC: %v", err)
+					return
+				}
+			}
+			a.Release(s.SessionID)
+		}()
+	}
+	wg.Wait()
+
+	// Final state: zero sessions left.
+	assert.Equal(t, 0, a.Sweep(t0.Add(time.Hour)),
+		"all sessions should already be Released; Sweep finds nothing")
+}
+
+// TestConcurrent_DuplicateRequestRace: N goroutines race to Allocate
+// the same RequestID. Exactly one wins; the rest see ErrDuplicateRequest.
+func TestConcurrent_DuplicateRequestRace(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	const N = 32
+	cfg := AllocatorConfig{
+		MaxKbpsPerSeeder: 1024,
+		SessionTTL:       30 * time.Second,
+		Now:              func() time.Time { return t0 },
+		Rand:             rand.Reader,
+	}
+	a, err := NewAllocator(cfg)
+	require.NoError(t, err)
+	reqID := req8(42)
+
+	var wg sync.WaitGroup
+	wg.Add(N)
+	results := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := a.Allocate(id8(1), id8(2), reqID, t0)
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	wins, dupes := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrDuplicateRequest):
+			dupes++
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, wins, "exactly one Allocate should win")
+	assert.Equal(t, N-1, dupes, "the rest should see ErrDuplicateRequest")
+}
+
+// TestConcurrent_SweepWithChurn runs Sweep on a tight ticker against
+// goroutines that allocate/release. Race detector clean; no panics.
+func TestConcurrent_SweepWithChurn(t *testing.T) {
+	t0 := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	cfg := AllocatorConfig{
+		MaxKbpsPerSeeder: 1024,
+		SessionTTL:       30 * time.Second,
+		Now:              func() time.Time { return t0 },
+		Rand:             rand.Reader,
+	}
+	a, err := NewAllocator(cfg)
+	require.NoError(t, err)
+
+	stop := make(chan struct{})
+
+	// Sweeper.
+	var sweepWG sync.WaitGroup
+	sweepWG.Add(1)
+	go func() {
+		defer sweepWG.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = a.Sweep(t0.Add(time.Hour)) // ages everything; deletes whatever's there
+			}
+		}
+	}()
+
+	// Workers.
+	var wg sync.WaitGroup
+	const N, K = 8, 64
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < K; j++ {
+				var reqID [16]byte
+				binary.BigEndian.PutUint64(reqID[:], uint64(i*K+j))
+				s, err := a.Allocate(id8(byte(i+1)), id8(byte(i+1)), reqID, t0)
+				if err != nil {
+					t.Errorf("Allocate: %v", err)
+					return
+				}
+				_, _ = a.ResolveAndCharge(s.Token, 1, t0) // may race-with-Sweep; ok
+				a.Release(s.SessionID)
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	sweepWG.Wait()
 }
