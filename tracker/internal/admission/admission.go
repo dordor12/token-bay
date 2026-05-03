@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
@@ -16,7 +17,6 @@ import (
 // it fresh. One per tracker process. Construct via Open; tear down via Close.
 //
 // Fields are added incrementally as later tasks introduce them:
-//   - supply (atomic.Pointer[SupplySnapshot]) — Task 6
 //   - queue + queueMu — Task 8
 //   - aggregatorTick + demand — Task 7
 //   - attestRL — Task 12
@@ -27,6 +27,9 @@ type Subsystem struct {
 	pub       ed25519.PublicKey
 	trackerID ids.IdentityID
 	nowFn     func() time.Time
+
+	// supply snapshot published atomically by the aggregator (Task 7).
+	supply atomic.Pointer[SupplySnapshot]
 
 	// per-consumer credit state — sharded (Task 3).
 	consumerShards []*consumerShard
