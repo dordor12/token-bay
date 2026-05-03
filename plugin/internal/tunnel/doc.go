@@ -43,6 +43,16 @@
 // (default 1 MiB) and the error message at 4 KiB; oversize is
 // ErrFramingViolation.
 //
+// # Randomness
+//
+// Production code does not import crypto/rand directly except inside
+// selfSignedCert, where the X.509 stdlib needs an io.Reader for the
+// serial number and the certificate signature. Tunneling a Config
+// io.Reader through that path adds plumbing without buying anything
+// — the certificate is ephemeral and validated structurally, not by
+// trust roots. Tests use crypto/rand for ed25519.GenerateKey, which
+// is also the stdlib idiom.
+//
 // # Out of scope
 //
 // This package does NOT speak STUN, does NOT speak TURN, does NOT
