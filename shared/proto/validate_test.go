@@ -208,3 +208,69 @@ func TestValidateEntryBody_StarterGrantRejections(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRpcRequestRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		in   *RpcRequest
+		msg  string
+	}{
+		{"nil", nil, "is nil"},
+		{"unspecified", &RpcRequest{Method: RpcMethod_RPC_METHOD_UNSPECIFIED}, "Method invalid"},
+		{"out_of_range", &RpcRequest{Method: 999}, "Method invalid"},
+		{"oversize", &RpcRequest{
+			Method:  RpcMethod_RPC_METHOD_BROKER_REQUEST,
+			Payload: make([]byte, MaxRPCPayloadSize+1),
+		}, "Payload"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateRPCRequest(c.in)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), c.msg)
+		})
+	}
+}
+
+func TestValidateRpcRequestAccepts(t *testing.T) {
+	require.NoError(t, ValidateRPCRequest(&RpcRequest{Method: RpcMethod_RPC_METHOD_BALANCE}))
+}
+
+func TestValidateRpcResponseRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		in   *RpcResponse
+		msg  string
+	}{
+		{"nil", nil, "is nil"},
+		{"unspecified", &RpcResponse{Status: RpcStatus_RPC_STATUS_UNSPECIFIED}, "Status invalid"},
+		{"err_without_error", &RpcResponse{Status: RpcStatus_RPC_STATUS_INVALID}, "required"},
+		{"err_blank_code", &RpcResponse{
+			Status: RpcStatus_RPC_STATUS_INVALID,
+			Error:  &RpcError{Code: "", Message: "x"},
+		}, "required"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateRPCResponse(c.in)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), c.msg)
+		})
+	}
+}
+
+func TestValidateOfferAndSettlementPush(t *testing.T) {
+	require.Error(t, ValidateOfferPush(nil))
+	require.Error(t, ValidateOfferPush(&OfferPush{ConsumerId: make([]byte, 31)}))
+	require.NoError(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:   make([]byte, 32),
+		EnvelopeHash: make([]byte, 32),
+		Model:        "x",
+	}))
+	require.Error(t, ValidateSettlementPush(nil))
+	require.Error(t, ValidateSettlementPush(&SettlementPush{PreimageHash: make([]byte, 32)}))
+	require.NoError(t, ValidateSettlementPush(&SettlementPush{
+		PreimageHash: make([]byte, 32),
+		PreimageBody: []byte{1},
+	}))
+}
