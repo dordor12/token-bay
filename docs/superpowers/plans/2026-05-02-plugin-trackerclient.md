@@ -33,7 +33,8 @@ shared/
   Makefile                                    -- modify (PROTO_FILES += proto/rpc.proto)
 
 plugin/
-  go.mod                                      -- modify (add quic-go, singleflight, uuid)
+  go.mod                                      -- modify in Tasks 2 (uuid), 10 (quic-go), 15 (x/sync)
+  go.sum                                      -- modified alongside go.mod
   internal/
     trackerclient/
       doc.go                                  -- new
@@ -78,13 +79,13 @@ plugin/
 ## Task ordering rationale
 
 1. `shared/proto/rpc.proto` is a hard prerequisite — every other task imports its types. It lands first in a cross-cutting commit (touches only `shared/`).
-2. Plugin go.mod additions next — required so subsequent tasks can `import` the new dependencies.
-3. Foundation packages (errors → wire → transport interface → loopback driver) ship before any RPC code.
-4. mTLS pieces (`idtls`) ship before the QUIC transport (which needs them) and before connection logic.
-5. Connection + supervisor ship before any RPC method (because RPCs call `conn.Get(ctx)`).
-6. Balance cache ships alongside the `Balance` RPC method since they're tightly coupled.
-7. Push streams come after unary RPCs because they reuse the `wire` codec.
-8. `fakeserver` + integration test ship last (they exercise everything).
+2. Foundation packages (errors → wire → transport interface → loopback driver) ship before any RPC code.
+3. mTLS pieces (`idtls`) ship before the QUIC transport (which needs them) and before connection logic.
+4. Connection + supervisor ship before any RPC method (because RPCs call `conn.Get(ctx)`).
+5. Balance cache ships alongside the `Balance` RPC method since they're tightly coupled.
+6. Push streams come after unary RPCs because they reuse the `wire` codec.
+7. `fakeserver` + integration test ship last (they exercise everything).
+8. Runtime deps (`github.com/google/uuid`, `github.com/quic-go/quic-go`, `golang.org/x/sync`) are folded into the task that first imports each — the import in source drags the dep in via `go mod tidy`, so a separate "add deps" task would be a no-op.
 
 ---
 
@@ -653,56 +654,17 @@ EOF
 
 # Phase 2 — Plugin module bootstrap
 
-### Task 2: Add new runtime dependencies
-
-**Files:**
-- Modify: `plugin/go.mod`
-- Modify: `plugin/go.sum`
-
-- [ ] **Step 2.1: Add the dependencies**
-
-```bash
-cd plugin
-go get github.com/quic-go/quic-go@latest
-go get golang.org/x/sync@latest
-go get github.com/google/uuid@latest
-go mod tidy
-```
-
-- [ ] **Step 2.2: Sync the workspace**
-
-From repo root:
-```bash
-go work sync
-```
-
-- [ ] **Step 2.3: Verify the plugin still builds**
-
-```bash
-make -C plugin build
-```
-Expected: builds `plugin/bin/token-bay-sidecar` without errors.
-
-- [ ] **Step 2.4: Commit**
-
-```bash
-git add plugin/go.mod plugin/go.sum
-git commit -m "chore(plugin): add quic-go, x/sync, uuid for trackerclient
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-### Task 3: Skeleton package — `doc.go`, `types.go`, `errors.go`
+### Task 2: Skeleton package — `doc.go`, `types.go`, `errors.go`
 
 **Files:**
 - Create: `plugin/internal/trackerclient/doc.go`
 - Create: `plugin/internal/trackerclient/types.go`
 - Create: `plugin/internal/trackerclient/errors.go`
 - Create: `plugin/internal/trackerclient/errors_test.go`
+- Modify: `plugin/go.mod`
+- Modify: `plugin/go.sum`
 
-- [ ] **Step 3.1: Write `doc.go`**
+- [ ] **Step 2.1: Write `doc.go`**
 
 ```go
 // Package trackerclient is the plugin's long-lived mTLS QUIC client to a
@@ -717,7 +679,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 package trackerclient
 ```
 
-- [ ] **Step 3.2: Write `types.go`**
+- [ ] **Step 2.2: Write `types.go`**
 
 ```go
 package trackerclient
@@ -881,7 +843,7 @@ var (
 )
 ```
 
-- [ ] **Step 3.3: Write `errors.go`**
+- [ ] **Step 2.3: Write `errors.go`**
 
 ```go
 package trackerclient
@@ -952,7 +914,7 @@ func statusToErr(status tbproto.RpcStatus, e *tbproto.RpcError) error {
 }
 ```
 
-- [ ] **Step 3.4: Write `errors_test.go`**
+- [ ] **Step 2.4: Write `errors_test.go`**
 
 ```go
 package trackerclient
@@ -999,20 +961,28 @@ func TestRpcErrorNilSafe(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3.5: Run tests, expect PASS**
+- [ ] **Step 2.5: Pull in `github.com/google/uuid`**
+
+```bash
+cd plugin && go get github.com/google/uuid@latest && go mod tidy
+```
+
+- [ ] **Step 2.6: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/...
 ```
 Expected: PASS.
 
-- [ ] **Step 3.6: Commit**
+- [ ] **Step 2.7: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/doc.go \
         plugin/internal/trackerclient/types.go \
         plugin/internal/trackerclient/errors.go \
-        plugin/internal/trackerclient/errors_test.go
+        plugin/internal/trackerclient/errors_test.go \
+        plugin/go.mod \
+        plugin/go.sum
 git commit -m "feat(plugin/trackerclient): package skeleton + types + errors
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
@@ -1020,13 +990,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Config + Validate
+### Task 3: Config + Validate
 
 **Files:**
 - Create: `plugin/internal/trackerclient/config.go`
 - Create: `plugin/internal/trackerclient/config_test.go`
 
-- [ ] **Step 4.1: Write `config.go`**
+- [ ] **Step 3.1: Write `config.go`**
 
 ```go
 package trackerclient
@@ -1157,7 +1127,7 @@ func (cfg Config) Validate() error {
 var errMustOptional = errors.New("trackerclient: optional")
 ```
 
-- [ ] **Step 4.2: Write `config_test.go`**
+- [ ] **Step 3.2: Write `config_test.go`**
 
 ```go
 package trackerclient
@@ -1246,14 +1216,14 @@ func TestConfigDefaults(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4.3: Run tests, expect FAIL** (because `Transport` interface isn't declared yet)
+- [ ] **Step 3.3: Run tests, expect FAIL** (because `Transport` interface isn't declared yet)
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run Config
 ```
-Expected: FAIL with `undefined: Transport`. Resolved in Task 5.
+Expected: FAIL with `undefined: Transport`. Resolved in Task 4.
 
-- [ ] **Step 4.4: Add a temporary forward declaration**
+- [ ] **Step 3.4: Add a temporary forward declaration**
 
 Append to `plugin/internal/trackerclient/types.go`:
 
@@ -1282,14 +1252,14 @@ type Stream interface {
 }
 ```
 
-- [ ] **Step 4.5: Run tests, expect PASS**
+- [ ] **Step 3.5: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run Config
 ```
 Expected: PASS.
 
-- [ ] **Step 4.6: Commit**
+- [ ] **Step 3.6: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/config.go \
@@ -1306,13 +1276,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 3 — Wire framing and codec
 
-### Task 5: Length-prefixed deterministic-proto framing
+### Task 4: Length-prefixed deterministic-proto framing
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/wire/frame.go`
 - Create: `plugin/internal/trackerclient/internal/wire/frame_test.go`
 
-- [ ] **Step 5.1: Write `frame.go`**
+- [ ] **Step 4.1: Write `frame.go`**
 
 ```go
 // Package wire provides the length-prefixed deterministic-proto codec
@@ -1395,7 +1365,7 @@ func Read(r io.Reader, dst proto.Message, maxFrameSize int) error {
 }
 ```
 
-- [ ] **Step 5.2: Write `frame_test.go`**
+- [ ] **Step 4.2: Write `frame_test.go`**
 
 ```go
 package wire
@@ -1472,14 +1442,14 @@ func TestSequentialFramesOnOneStream(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5.3: Run tests, expect PASS**
+- [ ] **Step 4.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/internal/wire/...
 ```
 Expected: PASS.
 
-- [ ] **Step 5.4: Commit**
+- [ ] **Step 4.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/internal/wire/frame.go \
@@ -1491,13 +1461,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: RPC dispatch helper
+### Task 5: RPC dispatch helper
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/wire/codec.go`
 - Create: `plugin/internal/trackerclient/internal/wire/codec_test.go`
 
-- [ ] **Step 6.1: Write `codec.go`**
+- [ ] **Step 5.1: Write `codec.go`**
 
 ```go
 package wire
@@ -1545,7 +1515,7 @@ func UnmarshalResponse(resp *tbproto.RpcResponse, dst proto.Message) error {
 }
 ```
 
-- [ ] **Step 6.2: Write `codec_test.go`**
+- [ ] **Step 5.2: Write `codec_test.go`**
 
 ```go
 package wire
@@ -1589,14 +1559,14 @@ func TestUnmarshalResponseNilResp(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6.3: Run tests, expect PASS**
+- [ ] **Step 5.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/internal/wire/...
 ```
 Expected: PASS.
 
-- [ ] **Step 6.4: Commit**
+- [ ] **Step 5.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/internal/wire/codec.go \
@@ -1610,13 +1580,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 4 — Identity-bound TLS
 
-### Task 7: `internal/idtls` cert generation
+### Task 6: `internal/idtls` cert generation
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/idtls/cert.go`
 - Create: `plugin/internal/trackerclient/internal/idtls/cert_test.go`
 
-- [ ] **Step 7.1: Write `cert.go`**
+- [ ] **Step 6.1: Write `cert.go`**
 
 ```go
 // Package idtls binds the plugin's Ed25519 identity keypair to a TLS
@@ -1680,7 +1650,7 @@ func SPKIHashOfCert(cert *x509.Certificate) ([32]byte, error) {
 }
 ```
 
-- [ ] **Step 7.2: Write `cert_test.go`**
+- [ ] **Step 6.2: Write `cert_test.go`**
 
 ```go
 package idtls
@@ -1742,14 +1712,14 @@ func TestSPKIHashNilSafe(t *testing.T) {
 }
 ```
 
-- [ ] **Step 7.3: Run tests, expect PASS**
+- [ ] **Step 6.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/internal/idtls/...
 ```
 Expected: PASS.
 
-- [ ] **Step 7.4: Commit**
+- [ ] **Step 6.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/internal/idtls/cert.go \
@@ -1761,13 +1731,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 8: Identity-pinned `VerifyPeerCertificate`
+### Task 7: Identity-pinned `VerifyPeerCertificate`
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/idtls/verify.go`
 - Create: `plugin/internal/trackerclient/internal/idtls/verify_test.go`
 
-- [ ] **Step 8.1: Write `verify.go`**
+- [ ] **Step 7.1: Write `verify.go`**
 
 ```go
 package idtls
@@ -1873,7 +1843,7 @@ func serverVerifier(capture func([32]byte)) func([][]byte, [][]*x509.Certificate
 }
 ```
 
-- [ ] **Step 8.2: Write `verify_test.go`**
+- [ ] **Step 7.2: Write `verify_test.go`**
 
 ```go
 package idtls
@@ -1971,14 +1941,14 @@ func TestMakeClientTLSConfigShape(t *testing.T) {
 }
 ```
 
-- [ ] **Step 8.3: Run tests, expect PASS**
+- [ ] **Step 7.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/internal/idtls/...
 ```
 Expected: PASS.
 
-- [ ] **Step 8.4: Commit**
+- [ ] **Step 7.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/internal/idtls/verify.go \
@@ -1992,13 +1962,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 5 — Transport drivers
 
-### Task 9: Transport interface (move + canonicalize)
+### Task 8: Transport interface (move + canonicalize)
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/transport/transport.go`
 - Modify: `plugin/internal/trackerclient/types.go`
 
-- [ ] **Step 9.1: Write `transport.go`**
+- [ ] **Step 8.1: Write `transport.go`**
 
 ```go
 // Package transport defines the network seam for trackerclient.
@@ -2049,7 +2019,7 @@ type Stream interface {
 }
 ```
 
-- [ ] **Step 9.2: Adapt the package-level types to delegate to `internal/transport`**
+- [ ] **Step 8.2: Adapt the package-level types to delegate to `internal/transport`**
 
 Replace the temporary forward declarations in `plugin/internal/trackerclient/types.go` with type aliases (or remove them entirely and import directly in `config.go`/`conn.go`). For minimal churn, replace with aliases:
 
@@ -2076,7 +2046,7 @@ type Stream    = transport.Stream
 
 (Keep the existing `Ctx` alias and other types intact; do not remove them.)
 
-- [ ] **Step 9.3: Adapt `Config`'s `Signer`-to-Identity conversion**
+- [ ] **Step 8.3: Adapt `Config`'s `Signer`-to-Identity conversion**
 
 Append to `plugin/internal/trackerclient/types.go`:
 
@@ -2089,14 +2059,14 @@ func (s signerAsIdentity) PrivateKey() ed25519.PrivateKey { return s.Signer.Priv
 func (s signerAsIdentity) IdentityID() ids.IdentityID     { return s.Signer.IdentityID() }
 ```
 
-- [ ] **Step 9.4: Compile-check**
+- [ ] **Step 8.4: Compile-check**
 
 ```bash
 cd plugin && go build ./internal/trackerclient/...
 ```
 Expected: success.
 
-- [ ] **Step 9.5: Commit**
+- [ ] **Step 8.5: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/internal/transport/transport.go \
@@ -2108,13 +2078,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 10: Loopback transport driver
+### Task 9: Loopback transport driver
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/transport/loopback/loopback.go`
 - Create: `plugin/internal/trackerclient/internal/transport/loopback/loopback_test.go`
 
-- [ ] **Step 10.1: Write `loopback.go`**
+- [ ] **Step 9.1: Write `loopback.go`**
 
 ```go
 // Package loopback is an in-memory Transport for tests. Conns are paired
@@ -2286,7 +2256,7 @@ func (s *stream) Close() error {
 func (s *stream) CloseWrite() error { return s.out.Close() }
 ```
 
-- [ ] **Step 10.2: Write `loopback_test.go`**
+- [ ] **Step 9.2: Write `loopback_test.go`**
 
 ```go
 package loopback
@@ -2371,14 +2341,14 @@ func TestDriverDial(t *testing.T) {
 
 (Note: the `transport.Endpoint` value in the last test is constructed via a struct literal because the test file does not import `internal/transport` directly to keep it local. If lint flags it, simply import `transport` and use `transport.Endpoint{Addr: "test:9000"}` instead.)
 
-- [ ] **Step 10.3: Run tests, expect PASS**
+- [ ] **Step 9.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/internal/transport/loopback/...
 ```
 Expected: PASS.
 
-- [ ] **Step 10.4: Commit**
+- [ ] **Step 9.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/internal/transport/loopback/
@@ -2389,13 +2359,15 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 11: QUIC transport driver
+### Task 10: QUIC transport driver
 
 **Files:**
 - Create: `plugin/internal/trackerclient/internal/transport/quic/quic.go`
 - Create: `plugin/internal/trackerclient/internal/transport/quic/quic_test.go`
+- Modify: `plugin/go.mod`
+- Modify: `plugin/go.sum`
 
-- [ ] **Step 11.1: Write `quic.go`**
+- [ ] **Step 10.1: Write `quic.go`**
 
 ```go
 // Package quic is the production Transport driver. Wraps quic-go and
@@ -2505,7 +2477,7 @@ func (s *qStream) CloseWrite() error {
 
 (`quic-go` API names track v0.50+; if the actual version pulled in has slightly different signatures — e.g., `quic.Connection` vs `*quic.Conn` — adjust the type names but keep the methods/contract identical. Run `go vet` to confirm signatures match.)
 
-- [ ] **Step 11.2: Write `quic_test.go` (smoke test only — full integration in Task 24)**
+- [ ] **Step 10.2: Write `quic_test.go` (smoke test only — full integration in Task 21)**
 
 ```go
 package quic
@@ -2529,17 +2501,25 @@ func TestDialReturnsErrorOnMissingServer(t *testing.T) {
 }
 ```
 
-- [ ] **Step 11.3: Run tests, expect PASS**
+- [ ] **Step 10.3: Pull in `github.com/quic-go/quic-go`**
+
+```bash
+cd plugin && go get github.com/quic-go/quic-go@latest && go mod tidy
+```
+
+- [ ] **Step 10.4: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/internal/transport/quic/...
 ```
 Expected: PASS (the smoke test asserts dial fails, not succeeds).
 
-- [ ] **Step 11.4: Commit**
+- [ ] **Step 10.5: Commit**
 
 ```bash
-git add plugin/internal/trackerclient/internal/transport/quic/
+git add plugin/internal/trackerclient/internal/transport/quic/ \
+        plugin/go.mod \
+        plugin/go.sum
 git commit -m "feat(plugin/trackerclient/transport): production QUIC driver
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
@@ -2549,7 +2529,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 6 — Connection state, supervisor, and reconnect
 
-### Task 12: Connection lifecycle + supervisor + reconnect
+### Task 11: Connection lifecycle + supervisor + reconnect
 
 **Files:**
 - Create: `plugin/internal/trackerclient/conn.go`
@@ -2557,7 +2537,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - Create: `plugin/internal/trackerclient/reconnect.go`
 - Create: `plugin/internal/trackerclient/reconnect_test.go`
 
-- [ ] **Step 12.1: Write `conn.go`**
+- [ ] **Step 11.1: Write `conn.go`**
 
 ```go
 package trackerclient
@@ -2650,7 +2630,7 @@ func (h *connHolder) close() {
 var errSupervisorStopped = errors.New("trackerclient: supervisor stopped")
 ```
 
-- [ ] **Step 12.2: Write `reconnect.go`**
+- [ ] **Step 11.2: Write `reconnect.go`**
 
 ```go
 package trackerclient
@@ -2807,7 +2787,7 @@ func (s *supervisor) snapshot() ConnectionState {
 
 (Add `import "sync"` to the top of `reconnect.go`.)
 
-- [ ] **Step 12.3: Write `reconnect_test.go`**
+- [ ] **Step 11.3: Write `reconnect_test.go`**
 
 ```go
 package trackerclient
@@ -2841,14 +2821,14 @@ func TestBackoffDelayMonotonicEnvelope(t *testing.T) {
 }
 ```
 
-- [ ] **Step 12.4: Run tests, expect PASS**
+- [ ] **Step 11.4: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run Backoff
 ```
 Expected: PASS.
 
-- [ ] **Step 12.5: Commit**
+- [ ] **Step 11.5: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/conn.go \
@@ -2861,13 +2841,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 13: Top-level `Client` (New / Start / Close / Status / WaitConnected)
+### Task 12: Top-level `Client` (New / Start / Close / Status / WaitConnected)
 
 **Files:**
 - Create: `plugin/internal/trackerclient/trackerclient.go`
 - Create: `plugin/internal/trackerclient/trackerclient_test.go`
 
-- [ ] **Step 13.1: Write `trackerclient.go`**
+- [ ] **Step 12.1: Write `trackerclient.go`**
 
 ```go
 package trackerclient
@@ -2962,7 +2942,7 @@ func (c *Client) connect(ctx context.Context) (transport.Conn, error) {
 }
 ```
 
-- [ ] **Step 13.2: Write `trackerclient_test.go`**
+- [ ] **Step 12.2: Write `trackerclient_test.go`**
 
 ```go
 package trackerclient
@@ -3031,14 +3011,14 @@ func TestWaitConnectedTimesOut(t *testing.T) {
 }
 ```
 
-- [ ] **Step 13.3: Run tests, expect PASS**
+- [ ] **Step 12.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run 'TestNew|Start|Close|WaitConnected'
 ```
 Expected: PASS.
 
-- [ ] **Step 13.4: Commit**
+- [ ] **Step 12.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/trackerclient.go \
@@ -3052,13 +3032,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 7 — Unary RPC dispatch + 9 RPC methods
 
-### Task 14: Unary RPC dispatch helper
+### Task 13: Unary RPC dispatch helper
 
 **Files:**
 - Create: `plugin/internal/trackerclient/rpc.go`
 - Create: `plugin/internal/trackerclient/rpc_test.go`
 
-- [ ] **Step 14.1: Write `rpc.go`**
+- [ ] **Step 13.1: Write `rpc.go`**
 
 ```go
 package trackerclient
@@ -3133,7 +3113,7 @@ func isConnDead(conn interface{ Done() <-chan struct{} }) bool {
 }
 ```
 
-- [ ] **Step 14.2: Write a minimal `rpc_test.go` (full RPC tests come with each method)**
+- [ ] **Step 13.2: Write a minimal `rpc_test.go` (full RPC tests come with each method)**
 
 ```go
 package trackerclient
@@ -3151,14 +3131,14 @@ func TestIsConnDead(t *testing.T) {
 
 (Real coverage comes via the per-RPC tests below; this file exists so coverage tooling sees the package.)
 
-- [ ] **Step 14.3: Run tests, expect PASS**
+- [ ] **Step 13.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/...
 ```
 Expected: PASS.
 
-- [ ] **Step 14.4: Commit**
+- [ ] **Step 13.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/rpc.go plugin/internal/trackerclient/rpc_test.go
@@ -3169,14 +3149,14 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 15: `BrokerRequest`, `Settle`, `Enroll`
+### Task 14: `BrokerRequest`, `Settle`, `Enroll`
 
 **Files:**
 - Modify: `plugin/internal/trackerclient/rpc.go`
 - Create: `plugin/internal/trackerclient/rpc_methods_test.go`
 - Create: `plugin/internal/trackerclient/test/fakeserver/fakeserver.go` (skeleton)
 
-- [ ] **Step 15.1: Append the three method bodies to `rpc.go`**
+- [ ] **Step 14.1: Append the three method bodies to `rpc.go`**
 
 ```go
 // BrokerRequest sends an EnvelopeSigned and returns the seeder assignment.
@@ -3230,7 +3210,7 @@ func (c *Client) Enroll(ctx context.Context, r *EnrollRequest) (*EnrollResponse,
 }
 ```
 
-- [ ] **Step 15.2: Write a minimal `fakeserver` skeleton**
+- [ ] **Step 14.2: Write a minimal `fakeserver` skeleton**
 
 `plugin/internal/trackerclient/test/fakeserver/fakeserver.go`:
 
@@ -3343,7 +3323,7 @@ func (s *Server) respond(stream transport.Stream, status tbproto.RpcStatus, payl
 }
 ```
 
-- [ ] **Step 15.3: Write `rpc_methods_test.go` covering BrokerRequest / Settle / Enroll**
+- [ ] **Step 14.3: Write `rpc_methods_test.go` covering BrokerRequest / Settle / Enroll**
 
 ```go
 package trackerclient
@@ -3471,14 +3451,14 @@ func TestEnrollRoundTrip(t *testing.T) {
 }
 ```
 
-- [ ] **Step 15.4: Run tests, expect PASS**
+- [ ] **Step 14.4: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run 'BrokerRequest|Settle|Enroll'
 ```
 Expected: PASS.
 
-- [ ] **Step 15.5: Commit**
+- [ ] **Step 14.5: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/rpc.go \
@@ -3491,7 +3471,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 16: Balance + balance cache + `BalanceCached`
+### Task 15: Balance + balance cache + `BalanceCached`
 
 **Files:**
 - Modify: `plugin/internal/trackerclient/rpc.go`
@@ -3499,8 +3479,10 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - Create: `plugin/internal/trackerclient/balance_cache_test.go`
 - Modify: `plugin/internal/trackerclient/trackerclient.go` (initialize cache, hook supervisor invalidation)
 - Modify: `plugin/internal/trackerclient/rpc_methods_test.go` (Balance round-trip)
+- Modify: `plugin/go.mod`
+- Modify: `plugin/go.sum`
 
-- [ ] **Step 16.1: Append `Balance` to `rpc.go`**
+- [ ] **Step 15.1: Append `Balance` to `rpc.go`**
 
 ```go
 // Balance fetches a fresh signed balance snapshot from the tracker.
@@ -3520,7 +3502,7 @@ func (c *Client) Balance(ctx context.Context, id ids.IdentityID) (*tbproto.Signe
 
 (Add `"github.com/token-bay/token-bay/shared/ids"` to the imports of `rpc.go`.)
 
-- [ ] **Step 16.2: Write `balance_cache.go`**
+- [ ] **Step 15.2: Write `balance_cache.go`**
 
 ```go
 package trackerclient
@@ -3610,7 +3592,7 @@ func (b *balanceCache) invalidate() {
 }
 ```
 
-- [ ] **Step 16.3: Wire the cache into `Client`**
+- [ ] **Step 15.3: Wire the cache into `Client`**
 
 Edit `trackerclient.go`. In `New`:
 
@@ -3632,7 +3614,7 @@ func (c *Client) BalanceCached(ctx context.Context, id ids.IdentityID) (*tbproto
 }
 ```
 
-- [ ] **Step 16.4: Write `balance_cache_test.go`**
+- [ ] **Step 15.4: Write `balance_cache_test.go`**
 
 ```go
 package trackerclient
@@ -3731,7 +3713,7 @@ func TestBalanceCachePropagatesError(t *testing.T) {
 }
 ```
 
-- [ ] **Step 16.5: Add a Balance round-trip in `rpc_methods_test.go`**
+- [ ] **Step 15.5: Add a Balance round-trip in `rpc_methods_test.go`**
 
 Append:
 
@@ -3762,21 +3744,29 @@ func TestBalanceCachedRoundTrip(t *testing.T) {
 
 (Add `"time"` to that file's imports if not already present.)
 
-- [ ] **Step 16.6: Run tests, expect PASS**
+- [ ] **Step 15.6: Pull in `golang.org/x/sync`**
+
+```bash
+cd plugin && go get golang.org/x/sync@latest && go mod tidy
+```
+
+- [ ] **Step 15.7: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run 'Balance'
 ```
 Expected: PASS.
 
-- [ ] **Step 16.7: Commit**
+- [ ] **Step 15.8: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/balance_cache.go \
         plugin/internal/trackerclient/balance_cache_test.go \
         plugin/internal/trackerclient/rpc.go \
         plugin/internal/trackerclient/trackerclient.go \
-        plugin/internal/trackerclient/rpc_methods_test.go
+        plugin/internal/trackerclient/rpc_methods_test.go \
+        plugin/go.mod \
+        plugin/go.sum
 git commit -m "feat(plugin/trackerclient): Balance + TTL singleflight cache
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
@@ -3784,13 +3774,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 17: `UsageReport`, `Advertise`, `TransferRequest`
+### Task 16: `UsageReport`, `Advertise`, `TransferRequest`
 
 **Files:**
 - Modify: `plugin/internal/trackerclient/rpc.go`
 - Modify: `plugin/internal/trackerclient/rpc_methods_test.go`
 
-- [ ] **Step 17.1: Append the three method bodies to `rpc.go`**
+- [ ] **Step 16.1: Append the three method bodies to `rpc.go`**
 
 ```go
 // UsageReport is sent by the seeder after a served request completes.
@@ -3850,7 +3840,7 @@ func (c *Client) TransferRequest(ctx context.Context, tr *TransferRequest) (*Tra
 }
 ```
 
-- [ ] **Step 17.2: Add round-trip tests**
+- [ ] **Step 16.2: Add round-trip tests**
 
 Append to `rpc_methods_test.go`:
 
@@ -3901,14 +3891,14 @@ func TestTransferRequestRoundTrip(t *testing.T) {
 }
 ```
 
-- [ ] **Step 17.3: Run tests, expect PASS**
+- [ ] **Step 16.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run 'UsageReport|Advertise|TransferRequest'
 ```
 Expected: PASS.
 
-- [ ] **Step 17.4: Commit**
+- [ ] **Step 16.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/rpc.go plugin/internal/trackerclient/rpc_methods_test.go
@@ -3919,13 +3909,13 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 18: `StunAllocate` + `TurnRelayOpen`
+### Task 17: `StunAllocate` + `TurnRelayOpen`
 
 **Files:**
 - Modify: `plugin/internal/trackerclient/rpc.go`
 - Modify: `plugin/internal/trackerclient/rpc_methods_test.go`
 
-- [ ] **Step 18.1: Append the two methods to `rpc.go`**
+- [ ] **Step 17.1: Append the two methods to `rpc.go`**
 
 ```go
 // StunAllocate asks the tracker to reflect the client's external address.
@@ -3954,7 +3944,7 @@ func (c *Client) TurnRelayOpen(ctx context.Context, sessionID uuid.UUID) (*Relay
 
 (Add `"net/netip"` and `"github.com/google/uuid"` to the imports of `rpc.go`.)
 
-- [ ] **Step 18.2: Add round-trip tests**
+- [ ] **Step 17.2: Add round-trip tests**
 
 Append to `rpc_methods_test.go`:
 
@@ -3990,14 +3980,14 @@ func TestTurnRelayOpenRoundTrip(t *testing.T) {
 }
 ```
 
-- [ ] **Step 18.3: Run tests, expect PASS**
+- [ ] **Step 17.3: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run 'StunAllocate|TurnRelayOpen'
 ```
 Expected: PASS.
 
-- [ ] **Step 18.4: Commit**
+- [ ] **Step 17.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/rpc.go plugin/internal/trackerclient/rpc_methods_test.go
@@ -4010,14 +4000,14 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 8 — Push streams
 
-### Task 19: Heartbeat sender + reader
+### Task 18: Heartbeat sender + reader
 
 **Files:**
 - Create: `plugin/internal/trackerclient/heartbeat.go`
 - Create: `plugin/internal/trackerclient/heartbeat_test.go`
 - Modify: `plugin/internal/trackerclient/reconnect.go` (start heartbeat post-connect, propagate miss-driven teardown)
 
-- [ ] **Step 19.1: Write `heartbeat.go`**
+- [ ] **Step 18.1: Write `heartbeat.go`**
 
 ```go
 package trackerclient
@@ -4097,7 +4087,7 @@ func runHeartbeat(
 }
 ```
 
-- [ ] **Step 19.2: Wire heartbeat into the supervisor**
+- [ ] **Step 18.2: Wire heartbeat into the supervisor**
 
 Edit `reconnect.go`. After `s.holder.set(conn)` in `run()`, replace the existing block ending with the connection-Done select with:
 
@@ -4132,7 +4122,7 @@ Edit `reconnect.go`. After `s.holder.set(conn)` in `run()`, replace the existing
         hbCancel()
 ```
 
-- [ ] **Step 19.3: Write `heartbeat_test.go`**
+- [ ] **Step 18.3: Write `heartbeat_test.go`**
 
 ```go
 package trackerclient
@@ -4239,14 +4229,14 @@ func TestHeartbeatMissTearsDown(t *testing.T) {
 }
 ```
 
-- [ ] **Step 19.4: Run tests, expect PASS**
+- [ ] **Step 18.4: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run Heartbeat -race
 ```
 Expected: PASS.
 
-- [ ] **Step 19.5: Commit**
+- [ ] **Step 18.5: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/heartbeat.go \
@@ -4259,7 +4249,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 20: `OfferHandler` push acceptor
+### Task 19: `OfferHandler` push acceptor
 
 **Files:**
 - Create: `plugin/internal/trackerclient/push_offers.go`
@@ -4267,7 +4257,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - Modify: `plugin/internal/trackerclient/reconnect.go` (start the offer acceptor when handler is set)
 - Modify: `plugin/internal/trackerclient/test/fakeserver/fakeserver.go` (add a `PushOffer` helper)
 
-- [ ] **Step 20.1: Write `push_offers.go`**
+- [ ] **Step 19.1: Write `push_offers.go`**
 
 ```go
 package trackerclient
@@ -4346,7 +4336,7 @@ func handleOffer(ctx context.Context, stream transport.Stream, h OfferHandler, m
 }
 ```
 
-- [ ] **Step 20.2: Add a `PushOffer` helper to `fakeserver.go`**
+- [ ] **Step 19.2: Add a `PushOffer` helper to `fakeserver.go`**
 
 Append to `fakeserver/fakeserver.go`:
 
@@ -4373,7 +4363,7 @@ func (s *Server) PushOffer(ctx context.Context, push *tbproto.OfferPush) (*tbpro
 }
 ```
 
-- [ ] **Step 20.3: Wire the acceptor into the supervisor**
+- [ ] **Step 19.3: Wire the acceptor into the supervisor**
 
 Edit `reconnect.go`. After the heartbeat goroutine launch, before the `select`:
 
@@ -4383,7 +4373,7 @@ Edit `reconnect.go`. After the heartbeat goroutine launch, before the `select`:
         }
 ```
 
-- [ ] **Step 20.4: Write `push_offers_test.go`**
+- [ ] **Step 19.4: Write `push_offers_test.go`**
 
 ```go
 package trackerclient
@@ -4454,7 +4444,7 @@ func newDriver(t *testing.T, srv *loopbackConn) *loopbackDriverShim {
 }
 
 // (Note: this test file expects the shim helpers in trackerclient_test.go;
-// add them once if not already present — see Task 15 helpers.)
+// add them once if not already present — see Task 14 helpers.)
 
 func TestOfferHandlerAccept(t *testing.T) {
     c, fake, cleanup := newWiredClientWithOffer(t, true)
@@ -4506,16 +4496,16 @@ func TestOfferHandlerInvalidPushRejects(t *testing.T) {
 }
 ```
 
-(`loopbackConn`, `loopbackPair`, `loopbackDriverShim`, `makeDriver` should be small in-file helpers in a shared `helpers_test.go`. If they don't exist yet, fold them into Task 15's `newWiredClient` helper file by extracting it into `helpers_test.go` and reusing it here.)
+(`loopbackConn`, `loopbackPair`, `loopbackDriverShim`, `makeDriver` should be small in-file helpers in a shared `helpers_test.go`. If they don't exist yet, fold them into Task 14's `newWiredClient` helper file by extracting it into `helpers_test.go` and reusing it here.)
 
-- [ ] **Step 20.5: Run tests, expect PASS**
+- [ ] **Step 19.5: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run Offer -race
 ```
 Expected: PASS.
 
-- [ ] **Step 20.6: Commit**
+- [ ] **Step 19.6: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/push_offers.go \
@@ -4529,7 +4519,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 21: `SettlementHandler` push acceptor
+### Task 20: `SettlementHandler` push acceptor
 
 **Files:**
 - Create: `plugin/internal/trackerclient/push_settlements.go`
@@ -4538,7 +4528,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - Modify: `plugin/internal/trackerclient/push_offers.go` (factor demux of accepted streams)
 - Modify: `plugin/internal/trackerclient/test/fakeserver/fakeserver.go` (add `PushSettlement` helper)
 
-- [ ] **Step 21.1: Demux design**
+- [ ] **Step 20.1: Demux design**
 
 Both `OfferPush` and `SettlementPush` arrive on server-initiated streams. The first frame's wire shape is sufficient to discriminate (proto unmarshalling is forgiving but field numbers don't collide between the two messages — `OfferPush` uses tags 1–5, `SettlementPush` uses tags 1–2 with bytes types).
 
@@ -4552,7 +4542,7 @@ To avoid heuristic dispatch, prepend a 1-byte stream-class tag the server writes
 
 Rationale: cheap, unambiguous, matches the spec's "push streams are demuxed by first message type" without a regex on a self-describing format.
 
-- [ ] **Step 21.2: Write `push_settlements.go`**
+- [ ] **Step 20.2: Write `push_settlements.go`**
 
 ```go
 package trackerclient
@@ -4628,7 +4618,7 @@ func handleSettlement(ctx context.Context, stream transport.Stream, h Settlement
 }
 ```
 
-- [ ] **Step 21.3: Update `runOfferAcceptor` to be a no-op (acceptor is now `runPushAcceptor`)**
+- [ ] **Step 20.3: Update `runOfferAcceptor` to be a no-op (acceptor is now `runPushAcceptor`)**
 
 Replace the body of `runOfferAcceptor` in `push_offers.go` with a stub that delegates:
 
@@ -4638,7 +4628,7 @@ func runOfferAcceptor(ctx context.Context, conn transport.Conn, h OfferHandler, 
 }
 ```
 
-- [ ] **Step 21.4: Update the supervisor to use the unified acceptor**
+- [ ] **Step 20.4: Update the supervisor to use the unified acceptor**
 
 In `reconnect.go`, replace the `runOfferAcceptor` launch with:
 
@@ -4648,7 +4638,7 @@ In `reconnect.go`, replace the `runOfferAcceptor` launch with:
         }
 ```
 
-- [ ] **Step 21.5: Update `fakeserver.PushOffer` and add `PushSettlement` to write the tag byte**
+- [ ] **Step 20.5: Update `fakeserver.PushOffer` and add `PushSettlement` to write the tag byte**
 
 Edit `fakeserver/fakeserver.go`. Replace `PushOffer` body to write the tag first:
 
@@ -4695,7 +4685,7 @@ func (s *Server) PushSettlement(ctx context.Context, push *tbproto.SettlementPus
 }
 ```
 
-- [ ] **Step 21.6: Write `push_settlements_test.go`**
+- [ ] **Step 20.6: Write `push_settlements_test.go`**
 
 ```go
 package trackerclient
@@ -4765,14 +4755,14 @@ func TestSettlementHandlerAck(t *testing.T) {
 }
 ```
 
-- [ ] **Step 21.7: Run tests, expect PASS**
+- [ ] **Step 20.7: Run tests, expect PASS**
 
 ```bash
 cd plugin && go test ./internal/trackerclient/... -run 'Offer|Settlement' -race
 ```
 Expected: PASS.
 
-- [ ] **Step 21.8: Commit**
+- [ ] **Step 20.8: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/push_settlements.go \
@@ -4789,12 +4779,12 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 9 — End-to-end real QUIC
 
-### Task 22: Integration test against real `quic-go` server
+### Task 21: Integration test against real `quic-go` server
 
 **Files:**
 - Create: `plugin/internal/trackerclient/test/integration_test.go`
 
-- [ ] **Step 22.1: Write the integration test**
+- [ ] **Step 21.1: Write the integration test**
 
 ```go
 //go:build integration
@@ -4950,14 +4940,14 @@ func TestQuicMismatchedSPKIFails(t *testing.T) {
 }
 ```
 
-- [ ] **Step 22.2: Run the integration suite**
+- [ ] **Step 21.2: Run the integration suite**
 
 ```bash
 cd plugin && go test -tags=integration -race ./internal/trackerclient/test/...
 ```
 Expected: PASS.
 
-- [ ] **Step 22.3: Add the integration target to `plugin/Makefile`**
+- [ ] **Step 21.3: Add the integration target to `plugin/Makefile`**
 
 Append to `plugin/Makefile`:
 
@@ -4966,7 +4956,7 @@ test-integration:
 	go test -tags=integration -race ./internal/trackerclient/test/...
 ```
 
-- [ ] **Step 22.4: Commit**
+- [ ] **Step 21.4: Commit**
 
 ```bash
 git add plugin/internal/trackerclient/test/integration_test.go plugin/Makefile
@@ -4979,12 +4969,12 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 # Phase 10 — Wrap-up
 
-### Task 23: Plugin CLAUDE.md update + repo-wide verification
+### Task 22: Plugin CLAUDE.md update + repo-wide verification
 
 **Files:**
 - Modify: `plugin/CLAUDE.md`
 
-- [ ] **Step 23.1: Update plugin/CLAUDE.md with the new module**
+- [ ] **Step 22.1: Update plugin/CLAUDE.md with the new module**
 
 Add to the project-layout list (under `internal/<module>/`):
 
@@ -4992,28 +4982,28 @@ Add to the project-layout list (under `internal/<module>/`):
 - `internal/trackerclient/` — long-lived mTLS QUIC client to the regional tracker. Owns connection lifecycle, reconnect, heartbeat, the nine unary RPCs, and the offer/settlement push acceptors. See `docs/superpowers/specs/plugin/2026-05-02-trackerclient-design.md`.
 ```
 
-- [ ] **Step 23.2: Run the full plugin test suite with race**
+- [ ] **Step 22.2: Run the full plugin test suite with race**
 
 ```bash
 make -C plugin check
 ```
 Expected: PASS, ≥ 90% line coverage on `internal/trackerclient/...`.
 
-- [ ] **Step 23.3: Run the full repo make check**
+- [ ] **Step 22.3: Run the full repo make check**
 
 ```bash
 make check
 ```
 Expected: PASS across `shared/`, `plugin/`, `tracker/`.
 
-- [ ] **Step 23.4: Run the QUIC integration suite**
+- [ ] **Step 22.4: Run the QUIC integration suite**
 
 ```bash
 make -C plugin test-integration
 ```
 Expected: PASS.
 
-- [ ] **Step 23.5: Commit**
+- [ ] **Step 22.5: Commit**
 
 ```bash
 git add plugin/CLAUDE.md
@@ -5027,31 +5017,31 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ## Self-review
 
 **Spec coverage:**
-- §3.3 Transport interface → Task 9.
-- §4.1 Config / TrackerEndpoint / Signer → Task 4.
-- §4.2 Client / Start / Close / Status / WaitConnected → Task 13.
-- §4.3 nine unary RPCs → Tasks 15 (BrokerRequest, Settle, Enroll), 16 (Balance + cache + BalanceCached), 17 (UsageReport, Advertise, TransferRequest), 18 (StunAllocate, TurnRelayOpen).
-- §4.4 OfferHandler / SettlementHandler → Tasks 20, 21.
-- §4.5 Errors taxonomy → Task 3.
-- §5.1/5.2 framing + dispatch → Tasks 5, 6.
+- §3.3 Transport interface → Task 8.
+- §4.1 Config / TrackerEndpoint / Signer → Task 3.
+- §4.2 Client / Start / Close / Status / WaitConnected → Task 12.
+- §4.3 nine unary RPCs → Tasks 14 (BrokerRequest, Settle, Enroll), 15 (Balance + cache + BalanceCached), 16 (UsageReport, Advertise, TransferRequest), 17 (StunAllocate, TurnRelayOpen).
+- §4.4 OfferHandler / SettlementHandler → Tasks 19, 20.
+- §4.5 Errors taxonomy → Task 2.
+- §5.1/5.2 framing + dispatch → Tasks 4, 5.
 - §5.3 RPC schema in shared/proto → Task 1.
-- §5.4 mTLS + SPKI pinning → Tasks 7, 8.
-- §6 reconnect/heartbeat/durability → Tasks 12, 19.
-- §7 balance cache → Task 16.
-- §8 test pyramid: unit (every task ships *_test.go), component (Tasks 15–21 use loopback + fakeserver), integration (Task 22), race (every test file is run under `-race` per Makefile), golden (Task 1 ships the rpc.proto goldens). Coverage assertion at Task 23.2.
-- §9 dependencies → Task 2.
+- §5.4 mTLS + SPKI pinning → Tasks 6, 7.
+- §6 reconnect/heartbeat/durability → Tasks 11, 18.
+- §7 balance cache → Task 15.
+- §8 test pyramid: unit (every task ships *_test.go), component (Tasks 14–20 use loopback + fakeserver), integration (Task 21), race (every test file is run under `-race` per Makefile), golden (Task 1 ships the rpc.proto goldens). Coverage assertion at Task 22.2.
+- §9 dependencies → folded into the tasks that first import each dep: `github.com/google/uuid` (Task 2), `github.com/quic-go/quic-go` (Task 10), `golang.org/x/sync` (Task 15).
 - §10 open questions: heartbeat-stream identification → method-zero marker is documented in Task 1's `rpc.proto` comment; Signer location → re-declared here, future identity plan converges.
-- §11 failure modes: empty endpoints (Task 4), SPKI mismatch (Tasks 8, 22), heartbeat stalls (Task 19), connection drops mid-RPC (Task 14's isConnDead path), MaxFrameSize exceeded (Task 5), balance expiry (Task 16), handler panics (handlers run in goroutines per Task 20/21; supervisor goroutine recovery is intentionally NOT added — caller-supplied handlers panicking is a caller bug; the supervisor's accept-loop survives because each push runs in its own goroutine).
-- §12 acceptance criteria mapped to verification at Task 23.
+- §11 failure modes: empty endpoints (Task 3), SPKI mismatch (Tasks 7, 21), heartbeat stalls (Task 18), connection drops mid-RPC (Task 13's isConnDead path), MaxFrameSize exceeded (Task 4), balance expiry (Task 15), handler panics (handlers run in goroutines per Task 19/20; supervisor goroutine recovery is intentionally NOT added — caller-supplied handlers panicking is a caller bug; the supervisor's accept-loop survives because each push runs in its own goroutine).
+- §12 acceptance criteria mapped to verification at Task 22.
 
 **Placeholder scan:** No `TBD`/`TODO`/"implement later" present in any code block. The "open question" call-outs in the design spec §10 are intentional and out of scope for v1.
 
 **Type consistency:**
-- `OfferDecision` (struct) used in both `Offer` push handler signatures and as the response type — consistent across Tasks 20/21.
-- `Signer` interface declared in Task 3 (`types.go`) with three methods: `Sign(msg []byte) ([]byte, error)`, `PrivateKey() ed25519.PrivateKey`, `IdentityID() ids.IdentityID`. Used identically in Task 4's Config and Task 9's `signerAsIdentity` adapter.
-- `Transport`, `Conn`, `Stream` in Task 4 are forward declarations; Task 9 replaces them with type aliases of `internal/transport`. Aliases keep the public surface stable across refactor.
-- `BalanceCached` and `Balance` both return `*tbproto.SignedBalanceSnapshot` — Task 16 keeps these consistent.
-- `RpcMethod_RPC_METHOD_*` constant names match the proto file in Task 1 throughout Tasks 14–18.
+- `OfferDecision` (struct) used in both `Offer` push handler signatures and as the response type — consistent across Tasks 19/20.
+- `Signer` interface declared in Task 2 (`types.go`) with three methods: `Sign(msg []byte) ([]byte, error)`, `PrivateKey() ed25519.PrivateKey`, `IdentityID() ids.IdentityID`. Used identically in Task 3's Config and Task 8's `signerAsIdentity` adapter.
+- `Transport`, `Conn`, `Stream` in Task 3 are forward declarations; Task 8 replaces them with type aliases of `internal/transport`. Aliases keep the public surface stable across refactor.
+- `BalanceCached` and `Balance` both return `*tbproto.SignedBalanceSnapshot` — Task 15 keeps these consistent.
+- `RpcMethod_RPC_METHOD_*` constant names match the proto file in Task 1 throughout Tasks 13–17.
 
 ---
 
