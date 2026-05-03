@@ -36,6 +36,7 @@ func defaultScoreConfig() config.AdmissionConfig {
 		PressureRejectThreshold:      1.5,
 		QueueCap:                     512,
 		MaxAttestationScoreImported:  0.95,
+		HeartbeatFreshnessDecayMaxS:  300,
 	}
 }
 

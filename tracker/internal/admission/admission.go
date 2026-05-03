@@ -31,6 +31,10 @@ type Subsystem struct {
 	// supply snapshot published atomically by the aggregator (Task 7).
 	supply atomic.Pointer[SupplySnapshot]
 
+	// demand EWMA and aggregator tick channel (Task 7).
+	demand         demandTracker
+	aggregatorTick chan time.Time
+
 	// per-consumer credit state — sharded (Task 3).
 	consumerShards []*consumerShard
 
@@ -109,8 +113,7 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	s.consumerShards = newConsumerShards(registry.DefaultShardCount)
 	s.seederShards = newSeederShards(registry.DefaultShardCount)
 
-	// Background goroutines (aggregator, queue drainer) are started in later
-	// tasks. Stub for now so Close still works.
+	s.startAggregator()
 	return s, nil
 }
 
