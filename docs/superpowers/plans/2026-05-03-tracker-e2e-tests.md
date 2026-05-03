@@ -31,7 +31,7 @@ Tests are fully hermetic — `t.TempDir()` for every filesystem path, determinis
 - Broker selection scoring — needs `internal/broker`. The composed-state harness today registers seeders and runs `registry.Match` (the candidate-set step of §5.1); the scoring step (α·reputation + β·headroom − γ·rtt − δ·load) is broker territory.
 - Admin HTTP API — needs `internal/admin`. `GET /health`, `GET /stats`, peer-management endpoints all wait on that subsystem.
 - Federation peer protocol — needs `internal/federation`. Peer-tracker handshake, Merkle-root gossip, cross-region transfers all deferred.
-- STUN/TURN — needs `internal/stunturn`.
+- STUN/TURN and NAT-traversal — needs `internal/stunturn`. The deferred test shapes (loopback STUN binding, loopback TURN relay round-trip, netns-based NAT-simulation matrix) are sketched in [Network surface — deferred test shapes](#network-surface--deferred-test-shapes-gated-on-internalstunturn) below; that section is the testing contract the eventual `internal/stunturn` plan should land against.
 - Reputation freeze list — needs `internal/reputation`.
 - The `make run-local` flow — `scripts/dev-run-local.sh` exits non-zero today by design (no `run` subcommand yet). This plan does not introduce one.
 
@@ -48,6 +48,7 @@ Tests are fully hermetic — `t.TempDir()` for every filesystem path, determinis
 7. [Task 5: Composed lifecycle — config → ledger → balance round-trip](#task-5-composed-lifecycle--config--ledger--balance-round-trip)
 8. [Task 6: Composed lifecycle — registry candidate matching against config-derived shape](#task-6-composed-lifecycle--registry-candidate-matching-against-config-derived-shape)
 9. [Task 7: Restart-survives-disk lifecycle + suite green check](#task-7-restart-survives-disk-lifecycle--suite-green-check)
+10. [Network surface — deferred test shapes (gated on `internal/stunturn`)](#network-surface--deferred-test-shapes-gated-on-internalstunturn)
 
 ---
 
@@ -944,6 +945,66 @@ These notes record the cross-spec consistency checks already done while writing 
 - The e2e tests use `package e2e_test` (external test package). Helpers in `_test.go` files are visible only inside the package — that's why the binary-build cache, `runTracker`, and `newComposedState` all live in `helpers_test.go`, not in a separate `helpers/` subpackage that other tests could import.
 - Wall-time budget: the helpers' `sync.Once` guards `go build`, so the cost is paid once per `go test` run regardless of subtest count. On a warm `go build` cache the build is sub-second; on cold cache it's ~2s. The e2e suite stays under 3s wall time on a typical dev machine. The full `make -C tracker test` should remain well under its existing ceiling.
 
+## Network surface — deferred test shapes (gated on `internal/stunturn`)
+
+The tracker spec §5.4 (STUN reflection + TURN relay) and acceptance criterion §11 ("STUN hole-punching succeeds on ≥ 80% of consumer-seeder pairs with common home NATs. TURN fallback on the remainder.") describe a network-surface contract that this plan deliberately does not exercise — `internal/stunturn` is empty at HEAD. There's no UDP listener to bind a STUN request against, no relay to allocate a session through.
+
+This section sketches the three test shapes the eventual `internal/stunturn` plan should land alongside its production code. They aren't tasks in this plan; they're a contract so the stunturn plan has something concrete to build against rather than re-deriving the testing strategy from the spec.
+
+### A. STUN reflector — loopback binding test
+
+**Surface:** the tracker's STUN-like reflector (spec §5.4). Refreshes seeder `external_addr` on each heartbeat; consumers also call `stun_allocate()` at request time to learn their own reflexive address.
+
+**Test shape:** spin the tracker's UDP listener on `127.0.0.1:0`, send a STUN binding request from a UDP socket bound to a different loopback port, assert the response's `XOR-MAPPED-ADDRESS` carries the request socket's `127.0.0.1:<source-port>` (not a hardcoded value, not the listener's own address). Hermetic — no NAT, no namespaces, ~10ms wall.
+
+**Property under test:** the reflector reflects the *source* address it observes off the inbound packet, exactly. A bug that hardcoded the listener's address, swapped src/dst, or returned a stale cached address all fail this.
+
+**File:** `tracker/test/e2e/stun_test.go`. New helpers: `dialUDPLoopback(t)` returning a `*net.UDPConn` on a fresh port, `sendBindingRequest(t, conn, srvAddr)` returning the parsed STUN response. Build tag: none (loopback works on every platform).
+
+### B. TURN relay — loopback round-trip + per-seeder rate limit
+
+**Surface:** lazy-allocated TURN relay per `request_id` (spec §5.4). Both sides connect with a session token; the tracker rate-limits relay allocations per seeder to prevent bandwidth abuse.
+
+**Test shape — round-trip:** two stub clients (consumer + seeder), each on its own UDP socket, both call `turn_relay_open(session_id)` on the tracker; the consumer writes N bytes; the seeder reads them out byte-identical. Reverse direction too (full duplex). N spans a small message and a multi-MTU stream so a misset MTU cap surfaces.
+
+**Test shape — rate limit:** a single seeder allocates relay sessions in a loop; assert the (limit+1)th allocation rejects with the documented error code. Verifies the spec's "rate-limited per seeder to prevent bandwidth abuse" without needing real bandwidth.
+
+**File:** `tracker/test/e2e/turn_relay_test.go`. The plugin-stub side reuses the broker-RPC helper that the listener-e2e plan will land — TURN allocation goes through the same long-lived plugin connection, not a separate port. Build tag: none.
+
+### C. Hole-punching across simulated NATs
+
+**Surface:** the §11 acceptance ("≥ 80% of consumer-seeder pairs with common home NATs"). Pure-loopback tests cannot cover this because there is no NAT translation on `127.0.0.1` — the source address is the source address. To exercise the hole-punching protocol we need actual NAT semantics in the loop.
+
+**Test shape:** Linux network namespaces with userspace NAT rules. Three namespaces: `consumer-NAT`, `seeder-NAT`, and the tracker on the public side. `nft` rules give each NAT a personality from the spec's "common home NAT" set: full-cone, restricted-cone, port-restricted-cone, symmetric. Each test cell:
+
+1. Stand up the topology (consumer → consumer-NAT → public ↔ tracker, seeder → seeder-NAT → public ↔ tracker).
+2. Drive `enroll → broker_request → seeder_assignment → STUN exchange → direct UDP send` between consumer and seeder *through* their NATs.
+3. Assert the bytes arrive *without* falling back to TURN (i.e. the direct path won).
+
+Run a matrix over the cross-product of NAT personalities. Assert the spec's 80% bar holds across the documented set. Aggregate per-cell success/failure into a CSV under `coverage/nat-sim.csv` so regressions are diff-reviewable.
+
+**Constraints:**
+- **Linux-only.** Build tag `//go:build nat_sim` excludes from `make test`. Runs in a dedicated CI job (`make -C tracker test-nat-sim`) on a Linux runner. macOS dev loops still get green `make test`.
+- **Requires CAP_NET_ADMIN** for `ip netns` and `nft`. The make target documents this; the test fails fast with a clear `t.Skip("requires CAP_NET_ADMIN; run inside privileged CI job")` + diagnostic if the capability is missing — never silently passes.
+- **Wall time:** ~30s per matrix cell, ~5min for the full matrix. Don't gate every PR on it; gate the merge queue (or a nightly job) on it.
+- **Topology setup is infrastructure.** Lives in `tracker/test/e2e/natsim/topology.go` (package `natsim`, build-tagged). Test files import it; the matrix-driver test is `natsim/holepunch_test.go`.
+
+**File:** `tracker/test/e2e/natsim/` (subdirectory because the build tag changes the package's compile set; keeping it in the parent package would force every reader to think about the tag).
+
+### D. What the network surface still cannot cover (real NATs)
+
+Real-world NAT-traversal success against actual home routers (CGNATs, residential CPEs, mobile-carrier NATs) is a conformance suite, not e2e. It needs cloud VMs with controlled-NAT egress configurations, and probably a small fleet of physical CPEs in a lab. Defer to a `plan(tracker): nat-conformance-suite` once we have a deployment to run it from. The §11 acceptance is met by the netns matrix in shape C plus periodic conformance runs against the lab fleet — neither alone is sufficient.
+
+### Relationship to this plan
+
+When the stunturn plan lands:
+
+- Shapes A and B drop into `tracker/test/e2e/` alongside the existing `cli_test.go` / `lifecycle_test.go`. They reuse `helpers_test.go::buildTrackerBinary` and `newComposedState`, gaining a new `startStunTurn(state)` helper that the stunturn plan introduces.
+- Shape C lands as its own subdirectory + build tag + Make target. The stunturn plan introduces `make test-nat-sim` and the CI workflow that runs it.
+- Tasks 1–7 of this plan stay green throughout — none of them touch the network surface, so they do not need to be revisited.
+
+---
+
 ## What this plan does not unlock
 
 If a downstream consumer asks "can the tracker now serve real plugin connections?", the answer is no — that's still gated on `internal/server` + `internal/api` + `internal/session` landing. This plan adds the test scaffolding so that, when those subsystems land, the e2e tests can grow incrementally:
@@ -951,5 +1012,6 @@ If a downstream consumer asks "can the tracker now serve real plugin connections
 1. The first `internal/server.Run` plan adds a "spin up the listener" helper to `helpers_test.go` and converts `newComposedState` to also start the listener. Existing lifecycle tests run unchanged but now exercise the listener-fronted boundary.
 2. The first `internal/broker` plan replaces the hand-rolled `registry.Filter` in Task 6 with a real `broker.Select` call.
 3. The first stubbed-plugin-client plan adds a `dialPlugin` helper that opens a QUIC connection and drives `enroll → broker_request → ...` — at which point the e2e suite genuinely matches the description in `tracker/CLAUDE.md` ("end-to-end with stubbed plugin clients").
+4. The first `internal/stunturn` plan picks up the network surface per [Network surface — deferred test shapes](#network-surface--deferred-test-shapes-gated-on-internalstunturn) above.
 
 Each of those is a separate plan. This one lands the foundation.
