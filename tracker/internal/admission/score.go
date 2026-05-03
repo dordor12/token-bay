@@ -238,8 +238,11 @@ func (s *Subsystem) tryAttestation(att *admission.SignedCreditAttestation, now t
 		return 0, false
 	}
 	// Expiry. Wall-clock comparison; the validator already enforced
-	// expires_at > computed_at and ttl ≤ 7d.
-	if uint64(now.Unix()) >= att.Body.ExpiresAt {
+	// expires_at > computed_at and ttl ≤ 7d. Unix() is always ≥ 0 for
+	// any timestamp after 1970-01-01; pre-epoch times are not valid
+	// for attestations so we treat them as expired.
+	nowUnix := now.Unix()
+	if nowUnix < 0 || uint64(nowUnix) >= att.Body.ExpiresAt { //nolint:gosec // see comment above
 		return 0, false
 	}
 	// Signature verification — pubkey reconstructed from issuer ID. v1

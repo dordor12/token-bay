@@ -199,7 +199,7 @@ func TestResolveCreditScore_ValidAttestationFromPeer_UsedAndClamped(t *testing.T
 	body := &admission.CreditAttestationBody{
 		IdentityId:            consumerID[:],
 		IssuerTrackerId:       peerID[:],
-		Score:                 9800,           // 0.98 — exceeds 0.95 default cap
+		Score:                 9800, // 0.98 — exceeds 0.95 default cap
 		TenureDays:            120,
 		SettlementReliability: 9700,
 		DisputeRate:           50,
