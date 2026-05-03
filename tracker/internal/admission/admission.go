@@ -35,6 +35,10 @@ type Subsystem struct {
 	demand         demandTracker
 	aggregatorTick chan time.Time
 
+	// queue — single max-heap with one mutex (Task 8).
+	queueMu sync.Mutex //nolint:unused // wired in Task 9 (Decide hot-path)
+	queue   *queueHeap
+
 	// per-consumer credit state — sharded (Task 3).
 	consumerShards []*consumerShard
 
@@ -112,6 +116,7 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	}
 	s.consumerShards = newConsumerShards(registry.DefaultShardCount)
 	s.seederShards = newSeederShards(registry.DefaultShardCount)
+	s.queue = newQueueHeap(time.Time{}, cfg.AgingAlphaPerMinute)
 
 	s.startAggregator()
 	return s, nil
