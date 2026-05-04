@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"time"
 
 	"github.com/quic-go/quic-go"
 )
@@ -76,20 +75,4 @@ func mapHandshakeErr(err error) error {
 	default:
 		return fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
-}
-
-// timeoutBudget returns the soonest deadline between ctx and now+d.
-// Helper exported for symmetry with Accept; unused here but kept for the listener.
-//
-//nolint:unused // reserved for Task 8 listen.go
-func timeoutBudget(ctx context.Context, d time.Duration) time.Time {
-	dl, ok := ctx.Deadline()
-	if !ok {
-		return time.Now().Add(d)
-	}
-	other := time.Now().Add(d)
-	if dl.Before(other) {
-		return dl
-	}
-	return other
 }

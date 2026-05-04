@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"context"
-	"errors"
 	"io"
 	"sync"
 
@@ -68,8 +67,3 @@ func (t *Tunnel) Close() error {
 	}
 	return nil
 }
-
-// errIs is shorthand used by Dial / Accept implementations.
-//
-//nolint:unused // reserved for symmetric Accept flow (Task 8)
-func errIs(err error, target error) bool { return errors.Is(err, target) }
