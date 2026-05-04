@@ -109,16 +109,28 @@ func (s *supervisor) run() {
 		s.setStatus(PhaseConnected, ep, nil, time.Time{})
 		s.cfg.Logger.Info().Str("addr", ep.Addr).Msg("trackerclient: connected")
 
-		// Block until the connection drops or supervisor is cancelled.
+		hbErrCh := make(chan error, 1)
+		hbCtx, hbCancel := context.WithCancel(s.ctx)
+		go runHeartbeat(hbCtx, conn, s.cfg.HeartbeatPeriod, s.cfg.HeartbeatMisses, s.cfg.MaxFrameSize, func(err error) {
+			select {
+			case hbErrCh <- err:
+			default:
+			}
+		})
+
 		select {
 		case <-conn.Done():
-			// connection died
+		case err := <-hbErrCh:
+			s.cfg.Logger.Warn().Err(err).Msg("trackerclient: heartbeat lost")
+			_ = conn.Close()
 		case <-s.ctx.Done():
+			hbCancel()
 			_ = conn.Close()
 			s.holder.clear()
 			s.setStatus(PhaseClosed, ep, s.ctx.Err(), time.Time{})
 			return
 		}
+		hbCancel()
 
 		s.holder.clear()
 		s.setStatus(PhaseDisconnected, ep, ErrConnectionLost, time.Time{})
