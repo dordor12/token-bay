@@ -7,9 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/token-bay/token-bay/shared/ids"
-	"github.com/token-bay/token-bay/tracker/internal/registry"
 )
 
 func TestSupply_PrePublish_ReturnsZeroSnapshotMarker(t *testing.T) {
@@ -162,37 +159,4 @@ func TestAggregator_BackgroundLoop_RunsOnTicker(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	assert.Equal(t, now, s.Supply().ComputedAt, "aggregator goroutine consumed the tick")
-}
-
-// Helpers — extracted to helpers_test.go in Task 14. Inline here for
-// task self-containment.
-
-type fixedClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func newFixedClock(t time.Time) *fixedClock { return &fixedClock{now: t} }
-
-func (c *fixedClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
-}
-
-func (c *fixedClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
-func registerSeeder(t *testing.T, reg *registry.Registry, id ids.IdentityID, headroom float64, lastHB time.Time) {
-	t.Helper()
-	reg.Register(registry.SeederRecord{
-		IdentityID:       id,
-		HeadroomEstimate: headroom,
-		LastHeartbeat:    lastHB,
-		Available:        true,
-		ReputationScore:  1.0,
-	})
 }

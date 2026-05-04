@@ -6,8 +6,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/token-bay/token-bay/shared/ids"
 )
 
 func TestConsumerShard_GetOrInit_CreatesOnFirstUse(t *testing.T) {
@@ -80,13 +78,4 @@ func TestSeederShard_GetOrInit_ReturnsExisting(t *testing.T) {
 	second := sh.getOrInit(id, later)
 	assert.Same(t, first, second)
 	assert.Equal(t, uint32(7500), second.LastHeadroomEstimate)
-}
-
-// makeID builds a fixture IdentityID with all bytes set to b.
-func makeID(b byte) ids.IdentityID {
-	var id ids.IdentityID
-	for i := range id {
-		id[i] = b
-	}
-	return id
 }

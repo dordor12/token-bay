@@ -1,13 +1,10 @@
 package admission
 
 import (
-	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/token-bay/token-bay/shared/ids"
 )
 
 func TestDecide_LowPressure_Admits(t *testing.T) {
@@ -122,15 +119,3 @@ func TestRetryAfter_RangeAndJitter(t *testing.T) {
 	}
 	assert.Greater(t, len(got), 5, "jitter should produce a spread of values")
 }
-
-// helpers — extracted into helpers_test.go in Task 14.
-func staticClockFn(t time.Time) func() time.Time { return func() time.Time { return t } }
-
-func makeIDi(i int) ids.IdentityID {
-	var id ids.IdentityID
-	id[0] = byte(i & 0xff)
-	id[1] = byte((i >> 8) & 0xff)
-	return id
-}
-
-func fixedRand(seed int64) *rand.Rand { return rand.New(rand.NewSource(seed)) }

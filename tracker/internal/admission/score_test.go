@@ -1,46 +1,14 @@
 package admission
 
 import (
-	"crypto/ed25519"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	admission "github.com/token-bay/token-bay/shared/admission"
-	"github.com/token-bay/token-bay/shared/ids"
-	signing "github.com/token-bay/token-bay/shared/signing"
-	"github.com/token-bay/token-bay/tracker/internal/config"
-	"github.com/token-bay/token-bay/tracker/internal/registry"
 )
-
-func defaultScoreConfig() config.AdmissionConfig {
-	return config.AdmissionConfig{
-		TrialTierScore:      0.4,
-		AgingAlphaPerMinute: 0.05,
-		QueueTimeoutS:       300,
-		ScoreWeights: config.AdmissionScoreWeights{
-			SettlementReliability: 0.30,
-			InverseDisputeRate:    0.10,
-			Tenure:                0.20,
-			NetCreditFlow:         0.30,
-			BalanceCushion:        0.10,
-		},
-		NetFlowNormalizationConstant:          10000,
-		TenureCapDays:                         30,
-		StarterGrantCredits:                   1000,
-		RollingWindowDays:                     30,
-		PressureAdmitThreshold:                0.85,
-		PressureRejectThreshold:               1.5,
-		QueueCap:                              512,
-		MaxAttestationScoreImported:           0.95,
-		HeartbeatFreshnessDecayMaxS:           300,
-		AttestationTTLSeconds:                 86400,
-		AttestationIssuancePerConsumerPerHour: 6,
-	}
-}
 
 func TestComputeLocalScore_AllSignalsKnown_WeightedSum(t *testing.T) {
 	cfg := defaultScoreConfig()
@@ -286,63 +254,4 @@ func TestResolveCreditScore_MalformedAttestationBody_FallsThrough(t *testing.T) 
 	score, source := s.resolveCreditScore(makeID(0x11), att, now)
 	assert.InDelta(t, s.cfg.TrialTierScore, score, 1e-9)
 	assert.Equal(t, ScoreSourceTrialTier, source)
-}
-
-// ---------------------------------------------------------------------------
-// Task 5 inline helpers (extracted into helpers_test.go in Task 14)
-// ---------------------------------------------------------------------------
-
-func validAttestationBody(now time.Time, peerID ids.IdentityID, consumerByte byte) *admission.CreditAttestationBody {
-	cid := makeID(consumerByte)
-	return &admission.CreditAttestationBody{
-		IdentityId:            cid[:],
-		IssuerTrackerId:       peerID[:],
-		Score:                 7000,
-		TenureDays:            60,
-		SettlementReliability: 9000,
-		DisputeRate:           100,
-		NetCreditFlow_30D:     50000,
-		BalanceCushionLog2:    1,
-		ComputedAt:            uint64(now.Add(-time.Hour).Unix()),
-		ExpiresAt:             uint64(now.Add(23 * time.Hour).Unix()),
-	}
-}
-
-func signFixtureAttestation(t *testing.T, priv ed25519.PrivateKey, body *admission.CreditAttestationBody) *admission.SignedCreditAttestation {
-	t.Helper()
-	sig, err := signing.SignCreditAttestation(priv, body)
-	require.NoError(t, err)
-	return &admission.SignedCreditAttestation{Body: body, TrackerSig: sig}
-}
-
-func fixturePeerKeypair(t *testing.T) (ed25519.PrivateKey, ids.IdentityID) {
-	t.Helper()
-	seed := []byte("admission-fixture-peer-seed-v1-x") // 32 bytes
-	require.Len(t, seed, ed25519.SeedSize)
-	priv := ed25519.NewKeyFromSeed(seed)
-	pub := priv.Public().(ed25519.PublicKey)
-	var id ids.IdentityID
-	copy(id[:], pub[:32])
-	return priv, id
-}
-
-// staticPeers is a map-backed PeerSet used in Task 5 tests.
-type staticPeers map[ids.IdentityID]bool
-
-func (s staticPeers) Contains(id ids.IdentityID) bool { return s[id] }
-
-func openTempSubsystem(t *testing.T, opts ...Option) (*Subsystem, ids.IdentityID) {
-	t.Helper()
-	seed := []byte("admission-fixture-tracker-seed-1") // 32 bytes
-	require.Len(t, seed, ed25519.SeedSize)
-	priv := ed25519.NewKeyFromSeed(seed)
-
-	cfg := defaultScoreConfig()
-	reg, err := registry.New(16)
-	require.NoError(t, err)
-
-	s, err := Open(cfg, reg, priv, opts...)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	return s, s.trackerID
 }
