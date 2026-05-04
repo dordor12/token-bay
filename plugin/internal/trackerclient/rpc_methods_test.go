@@ -2,9 +2,11 @@ package trackerclient
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -121,6 +123,80 @@ func TestBalanceCachedRoundTrip(t *testing.T) {
 	snap, err := c.BalanceCached(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, int64(100), snap.Body.Credits)
+}
+
+func TestUsageReportRoundTrip(t *testing.T) {
+	c, cleanup := newWiredClient(t, nil)
+	defer cleanup()
+	err := c.UsageReport(context.Background(), &UsageReport{
+		RequestID:    uuid.New(),
+		InputTokens:  100,
+		OutputTokens: 200,
+		Model:        "claude-sonnet-4-6",
+		SeederSig:    make([]byte, 64),
+	})
+	require.NoError(t, err)
+}
+
+func TestAdvertiseRoundTrip(t *testing.T) {
+	c, cleanup := newWiredClient(t, nil)
+	defer cleanup()
+	err := c.Advertise(context.Background(), &Advertisement{
+		Models:     []string{"claude-sonnet-4-6"},
+		MaxContext: 200_000,
+		Available:  true,
+		Headroom:   0.8,
+		Tiers:      1,
+	})
+	require.NoError(t, err)
+}
+
+func TestTransferRequestRoundTrip(t *testing.T) {
+	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_TRANSFER_REQUEST] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.TransferProof{
+				SourceChainTipHash: make([]byte, 32),
+				SourceSeq:          12345,
+				TrackerSig:         make([]byte, 64),
+			}, nil
+		}
+	})
+	defer cleanup()
+	proof, err := c.TransferRequest(context.Background(), &TransferRequest{
+		IdentityID: ids.IdentityID{1},
+		Amount:     50,
+		DestRegion: "us-east-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(12345), proof.SourceSeq)
+}
+
+func TestStunAllocateRoundTrip(t *testing.T) {
+	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_STUN_ALLOCATE] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.StunAllocateResponse{ExternalAddr: "203.0.113.5:51820"}, nil
+		}
+	})
+	defer cleanup()
+	addr, err := c.StunAllocate(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, netip.MustParseAddrPort("203.0.113.5:51820"), addr)
+}
+
+func TestTurnRelayOpenRoundTrip(t *testing.T) {
+	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_TURN_RELAY_OPEN] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.TurnRelayOpenResponse{
+				RelayEndpoint: "relay.example:3478",
+				Token:         []byte("relay-token"),
+			}, nil
+		}
+	})
+	defer cleanup()
+	h, err := c.TurnRelayOpen(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.Equal(t, "relay.example:3478", h.Endpoint)
+	assert.Equal(t, []byte("relay-token"), h.Token)
 }
 
 func TestEnrollRoundTrip(t *testing.T) {

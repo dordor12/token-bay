@@ -3,7 +3,9 @@ package trackerclient
 import (
 	"context"
 	"fmt"
+	"net/netip"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/wire"
@@ -114,6 +116,85 @@ func (c *Client) Balance(ctx context.Context, id ids.IdentityID) (*tbproto.Signe
 // via Balance(). Concurrent stale callers coalesce on the same fetch.
 func (c *Client) BalanceCached(ctx context.Context, id ids.IdentityID) (*tbproto.SignedBalanceSnapshot, error) {
 	return c.cache.Get(ctx, id, c.Balance)
+}
+
+// UsageReport is sent by the seeder after a served request completes.
+func (c *Client) UsageReport(ctx context.Context, ur *UsageReport) error {
+	if ur == nil {
+		return fmt.Errorf("%w: nil UsageReport", ErrInvalidResponse)
+	}
+	rid, _ := ur.RequestID.MarshalBinary()
+	req := &tbproto.UsageReport{
+		RequestId:    rid,
+		InputTokens:  ur.InputTokens,
+		OutputTokens: ur.OutputTokens,
+		Model:        ur.Model,
+		SeederSig:    ur.SeederSig,
+	}
+	var ack tbproto.UsageAck
+	return c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_USAGE_REPORT, req, &ack)
+}
+
+// Advertise updates the seeder's availability + capabilities.
+func (c *Client) Advertise(ctx context.Context, ad *Advertisement) error {
+	if ad == nil {
+		return fmt.Errorf("%w: nil Advertisement", ErrInvalidResponse)
+	}
+	req := &tbproto.Advertisement{
+		Models:     ad.Models,
+		MaxContext: ad.MaxContext,
+		Available:  ad.Available,
+		Headroom:   ad.Headroom,
+		Tiers:      ad.Tiers,
+	}
+	var ack tbproto.AdvertiseAck
+	return c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_ADVERTISE, req, &ack)
+}
+
+// TransferRequest moves credits between regions.
+func (c *Client) TransferRequest(ctx context.Context, tr *TransferRequest) (*TransferProof, error) {
+	if tr == nil {
+		return nil, fmt.Errorf("%w: nil TransferRequest", ErrInvalidResponse)
+	}
+	req := &tbproto.TransferRequest{
+		IdentityId: tr.IdentityID[:],
+		Amount:     tr.Amount,
+		DestRegion: tr.DestRegion,
+		Nonce:      tr.Nonce[:],
+	}
+	var resp tbproto.TransferProof
+	if err := c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_TRANSFER_REQUEST, req, &resp); err != nil {
+		return nil, err
+	}
+	out := &TransferProof{
+		SourceSeq:  resp.SourceSeq,
+		TrackerSig: resp.TrackerSig,
+	}
+	copy(out.SourceChainTipHash[:], resp.SourceChainTipHash)
+	return out, nil
+}
+
+// StunAllocate asks the tracker to reflect the client's external address.
+func (c *Client) StunAllocate(ctx context.Context) (netip.AddrPort, error) {
+	var resp tbproto.StunAllocateResponse
+	if err := c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_STUN_ALLOCATE, &tbproto.StunAllocateRequest{}, &resp); err != nil {
+		return netip.AddrPort{}, err
+	}
+	out, err := netip.ParseAddrPort(resp.ExternalAddr)
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("%w: bad external_addr %q", ErrInvalidResponse, resp.ExternalAddr)
+	}
+	return out, nil
+}
+
+// TurnRelayOpen requests a TURN-style relay allocation.
+func (c *Client) TurnRelayOpen(ctx context.Context, sessionID uuid.UUID) (*RelayHandle, error) {
+	sid, _ := sessionID.MarshalBinary()
+	var resp tbproto.TurnRelayOpenResponse
+	if err := c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_TURN_RELAY_OPEN, &tbproto.TurnRelayOpenRequest{SessionId: sid}, &resp); err != nil {
+		return nil, err
+	}
+	return &RelayHandle{Endpoint: resp.RelayEndpoint, Token: resp.Token}, nil
 }
 
 // Enroll requests an identity binding from the tracker.
