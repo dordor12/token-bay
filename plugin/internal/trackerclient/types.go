@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/transport"
 	"github.com/token-bay/token-bay/shared/ids"
 )
 
@@ -147,25 +148,22 @@ type SettlementRequest struct {
 	PreimageBody []byte
 }
 
-// Transport is the network seam between the client and a tracker.
-// Concrete implementations live under internal/transport/.
-type Transport interface {
-	Dial(ctx Ctx, ep TrackerEndpoint, signer Signer) (Conn, error)
-}
+// Transport, Conn, and Stream are network-seam interfaces. Drivers live
+// under internal/transport/.
+type (
+	Transport = transport.Transport
+	Conn      = transport.Conn
+	Stream    = transport.Stream
+)
 
-// Conn is a connected, mTLS-authenticated transport session.
-type Conn interface {
-	OpenStreamSync(ctx Ctx) (Stream, error)
-	AcceptStream(ctx Ctx) (Stream, error)
-	PeerIdentityID() ids.IdentityID
-	Close() error
-	Done() <-chan struct{}
-}
+// signerAsIdentity adapts the public Signer interface to the
+// internal/transport.Identity interface.
+//
+//nolint:unused // consumed by supervisor in Task 11
+type signerAsIdentity struct{ Signer }
 
-// Stream is a bidirectional byte stream within a Conn.
-type Stream interface {
-	Read(p []byte) (int, error)
-	Write(p []byte) (int, error)
-	Close() error
-	CloseWrite() error
-}
+//nolint:unused // consumed by supervisor in Task 11
+func (s signerAsIdentity) PrivateKey() ed25519.PrivateKey { return s.Signer.PrivateKey() }
+
+//nolint:unused // consumed by supervisor in Task 11
+func (s signerAsIdentity) IdentityID() ids.IdentityID { return s.Signer.IdentityID() }
