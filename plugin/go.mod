@@ -13,6 +13,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	github.com/token-bay/token-bay/shared v0.0.0-00010101000000-000000000000
+	golang.org/x/sync v0.20.0
 	google.golang.org/protobuf v1.36.11
 )
 

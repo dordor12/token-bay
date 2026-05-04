@@ -100,6 +100,29 @@ func TestSettleRejectsBadHash(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBalanceCachedRoundTrip(t *testing.T) {
+	id := ids.IdentityID{0xab}
+	issued := time.Now().Unix()
+	expires := time.Now().Add(10 * time.Minute).Unix()
+	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_BALANCE] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.SignedBalanceSnapshot{
+				Body: &tbproto.BalanceSnapshotBody{
+					IdentityId: id[:],
+					Credits:    100,
+					IssuedAt:   uint64(issued),
+					ExpiresAt:  uint64(expires),
+				},
+				TrackerSig: make([]byte, 64),
+			}, nil
+		}
+	})
+	defer cleanup()
+	snap, err := c.BalanceCached(context.Background(), id)
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), snap.Body.Credits)
+}
+
 func TestEnrollRoundTrip(t *testing.T) {
 	var got [32]byte
 	copy(got[:], "captured-id-12345678901234567890")

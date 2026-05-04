@@ -18,7 +18,7 @@ type Client struct {
 	started   bool
 	closed    bool
 
-	// cache *balanceCache  — wired in Task 15.
+	cache *balanceCache
 }
 
 // New validates cfg and constructs (but does not start) a Client.
@@ -33,6 +33,7 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		cfg:    cfg,
 		holder: &connHolder{},
+		cache:  newBalanceCache(cfg.BalanceRefreshHeadroom, cfg.Clock),
 	}, nil
 }
 

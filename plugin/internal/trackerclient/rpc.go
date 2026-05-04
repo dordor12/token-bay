@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/wire"
+	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
 
@@ -93,6 +94,26 @@ func (c *Client) Settle(ctx context.Context, preimageHash, sig []byte) error {
 	req := &tbproto.SettleRequest{PreimageHash: preimageHash, ConsumerSig: sig}
 	var ack tbproto.SettleAck
 	return c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_SETTLE, req, &ack)
+}
+
+// Balance fetches a fresh signed balance snapshot from the tracker.
+// Bypasses the cache; callers usually want BalanceCached instead.
+func (c *Client) Balance(ctx context.Context, id ids.IdentityID) (*tbproto.SignedBalanceSnapshot, error) {
+	req := &tbproto.BalanceRequest{IdentityId: id[:]}
+	var resp tbproto.SignedBalanceSnapshot
+	if err := c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_BALANCE, req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Body == nil {
+		return nil, fmt.Errorf("%w: balance response missing body", ErrInvalidResponse)
+	}
+	return &resp, nil
+}
+
+// BalanceCached returns a cached snapshot if fresh, otherwise refreshes
+// via Balance(). Concurrent stale callers coalesce on the same fetch.
+func (c *Client) BalanceCached(ctx context.Context, id ids.IdentityID) (*tbproto.SignedBalanceSnapshot, error) {
+	return c.cache.Get(ctx, id, c.Balance)
 }
 
 // Enroll requests an identity binding from the tracker.
