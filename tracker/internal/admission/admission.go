@@ -48,6 +48,9 @@ type Subsystem struct {
 	// federation peer-set membership check (§5.1 step 1).
 	peers PeerSet
 
+	// per-consumer attestation issuance rate limiter (Task 12).
+	attestRL *rateLimiter
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -117,6 +120,7 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	s.consumerShards = newConsumerShards(registry.DefaultShardCount)
 	s.seederShards = newSeederShards(registry.DefaultShardCount)
 	s.queue = newQueueHeap(time.Time{}, cfg.AgingAlphaPerMinute)
+	s.attestRL = newRateLimiter(cfg.AttestationIssuancePerConsumerPerHour, registry.DefaultShardCount)
 
 	s.startAggregator()
 	return s, nil
