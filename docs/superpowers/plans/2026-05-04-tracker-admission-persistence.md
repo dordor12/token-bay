@@ -2893,41 +2893,734 @@ EOF
 
 ---
 
-### Task 9: Failure-mode integration tests (§7.1-7.4 + degraded mode)
+## Task 9: Failure-mode integration + degraded-mode behavior
 
-- File: `degraded_mode.go` + `degraded_mode_test.go` + `replay_test.go` (extend)
-- `(s *Subsystem) DegradedMode() bool` — atomic gauge readable by metrics + admin.
-- §7.1 crash mid-OnLedgerEvent: kill-then-replay → tlog gap detected, ledger cross-check fills.
-- §7.2 tlog mid-record corruption: replay halts, `admission_tlog_corruption_records_total` bumps, decisions still flow.
-- §7.3 snapshot corruption: fall back to next-older.
-- §7.4 all-corrupt: degraded mode active, decisions admit-only until rebuilt online from incoming events.
+**Goal.** Pin the failure modes from admission-design §7.1-§7.4 with cross-cutting integration tests, and verify that degraded-mode admission still serves Decide while persistence is impaired.
 
-### Task 10: Admin handlers — 11 routes + RegisterMux + auth gate
+DegradedMode() and the atomic flag already land in Task 7. Task 9 layers metrics, decision-mode behavior, and the §7.x scenario tests.
 
-- File: `admin.go` + `admin_test.go`
-- `func (s *Subsystem) AdminHandlers() AdminHandlerSet` — returns named handlers per route.
-- `RegisterMux(mux *http.ServeMux)` mounts everything under `/admission/`.
-- `BasicAuthGuard(next http.Handler, validator func(token string) bool) http.Handler` — middleware checking the configured operator token. §10 #20 acceptance test verifies 401 without a valid header.
-- Per route:
-  - `GET /admission/status` → JSON of `{supply, queue_depth, pressure, thresholds}`
-  - `GET /admission/queue` → array of `{consumer_id, score, enqueued_at, effective_priority}`
-  - `GET /admission/consumer/<id>` → `Signals` + composite score + recent attestation issuances
-  - `GET /admission/seeder/<id>` → `SeederHeartbeatState`
-  - `POST /admission/queue/drain` (body: `{n}`) — pop top N from queue
-  - `POST /admission/queue/eject/<request_id>` — remove specific entry
-  - `POST /admission/snapshot` — force `writeSnapshot` now
-  - `POST /admission/recompute/<consumer_id>` — re-derive credit state from ledger
-  - `GET /admission/peers/blocklist` → list
-  - `POST /admission/peers/blocklist/<peer_id>` — add
-  - `DELETE /admission/peers/blocklist/<peer_id>` — remove
-- All POST/DELETE call `operator_override.go` to log a `TLogKindOperatorOverride` record.
-- Tests: each route round-trips JSON; auth-required routes return 401 without token; mutating routes write OPERATOR_OVERRIDE to tlog; 404 on unknown consumer/seeder/peer.
+- [ ] **Step 1: Failing tests — `tracker/internal/admission/degraded_mode_test.go` (new)**
 
-### Task 11: Operator override TLogRecord helper
+```go
+package admission
 
-- File: `operator_override.go` + `operator_override_test.go`
-- `(s *Subsystem) writeOperatorOverride(ctx, action string, params []byte) error` — extracts operator_id from request context, marshals `OperatorOverridePayload`, appends `TLogRecord{Kind: TLogKindOperatorOverride}`.
-- Used by every admin POST/DELETE; tests verify each emits a correctly-formed record.
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// §7.1 — Process crash between tlog flush and ledger commit.
+// Plan: write 5 records, simulate crash by closing the writer mid-batch, then
+// inject a ledger source that knows about a 6th. Replay should apply 1-5 from
+// tlog and 6 from ledger.
+func TestFailure_71_TLogGapFilledByLedgerCrossCheck(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	src := &fakeLedgerSource{}
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+	for i := 0; i < 5; i++ {
+		ev := LedgerEvent{
+			Kind: LedgerEventSettlement, ConsumerID: makeIDi(i),
+			CostCredits: 10, Timestamp: now,
+		}
+		s1.OnLedgerEvent(ev)
+		src.append(ev)
+	}
+	src.append(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(99), // missing from tlog
+		CostCredits: 10, Timestamp: now,
+	})
+	require.NoError(t, s1.Close())
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlogPath), WithSkipAutoReplay(), WithLedgerSource(src))
+	require.NoError(t, s2.StartupReplay(context.Background()))
+
+	for i := 0; i < 5; i++ {
+		_, ok := consumerShardFor(s2.consumerShards, makeIDi(i)).get(makeIDi(i))
+		assert.True(t, ok, "tlog-derived consumer %d", i)
+	}
+	_, ok := consumerShardFor(s2.consumerShards, makeIDi(99)).get(makeIDi(99))
+	assert.True(t, ok, "ledger-cross-check filled the gap")
+}
+
+// §7.2 — tlog mid-record corruption surfaces; decisions still flow.
+func TestFailure_72_MidTLogCorruptionDoesNotKillDecide(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+	for i := 0; i < 3; i++ {
+		s1.OnLedgerEvent(LedgerEvent{
+			Kind: LedgerEventSettlement, ConsumerID: makeIDi(i),
+			CostCredits: 10, Timestamp: now,
+		})
+	}
+	require.NoError(t, s1.Close())
+	corruptByteAt(t, tlogPath, 30) // mid-first-record body
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlogPath), WithSkipAutoReplay())
+	err := s2.StartupReplay(context.Background())
+	require.Error(t, err)
+
+	// Decide path remains usable even with halted replay.
+	res := s2.Decide(makeID(0x77), nil, now)
+	assert.Equal(t, OutcomeAdmit, res.Outcome, "boot-time admit until aggregator publishes")
+}
+
+// §7.3 — Snapshot corruption falls back to next-older. Already pinned in
+// TestReplay_CorruptLatestSnapshotFallsBackToOlder; this test asserts that
+// the failure increments the metric counter.
+func TestFailure_73_SnapshotCorruptionIncrementsCounter(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "snap")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithSnapshotPrefix(prefix),
+		WithTLogPath(filepath.Join(dir, "admission.tlog")))
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.Close())
+
+	files, err := enumerateSnapshots(prefix)
+	require.NoError(t, err)
+	corruptByteAt(t, files[1].path, 30)
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithSnapshotPrefix(prefix),
+		WithTLogPath(filepath.Join(dir, "admission.tlog")),
+		WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+	assert.False(t, s2.DegradedMode())
+	assert.GreaterOrEqual(t, s2.SnapshotLoadFailures(), uint64(1))
+}
+
+// §7.4 — All snapshots corrupt → DegradedMode + Decide still flows.
+func TestFailure_74_DegradedModeKeepsDecideAvailable(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "snap")
+	tlogPath := filepath.Join(dir, "admission.tlog")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithSnapshotPrefix(prefix), WithTLogPath(tlogPath))
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.Close())
+
+	files, _ := enumerateSnapshots(prefix)
+	for _, f := range files {
+		corruptByteAt(t, f.path, 30)
+	}
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithSnapshotPrefix(prefix), WithTLogPath(tlogPath),
+		WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+	require.True(t, s2.DegradedMode())
+
+	res := s2.Decide(makeID(0x55), nil, now)
+	assert.Equal(t, OutcomeAdmit, res.Outcome,
+		"degraded mode admits new arrivals — credit history is null until rebuilt")
+}
+```
+
+- [ ] **Step 2: Run, confirm RED** (`SnapshotLoadFailures` does not exist yet, integration paths show wrong expected behavior).
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 -run TestFailure ./internal/admission/...
+```
+
+- [ ] **Step 3: Implement — `tracker/internal/admission/replay.go` (extend)**
+
+Add the counter accessors used by the tests + Task 12 metrics:
+
+```go
+type Subsystem struct {
+	// ... existing ...
+	snapshotLoadFailures atomic.Uint64
+	tlogCorruptions      atomic.Uint64
+}
+
+// SnapshotLoadFailures is read by the metrics Collector (Task 12).
+func (s *Subsystem) SnapshotLoadFailures() uint64 { return s.snapshotLoadFailures.Load() }
+
+// TLogCorruptions is read by the metrics Collector (Task 12).
+func (s *Subsystem) TLogCorruptions() uint64 { return s.tlogCorruptions.Load() }
+```
+
+Update `loadNewestUsableSnapshot` to bump the counter on each failed read:
+
+```go
+for i := len(files) - 1; i >= 0; i-- {
+	snap, err := readSnapshot(files[i].path)
+	if err == nil {
+		return snap, nil
+	}
+	s.snapshotLoadFailures.Add(1)
+}
+```
+
+Update `replayTLog` to bump `tlogCorruptions` when `readTLogFile` returns `ErrTLogCorrupt` mid-file (the reader itself heals trailing truncation; mid-file is the only counted case).
+
+- [ ] **Step 4: Run, confirm PASS**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 ./internal/admission/...
+```
+
+Expected: §7.1-§7.4 tests PASS, every prior test still PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tracker/internal/admission/replay.go \
+        tracker/internal/admission/degraded_mode_test.go
+git commit -m "$(cat <<'EOF'
+test(tracker/admission): §7.1-7.4 failure-mode + degraded-mode integration
+
+Pins admission-design §7.1 (crash mid-event, ledger cross-check fills),
+§7.2 (mid-tlog corruption, decide still flows), §7.3 (snapshot
+corruption falls back), and §7.4 (all-corrupt → degraded, decide
+admits new arrivals).
+
+Adds SnapshotLoadFailures + TLogCorruptions accessors used by Task 12
+metrics; failure counters bump on each unsuccessful load attempt.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 10: Admin handlers — 11 routes + RegisterMux + BasicAuthGuard
+
+**Goal.** Provide an HTTP-handler surface for operator tooling per admission-design §9.1. Plan 3 ships handlers as `http.Handler` instances + a `BasicAuthGuard` middleware; mounting on a real listener with TLS belongs to the tracker control-plane plan.
+
+Routes (all under `/admission/`):
+
+| Method | Path | Auth | Body / response |
+|---|---|---|---|
+| GET | `/status` | yes | `{supply, queue_depth, pressure, thresholds}` |
+| GET | `/queue` | yes | `[{consumer_id, score, enqueued_at, effective_priority}]` |
+| GET | `/consumer/{id}` | yes | `{signals, score, recent_attestations}` |
+| GET | `/seeder/{id}` | yes | `{heartbeat_state}` |
+| POST | `/queue/drain` | yes | `{n}` → drained list (operator override) |
+| POST | `/queue/eject/{request_id}` | yes | (operator override) |
+| POST | `/snapshot` | yes | (operator override) — force `runSnapshotEmitOnce` |
+| POST | `/recompute/{consumer_id}` | yes | (operator override) — re-derive from ledger |
+| GET | `/peers/blocklist` | yes | `[peer_id]` |
+| POST | `/peers/blocklist/{peer_id}` | yes | (operator override) |
+| DELETE | `/peers/blocklist/{peer_id}` | yes | (operator override) |
+
+- [ ] **Step 1: Failing tests — `tracker/internal/admission/admin_test.go` (new)**
+
+```go
+package admission
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func newAdminHTTPServer(t *testing.T, s *Subsystem) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	guard := func(next http.Handler) http.Handler {
+		return BasicAuthGuard(next, func(token string) bool { return token == "test-token" })
+	}
+	s.RegisterMux(mux, guard)
+	return httptest.NewServer(mux)
+}
+
+func req(t *testing.T, method, url, token, body string) *http.Response {
+	t.Helper()
+	r, err := http.NewRequest(method, url, strings.NewReader(body))
+	require.NoError(t, err)
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(r)
+	require.NoError(t, err)
+	return resp
+}
+
+func TestAdmin_Status(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)))
+	s.publishSupply(&SupplySnapshot{ComputedAt: now, TotalHeadroom: 10, Pressure: 0.5})
+
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	resp := req(t, "GET", srv.URL+"/admission/status", "test-token", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.InDelta(t, 0.5, out["pressure"], 1e-9)
+	assert.InDelta(t, 10.0, out["supply_total_headroom"], 1e-9)
+}
+
+func TestAdmin_Status_RejectsMissingAuth(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)))
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	resp := req(t, "GET", srv.URL+"/admission/status", "", "")
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestAdmin_Queue_ListsEntries(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)))
+	s.publishSupply(&SupplySnapshot{ComputedAt: now, TotalHeadroom: 10, Pressure: 1.0})
+	for i := 0; i < 3; i++ {
+		s.Decide(makeIDi(i), nil, now)
+	}
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	resp := req(t, "GET", srv.URL+"/admission/queue", "test-token", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out []map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.Len(t, out, 3)
+}
+
+func TestAdmin_QueueDrain_WritesOverride(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := dir + "/admission.tlog"
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+	s.publishSupply(&SupplySnapshot{ComputedAt: now, TotalHeadroom: 10, Pressure: 1.0})
+	for i := 0; i < 3; i++ {
+		s.Decide(makeIDi(i), nil, now)
+	}
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	resp := req(t, "POST", srv.URL+"/admission/queue/drain", "test-token", `{"n":2}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	var found bool
+	for _, r := range recs {
+		if r.Kind == TLogKindOperatorOverride {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "queue/drain emitted OPERATOR_OVERRIDE")
+}
+
+func TestAdmin_Consumer_404OnUnknown(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)))
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	resp := req(t, "GET", srv.URL+"/admission/consumer/00000000000000000000000000000000000000000000000000000000000000ff",
+		"test-token", "")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestAdmin_Snapshot_TriggersEmit(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(dir+"/admission.tlog"),
+		WithSnapshotPrefix(dir+"/snap"))
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	resp := req(t, "POST", srv.URL+"/admission/snapshot", "test-token", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	files, _ := enumerateSnapshots(dir + "/snap")
+	assert.Len(t, files, 1)
+}
+
+func TestAdmin_PeersBlocklist_AddRemove(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(t.TempDir()+"/admission.tlog"))
+	srv := newAdminHTTPServer(t, s)
+	defer srv.Close()
+
+	peer := "00000000000000000000000000000000000000000000000000000000000000aa"
+
+	resp := req(t, "POST", srv.URL+"/admission/peers/blocklist/"+peer, "test-token", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = req(t, "GET", srv.URL+"/admission/peers/blocklist", "test-token", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out []string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.Contains(t, out, peer)
+
+	resp = req(t, "DELETE", srv.URL+"/admission/peers/blocklist/"+peer, "test-token", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+```
+
+- [ ] **Step 2: Run, confirm RED.**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 -run TestAdmin ./internal/admission/...
+```
+
+- [ ] **Step 3: Implement — `tracker/internal/admission/admin.go` (new)**
+
+```go
+package admission
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/token-bay/token-bay/shared/ids"
+)
+
+// MuxGuard wraps a route handler with auth + audit. Tests inject a guard
+// that checks "test-token"; production wires a real bearer-token validator.
+type MuxGuard func(http.Handler) http.Handler
+
+// RegisterMux mounts the admission admin handlers under /admission/. All
+// routes pass through guard. Plan 3 ships handlers as net/http; mounting
+// on a real TLS listener belongs to the tracker control-plane plan.
+func (s *Subsystem) RegisterMux(mux *http.ServeMux, guard MuxGuard) {
+	if guard == nil {
+		guard = func(h http.Handler) http.Handler { return h }
+	}
+	mux.Handle("GET /admission/status", guard(http.HandlerFunc(s.handleStatus)))
+	mux.Handle("GET /admission/queue", guard(http.HandlerFunc(s.handleQueueList)))
+	mux.Handle("GET /admission/consumer/{id}", guard(http.HandlerFunc(s.handleConsumer)))
+	mux.Handle("GET /admission/seeder/{id}", guard(http.HandlerFunc(s.handleSeeder)))
+	mux.Handle("POST /admission/queue/drain", guard(http.HandlerFunc(s.handleQueueDrain)))
+	mux.Handle("POST /admission/queue/eject/{request_id}", guard(http.HandlerFunc(s.handleQueueEject)))
+	mux.Handle("POST /admission/snapshot", guard(http.HandlerFunc(s.handleSnapshotForce)))
+	mux.Handle("POST /admission/recompute/{consumer_id}", guard(http.HandlerFunc(s.handleRecompute)))
+	mux.Handle("GET /admission/peers/blocklist", guard(http.HandlerFunc(s.handleBlocklistList)))
+	mux.Handle("POST /admission/peers/blocklist/{peer_id}", guard(http.HandlerFunc(s.handleBlocklistAdd)))
+	mux.Handle("DELETE /admission/peers/blocklist/{peer_id}", guard(http.HandlerFunc(s.handleBlocklistRemove)))
+}
+
+// BasicAuthGuard returns middleware that checks an "Authorization: Bearer X"
+// header; validator decides whether X is a valid operator token.
+func BasicAuthGuard(next http.Handler, validator func(token string) bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "Bearer "
+		hdr := r.Header.Get("Authorization")
+		if !strings.HasPrefix(hdr, prefix) || !validator(strings.TrimPrefix(hdr, prefix)) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="admission"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Subsystem) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	snap := s.Supply()
+	out := map[string]any{
+		"pressure":              snap.Pressure,
+		"supply_total_headroom": snap.TotalHeadroom,
+		"queue_depth":           s.queue.Len(),
+		"thresholds": map[string]float64{
+			"admit":  s.cfg.PressureAdmitThreshold,
+			"reject": s.cfg.PressureRejectThreshold,
+		},
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ... handlers per route. Each mutating handler ends with
+//     s.writeOperatorOverride(r.Context(), action, params).
+// Each lookup handler decodes the path's hex-32 id with shared/ids,
+// returns 404 on missing, 200 with the snapshot value otherwise.
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func parseID(s string) (ids.IdentityID, error) {
+	return ids.ParseHex(s) // assumes shared/ids has ParseHex; if not, write the
+	// 32-byte hex decode inline. (No new shared/ helper from plan 3.)
+}
+```
+
+The remaining 10 handlers are short — typical shape:
+
+```go
+func (s *Subsystem) handleConsumer(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	st, ok := consumerShardFor(s.consumerShards, id).get(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	signals := s.signalsFor(st, s.nowFn())
+	score := s.compositeScore(signals)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"signals": signals,
+		"score":   score,
+	})
+}
+```
+
+Each mutating handler emits an operator override:
+
+```go
+func (s *Subsystem) handleQueueDrain(w http.ResponseWriter, r *http.Request) {
+	var body struct{ N int `json:"n"` }
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	drained := s.queue.DrainTop(body.N)
+	if err := s.writeOperatorOverride(r.Context(), "queue/drain",
+		mustJSON(map[string]any{"n": body.N})); err != nil {
+		http.Error(w, "tlog write failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"drained": drained})
+}
+```
+
+The peer blocklist is held on `s` as `blocklist map[ids.IdentityID]struct{}` guarded by `blocklistMu sync.RWMutex`. Add/remove handlers manipulate it; the GET handler returns the hex IDs sorted.
+
+- [ ] **Step 4: Run, confirm PASS**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 ./internal/admission/...
+```
+
+Expected: every admin test PASS, every prior test still PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tracker/internal/admission/admin.go \
+        tracker/internal/admission/admin_test.go
+git commit -m "$(cat <<'EOF'
+feat(tracker/admission): admin HTTP handlers + BasicAuthGuard
+
+Per admission-design §9.1: 11 routes under /admission/, each gated by
+a MuxGuard (BasicAuthGuard ships as the canonical middleware; tests
+inject a fake validator).
+
+Routes:
+  GET  /status                         queue + supply snapshot
+  GET  /queue                          ranked queue contents
+  GET  /consumer/{id}                  signals + composite score
+  GET  /seeder/{id}                    heartbeat + headroom
+  POST /queue/drain                    body {n}, emits OPERATOR_OVERRIDE
+  POST /queue/eject/{request_id}       emits OPERATOR_OVERRIDE
+  POST /snapshot                       force runSnapshotEmitOnce
+  POST /recompute/{consumer_id}        re-derive from ledger
+  GET  /peers/blocklist                hex-encoded peer IDs
+  POST /peers/blocklist/{peer_id}      emits OPERATOR_OVERRIDE
+  DELETE /peers/blocklist/{peer_id}    emits OPERATOR_OVERRIDE
+
+Mounting on a TLS listener with a real validator belongs to the
+tracker control-plane plan. RegisterMux + BasicAuthGuard let any
+caller wire admission into an existing http.ServeMux.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 11: Operator override TLogRecord helper
+
+**Goal.** Centralize the operator-override audit trail in one helper so admin handlers (Task 10) emit consistent records and the test surface stays small.
+
+- [ ] **Step 1: Failing test — `tracker/internal/admission/operator_override_test.go` (new)**
+
+```go
+package admission
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOperatorOverride_AppendsTLogRecord(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	ctx := WithOperatorContext(context.Background(), "operator-7")
+	require.NoError(t, s.writeOperatorOverride(ctx, "queue/drain", []byte(`{"n":2}`)))
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindOperatorOverride, recs[0].Kind)
+
+	var p OperatorOverridePayload
+	require.NoError(t, p.UnmarshalBinary(recs[0].Payload))
+	assert.Equal(t, "operator-7", p.OperatorID)
+	assert.Equal(t, "queue/drain", p.Action)
+	assert.JSONEq(t, `{"n":2}`, string(p.ParamsJSON))
+}
+
+func TestOperatorOverride_NoOpWhenTLogDisabled(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now))) // no WithTLogPath
+	ctx := WithOperatorContext(context.Background(), "operator-7")
+	assert.NoError(t, s.writeOperatorOverride(ctx, "queue/drain", []byte(`{}`)))
+}
+
+func TestOperatorOverride_AnonymousWhenContextMissing(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+	require.NoError(t, s.writeOperatorOverride(context.Background(), "snapshot", []byte("{}")))
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	var p OperatorOverridePayload
+	require.NoError(t, p.UnmarshalBinary(recs[0].Payload))
+	assert.Equal(t, "anonymous", p.OperatorID)
+}
+```
+
+- [ ] **Step 2: Run, confirm RED.**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 -run TestOperatorOverride ./internal/admission/...
+```
+
+- [ ] **Step 3: Implement — `tracker/internal/admission/operator_override.go` (new)**
+
+```go
+package admission
+
+import (
+	"context"
+	"time"
+)
+
+type ctxKey int
+
+const operatorIDKey ctxKey = 1
+
+// WithOperatorContext stamps the request's operator identity onto ctx.
+// Callers (admin handlers + tests) chain this when constructing a request
+// context that should carry an audit trail.
+func WithOperatorContext(ctx context.Context, operatorID string) context.Context {
+	return context.WithValue(ctx, operatorIDKey, operatorID)
+}
+
+// operatorIDFromContext returns the bound operator id or "anonymous" when
+// the key is missing.
+func operatorIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(operatorIDKey).(string); ok && v != "" {
+		return v
+	}
+	return "anonymous"
+}
+
+// writeOperatorOverride appends an OPERATOR_OVERRIDE record. Returns nil
+// (and is a no-op) when the tlog is disabled.
+func (s *Subsystem) writeOperatorOverride(ctx context.Context, action string, paramsJSON []byte) error {
+	if s.tlog == nil {
+		return nil
+	}
+	p := OperatorOverridePayload{
+		OperatorID: operatorIDFromContext(ctx),
+		Action:     action,
+		ParamsJSON: paramsJSON,
+		Ts:         s.nowFn().Unix(),
+	}
+	body, err := p.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return s.tlog.Append(TLogRecord{
+		Kind:    TLogKindOperatorOverride,
+		Payload: body,
+		Ts:      time.Unix(p.Ts, 0).UTC(),
+	})
+}
+```
+
+`OperatorOverridePayload` is defined in Task 2 — `{OperatorID, Action, ParamsJSON, Ts}` with `MarshalBinary`/`UnmarshalBinary`.
+
+- [ ] **Step 4: Run, confirm PASS**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 ./internal/admission/...
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tracker/internal/admission/operator_override.go \
+        tracker/internal/admission/operator_override_test.go
+git commit -m "$(cat <<'EOF'
+feat(tracker/admission): operator-override audit trail helper
+
+writeOperatorOverride appends a TLogKindOperatorOverride record carrying
+{operator_id, action, params_json, ts}. Used by every admin POST/DELETE
+in Task 10. operator_id comes from a context key set by the auth
+middleware (or "anonymous" when missing).
+
+No-op when the tlog is disabled — keeps tests that don't care about
+audit trail concise.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
 
 ### Task 12: Prometheus metrics — Collector
 
