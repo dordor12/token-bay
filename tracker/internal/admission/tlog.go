@@ -1,10 +1,14 @@
 package admission
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"os"
+	"sync"
+	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
 )
@@ -442,4 +446,157 @@ func unmarshalStarterGrantPayload(buf []byte) (StarterGrantPayload, error) {
 	copy(p.ConsumerID[:], buf[0:32])
 	p.CostCredits = binary.BigEndian.Uint64(buf[32:40])
 	return p, nil
+}
+
+// tlogWriter manages the active admission.tlog file: batched fsync for
+// soft-state kinds, synchronous fsync for disputes, and size-triggered
+// rotation. All exported methods (Append, Close) are safe for concurrent
+// callers; the internal flushLoop fsync-batches behind the same mutex.
+type tlogWriter struct {
+	mu            sync.Mutex
+	f             *os.File
+	bw            *bufio.Writer
+	path          string
+	rotationBytes int64
+	bytesWritten  int64
+	lastSeqInFile uint64
+	flushInterval time.Duration
+	stopCh        chan struct{}
+	wg            sync.WaitGroup
+}
+
+// newTLogWriter opens (or creates) the active tlog file. flushInterval
+// matches admission-design §4.3 ("Batched fsync every 5 ms"); rotationBytes
+// is 1 GiB in production, smaller in tests.
+func newTLogWriter(path string, flushInterval time.Duration, rotationBytes int64) (*tlogWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("admission/tlog: open %s: %w", path, err)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	w := &tlogWriter{
+		f:             f,
+		bw:            bufio.NewWriterSize(f, 4096),
+		path:          path,
+		rotationBytes: rotationBytes,
+		bytesWritten:  st.Size(),
+		flushInterval: flushInterval,
+		stopCh:        make(chan struct{}),
+	}
+	w.wg.Add(1)
+	go w.flushLoop()
+	return w, nil
+}
+
+// Append serializes rec and writes it to the active file. Disputes get
+// flush + Sync synchronously; everything else is buffered and the flushLoop
+// goroutine drives the periodic Sync.
+func (w *tlogWriter) Append(rec TLogRecord) error {
+	frame, err := marshalTLogRecord(rec)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if _, err := w.bw.Write(frame); err != nil {
+		return fmt.Errorf("admission/tlog: write: %w", err)
+	}
+	w.bytesWritten += int64(len(frame))
+	if rec.Seq > w.lastSeqInFile {
+		w.lastSeqInFile = rec.Seq
+	}
+
+	if rec.Kind == TLogKindDisputeFiled || rec.Kind == TLogKindDisputeResolved {
+		if err := w.bw.Flush(); err != nil {
+			return fmt.Errorf("admission/tlog: flush dispute: %w", err)
+		}
+		if err := w.f.Sync(); err != nil {
+			return fmt.Errorf("admission/tlog: sync dispute: %w", err)
+		}
+	}
+
+	if w.bytesWritten >= w.rotationBytes {
+		if err := w.rotateLocked(); err != nil {
+			return fmt.Errorf("admission/tlog: rotate: %w", err)
+		}
+	}
+	return nil
+}
+
+// LastSeq returns the highest sequence number observed by Append. Used by
+// snapshot emitter to stamp the snapshot file (Task 6).
+func (w *tlogWriter) LastSeq() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastSeqInFile
+}
+
+// Close flushes pending bytes, fsyncs, stops the flush goroutine, and
+// closes the active file. Safe to call multiple times.
+func (w *tlogWriter) Close() error {
+	select {
+	case <-w.stopCh:
+		return nil
+	default:
+		close(w.stopCh)
+	}
+	w.wg.Wait()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if err := w.f.Sync(); err != nil {
+		return err
+	}
+	return w.f.Close()
+}
+
+func (w *tlogWriter) flushLoop() {
+	defer w.wg.Done()
+	t := time.NewTicker(w.flushInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-w.stopCh:
+			return
+		case <-t.C:
+			w.mu.Lock()
+			_ = w.bw.Flush()
+			_ = w.f.Sync()
+			w.mu.Unlock()
+		}
+	}
+}
+
+// rotateLocked renames the active file and opens a new one. Caller must
+// hold w.mu.
+func (w *tlogWriter) rotateLocked() error {
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if err := w.f.Sync(); err != nil {
+		return err
+	}
+	if err := w.f.Close(); err != nil {
+		return err
+	}
+	rotatedPath := fmt.Sprintf("%s.%d", w.path, w.lastSeqInFile)
+	if err := os.Rename(w.path, rotatedPath); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	w.f = f
+	w.bw = bufio.NewWriterSize(f, 4096)
+	w.bytesWritten = 0
+	return nil
 }
