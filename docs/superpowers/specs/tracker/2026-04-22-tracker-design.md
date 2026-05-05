@@ -21,6 +21,20 @@ Connection is a single mutually-authenticated TLS (or QUIC) stream. Multiplexed 
 
 - `enroll(identity_proof)` → `{identity_id, starter_grant_entry}`
 - `heartbeat()` → bidirectional keepalive + availability updates
+
+**Amendment (admission-design §11.1).** Heartbeat is extended with three optional fields that transport seeder headroom signal to the admission subsystem (admission-design §3.3):
+
+```proto
+// Added to existing tracker heartbeat message (proto numbers ≥100 reserved
+// for forward-compatible additions; older seeders that omit these fields
+// continue to work — tracker treats absence as "no change, use cached value").
+optional uint32                            headroom_estimate = 100;  // fixed-point 0..10000
+optional tokenbay.admission.v1.TickSource  source            = 101;  // HEURISTIC | USAGE_PROBE
+optional uint32                            probe_age_s        = 102;  // 0 if HEURISTIC
+```
+
+`TickSource` is defined in `shared/admission/admission.proto` (this plan, branch `tracker_admission_shared`). The actual heartbeat proto file does not yet exist; this amendment locks the field shape so the eventual heartbeat proto and the existing admission proto are forward-consistent.
+
 - `advertise(capabilities, available, headroom)` — seeder side
 - `broker_request(envelope)` → `seeder_assignment | NO_CAPACITY`
 - `offer(envelope_hash, terms)` → seeder replies `accept(ephemeral_pubkey) | reject(reason)`
@@ -132,6 +146,54 @@ Entry: `broker_request(envelope)`.
 7. On reject: log reason for reputation, try next candidate. Cap at `max_offer_attempts` (default 4) before returning `NO_CAPACITY` to consumer.
 8. On accept: return `seeder_assignment {seeder_addr, seeder_pubkey, reservation_token}` to consumer. Transition `InflightRequest.state = ASSIGNED`.
 
+**Amendment (admission-design §11.2).** `broker_request` response becomes a `oneof`. Existing alternatives `seeder_assignment` and `no_capacity` remain valid; admission introduces two new alternatives:
+
+```proto
+message BrokerRequestResponse {
+  oneof outcome {
+    SeederAssignment seeder_assignment = 1;  // existing — admitted, broker picked a seeder
+    NoCapacity       no_capacity       = 2;  // existing — broker had no eligible seeder
+    Queued           queued            = 3;  // new — admission decided to queue
+    Rejected         rejected          = 4;  // new — admission decided to reject
+  }
+}
+
+message Queued {
+  bytes        request_id    = 1;  // 16 bytes (UUID)
+  PositionBand position_band = 2;
+  EtaBand      eta_band      = 3;
+}
+
+message Rejected {
+  RejectReason reason          = 1;
+  uint32       retry_after_s   = 2;  // seconds; clamped [60, 600] with ±50% jitter (admission-design §5.4, §8.5)
+}
+
+enum PositionBand {
+  POSITION_BAND_UNSPECIFIED = 0;
+  POSITION_BAND_1_TO_10     = 1;
+  POSITION_BAND_11_TO_50    = 2;
+  POSITION_BAND_51_TO_200   = 3;
+  POSITION_BAND_200_PLUS    = 4;
+}
+
+enum EtaBand {
+  ETA_BAND_UNSPECIFIED  = 0;
+  ETA_BAND_LT_30S       = 1;
+  ETA_BAND_30S_TO_2M    = 2;
+  ETA_BAND_2M_TO_5M     = 3;
+  ETA_BAND_5M_PLUS      = 4;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED      = 0;
+  REJECT_REASON_REGION_OVERLOADED = 1;
+  REJECT_REASON_QUEUE_TIMEOUT     = 2;
+}
+```
+
+Receiving plugins MUST handle all four `oneof` cases. The bands replace exact position/eta values to limit information leakage (admission-design §6.5, §8.5). The four messages and three enums above will live in `shared/admission/` (or a sibling tracker-control-plane package) when the corresponding proto file is implemented; the field numbers here are normative and locked by this amendment.
+
 ### 5.2 Settlement
 
 Entry: `usage_report(request_id, input_tokens, output_tokens, model, seeder_sig)` from seeder.
@@ -166,6 +228,7 @@ Entry: `usage_report(request_id, input_tokens, output_tokens, model, seeder_sig)
 - Registry shards are lock-free (DashMap-style) or use fine-grained locks per shard.
 - Ledger writes are serialized through the ledger subsystem's own lock (§4.1 of ledger spec); the tracker surfaces async wrappers.
 - Broker is CPU-light (scoring a few candidates); most latency is network round-trips.
+- The following packages MUST pass `go test -race` (admission-design §11.3): `tracker/internal/broker`, `tracker/internal/federation`, `tracker/internal/admission`. Failures under `-race` in these packages are always real bugs and block merge.
 
 Expected capacity per modest tracker node (2 vCPU, 4GB RAM): 10³ concurrent plugins, 10² broker_requests/sec. Scaling via horizontal tracker replicas with shared ledger is a v2 concern.
 

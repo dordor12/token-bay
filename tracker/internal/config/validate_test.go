@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,24 +11,23 @@ import (
 
 // validConfig returns a config that passes Validate. Subtests mutate one
 // field at a time and assert exactly one FieldError surfaces.
+//
+// All paths are rooted at t.TempDir() so they are absolute on every
+// platform (Windows requires drive-lettered paths for filepath.IsAbs)
+// and the tlog parent dir actually exists for §6.8's filesystem check.
 func validConfig(t *testing.T) *Config {
 	t.Helper()
+	tmp := t.TempDir()
 	c := DefaultConfig()
-	c.DataDir = "/var/lib/token-bay"
+	c.DataDir = tmp
 	c.Server = ServerConfig{
 		ListenAddr:      "0.0.0.0:7777",
-		IdentityKeyPath: "/etc/token-bay/identity.key",
-		TLSCertPath:     "/etc/token-bay/cert.pem",
-		TLSKeyPath:      "/etc/token-bay/cert.key",
+		IdentityKeyPath: filepath.Join(tmp, "identity.key"),
+		TLSCertPath:     filepath.Join(tmp, "cert.pem"),
+		TLSKeyPath:      filepath.Join(tmp, "cert.key"),
 	}
-	c.Ledger.StoragePath = "/var/lib/token-bay/ledger.sqlite"
-	ApplyDefaults(c) // fills tlog_path / snapshot_path_prefix
-
-	// tlog parent dir must exist for §6.8's filesystem check; use the
-	// already-existing /var which is universal on linux+darwin. (Tests
-	// for the missing-parent branch override this.)
-	c.Admission.TLogPath = "/var/admission.tlog"
-	c.Admission.SnapshotPathPrefix = "/var/admission.snapshot"
+	c.Ledger.StoragePath = filepath.Join(tmp, "ledger.sqlite")
+	ApplyDefaults(c) // fills tlog_path / snapshot_path_prefix under tmp
 	return c
 }
 
@@ -537,4 +537,13 @@ func TestValidate_AdmissionStunTurnRelayKbps(t *testing.T) {
 	err := Validate(c)
 
 	assertOneFieldError(t, err, "stun_turn.turn_relay_max_kbps")
+}
+
+func TestValidate_STUNTurn_SessionTTLSecondsZero(t *testing.T) {
+	c := validConfig(t)
+	c.STUNTURN.SessionTTLSeconds = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "stun_turn.session_ttl_seconds")
 }

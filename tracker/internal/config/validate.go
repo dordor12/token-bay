@@ -334,6 +334,9 @@ func (v *validator) checkSTUNTURN(c *Config) {
 	if c.STUNTURN.TURNRelayMaxKbps <= 0 {
 		v.add("stun_turn.turn_relay_max_kbps", "must be > 0")
 	}
+	if c.STUNTURN.SessionTTLSeconds <= 0 {
+		v.add("stun_turn.session_ttl_seconds", "must be > 0")
+	}
 }
 
 // §6.7
