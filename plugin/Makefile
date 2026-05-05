@@ -1,4 +1,4 @@
-.PHONY: all test lint check build conformance clean install
+.PHONY: all test test-integration lint check build conformance clean install
 
 all: check build
 
@@ -7,6 +7,9 @@ build:
 
 test:
 	go test -race -coverprofile=coverage.out ./...
+
+test-integration:
+	go test -tags=integration -race ./internal/trackerclient/test/...
 
 lint:
 	golangci-lint run ./...
