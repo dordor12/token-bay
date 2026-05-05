@@ -56,6 +56,18 @@ type Subsystem struct {
 	tlogPath       string
 	snapshotPrefix string
 
+	// replay state — plan 3.
+	ledgerSrc            LedgerSource
+	skipAutoReplay       bool
+	replaying            atomic.Bool
+	degradedMode         atomic.Uint32
+	snapshotLoadFailures atomic.Uint64
+	tlogCorruptions      atomic.Uint64
+
+	// nextSeq is the monotonic seq for tlog records. Atomic so concurrent
+	// OnLedgerEvent callers (race-clean test) get distinct seqs.
+	nextSeq atomic.Uint64
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }

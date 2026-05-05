@@ -1,8 +1,10 @@
 package admission
 
 import (
+	"context"
 	"crypto/ed25519"
 	"math/rand"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -172,3 +174,61 @@ func makeIDi(i int) ids.IdentityID {
 
 // fixedRand returns a deterministic *rand.Rand for jitter tests.
 func fixedRand(seed int64) *rand.Rand { return rand.New(rand.NewSource(seed)) } //nolint:gosec // G404 — tests
+
+// corruptByteAt flips one bit in the byte at offset off in the file at
+// path. Used by replay tests to simulate on-disk corruption.
+func corruptByteAt(t *testing.T, path string, off int64) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	defer f.Close()
+	buf := make([]byte, 1)
+	_, err = f.ReadAt(buf, off)
+	require.NoError(t, err)
+	buf[0] ^= 0xff
+	_, err = f.WriteAt(buf, off)
+	require.NoError(t, err)
+}
+
+// appendGarbageBytes appends n random bytes to the file at path so a
+// would-be replay sees a partial trailing frame.
+func appendGarbageBytes(t *testing.T, path string, n int) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	defer f.Close()
+	garbage := make([]byte, n)
+	for i := range garbage {
+		garbage[i] = byte(i + 1)
+	}
+	_, err = f.Write(garbage)
+	require.NoError(t, err)
+}
+
+// fakeLedgerSource is the deterministic LedgerSource used by replay
+// cross-check tests.
+type fakeLedgerSource struct {
+	mu     sync.Mutex
+	events []LedgerEvent
+}
+
+// EventsAfter implements the LedgerSource contract; minSeq is unused
+// (the fake's events list is treated as authoritative).
+func (s *fakeLedgerSource) EventsAfter(_ context.Context, _ uint64) ([]LedgerEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]LedgerEvent, len(s.events))
+	copy(out, s.events)
+	return out, nil
+}
+
+// append is used by failure-mode tests (Task 9, Task 13) to grow the
+// fake ledger after the writer crashes. Marked nolint:unused so plan-3
+// tasks 1-7 build; later tasks consume it.
+//
+//nolint:unused // used by Task 9 + Task 13
+func (s *fakeLedgerSource) append(ev LedgerEvent) {
+	s.mu.Lock()
+	s.events = append(s.events, ev)
+	s.mu.Unlock()
+}
