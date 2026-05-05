@@ -198,6 +198,50 @@ func TestDial_ALPNMismatch(t *testing.T) {
 		"got %v", err)
 }
 
+// TestMapHandshakeErr_Branches exercises mapHandshakeErr's branches
+// directly. The integration-level Dial tests only reliably reach the
+// default path (timeouts surface as DeadlineExceeded), so the structured
+// pin/ALPN/wrapped variants need a unit-test surface.
+func TestMapHandshakeErr_Branches(t *testing.T) {
+	t.Run("nil returns nil", func(t *testing.T) {
+		assert.NoError(t, mapHandshakeErr(nil))
+	})
+
+	t.Run("ctx deadline wraps as ErrHandshakeFailed", func(t *testing.T) {
+		err := mapHandshakeErr(context.DeadlineExceeded)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrHandshakeFailed))
+	})
+
+	t.Run("peer pin sentinel passes through", func(t *testing.T) {
+		err := mapHandshakeErr(ErrPeerPinMismatch)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrPeerPinMismatch))
+	})
+
+	t.Run("peer pin string match wraps as ErrPeerPinMismatch", func(t *testing.T) {
+		err := mapHandshakeErr(errors.New("tls: bad cert: tunnel: peer pin mismatch (foo)"))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrPeerPinMismatch))
+	})
+
+	t.Run("ALPN string match wraps as ErrALPNMismatch", func(t *testing.T) {
+		err := mapHandshakeErr(errors.New("tls: no application protocol overlap"))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrALPNMismatch))
+
+		err2 := mapHandshakeErr(errors.New("tls: ALPN negotiation failed"))
+		require.Error(t, err2)
+		assert.True(t, errors.Is(err2, ErrALPNMismatch))
+	})
+
+	t.Run("unknown error falls through to ErrHandshakeFailed", func(t *testing.T) {
+		err := mapHandshakeErr(errors.New("some random network blip"))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrHandshakeFailed))
+	})
+}
+
 func TestTunnel_ReceiveContextCancel(t *testing.T) {
 	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
