@@ -6,11 +6,14 @@ toolchain go1.26.2
 
 require (
 	github.com/creack/pty v1.1.9
+	github.com/google/uuid v1.6.0
 	github.com/quic-go/quic-go v0.59.0
+	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	github.com/token-bay/token-bay/shared v0.0.0-00010101000000-000000000000
+	golang.org/x/sync v0.20.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -18,6 +21,8 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/crypto v0.41.0 // indirect

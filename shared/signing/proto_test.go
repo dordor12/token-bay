@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	tbadmission "github.com/token-bay/token-bay/shared/admission"
 	"github.com/token-bay/token-bay/shared/exhaustionproof"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
@@ -298,4 +299,94 @@ func TestVerifyEntry_MarshalError(t *testing.T) {
 	pub, _ := fixtureKeypair(t)
 	bad := &tbproto.EntryBody{Model: "\xff\xfe"} // invalid UTF-8 → marshal error
 	assert.False(t, VerifyEntry(pub, bad, bytes64(0x00)))
+}
+
+func fixtureAttestationBody() *tbadmission.CreditAttestationBody {
+	return &tbadmission.CreditAttestationBody{
+		IdentityId:            bytes32(0x11),
+		IssuerTrackerId:       bytes32(0x22),
+		Score:                 8500,
+		TenureDays:            120,
+		SettlementReliability: 9700,
+		DisputeRate:           50,
+		NetCreditFlow_30D:     250000,
+		BalanceCushionLog2:    3,
+		ComputedAt:            1714000000,
+		ExpiresAt:             1714086400,
+	}
+}
+
+func TestSignVerifyCreditAttestation_RoundTrip(t *testing.T) {
+	pub, priv := fixtureKeypair(t)
+	body := fixtureAttestationBody()
+
+	sig, err := SignCreditAttestation(priv, body)
+	require.NoError(t, err)
+	require.Len(t, sig, ed25519.SignatureSize)
+
+	signed := &tbadmission.SignedCreditAttestation{Body: body, TrackerSig: sig}
+	assert.True(t, VerifyCreditAttestation(pub, signed))
+}
+
+func TestVerifyCreditAttestation_TamperedBodyFails(t *testing.T) {
+	pub, priv := fixtureKeypair(t)
+	body := fixtureAttestationBody()
+	sig, err := SignCreditAttestation(priv, body)
+	require.NoError(t, err)
+
+	body.Score = 9999
+	signed := &tbadmission.SignedCreditAttestation{Body: body, TrackerSig: sig}
+	assert.False(t, VerifyCreditAttestation(pub, signed))
+}
+
+func TestVerifyCreditAttestation_TamperedSigFails(t *testing.T) {
+	pub, priv := fixtureKeypair(t)
+	body := fixtureAttestationBody()
+	sig, err := SignCreditAttestation(priv, body)
+	require.NoError(t, err)
+
+	sig[0] ^= 0xff
+	signed := &tbadmission.SignedCreditAttestation{Body: body, TrackerSig: sig}
+	assert.False(t, VerifyCreditAttestation(pub, signed))
+}
+
+func TestVerifyCreditAttestation_WrongPubkeyFails(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	body := fixtureAttestationBody()
+	sig, err := SignCreditAttestation(priv, body)
+	require.NoError(t, err)
+
+	otherPub, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	signed := &tbadmission.SignedCreditAttestation{Body: body, TrackerSig: sig}
+	assert.False(t, VerifyCreditAttestation(otherPub, signed))
+}
+
+func TestSignCreditAttestation_NilBody(t *testing.T) {
+	_, priv := fixtureKeypair(t)
+	_, err := SignCreditAttestation(priv, nil)
+	require.Error(t, err)
+}
+
+func TestSignCreditAttestation_WrongPrivKeyLen(t *testing.T) {
+	body := fixtureAttestationBody()
+	_, err := SignCreditAttestation(make(ed25519.PrivateKey, 16), body)
+	require.Error(t, err)
+}
+
+func TestVerifyCreditAttestation_NilSigned(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	assert.False(t, VerifyCreditAttestation(pub, nil))
+}
+
+func TestVerifyCreditAttestation_NilBody(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	assert.False(t, VerifyCreditAttestation(pub, &tbadmission.SignedCreditAttestation{Body: nil, TrackerSig: bytes64(0x00)}))
+}
+
+func TestVerifyCreditAttestation_WrongSigLen(t *testing.T) {
+	pub, _ := fixtureKeypair(t)
+	signed := &tbadmission.SignedCreditAttestation{Body: fixtureAttestationBody(), TrackerSig: []byte{1, 2, 3}}
+	assert.False(t, VerifyCreditAttestation(pub, signed))
 }
