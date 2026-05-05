@@ -155,6 +155,23 @@ func TestTunnel_Closed_Receive(t *testing.T) {
 	_ = seeder
 }
 
+func TestTunnel_HalfOpenReadEOF(t *testing.T) {
+	consumer, seeder, cleanup := dialAcceptPair(t)
+	defer cleanup()
+
+	go func() {
+		// Seeder reads but never writes a status byte; it just closes
+		// its write side immediately.
+		_, _ = seeder.ReadRequest()
+		_ = seeder.CloseWrite()
+	}()
+
+	require.NoError(t, consumer.Send([]byte(`{}`)))
+	_, _, err := consumer.Receive(context.Background())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrFramingViolation), "got %v", err)
+}
+
 // Closed-state coverage for the seeder-side helpers — same shape as
 // TestTunnel_Closed_Send/Receive. Each helper must short-circuit with
 // ErrTunnelClosed once Close has landed.

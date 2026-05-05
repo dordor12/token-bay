@@ -155,6 +155,49 @@ func TestDial_BadConfig(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrInvalidConfig))
 }
 
+func TestDial_ALPNMismatch(t *testing.T) {
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	consumerPub, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	// Seeder side: bare quic-go listener with a different ALPN.
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = udp.Close() })
+
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	tlsCfg, err := newTLSConfig(seederPriv, consumerPub, now, true)
+	require.NoError(t, err)
+	tlsCfg.NextProtos = []string{"some-other-proto"}
+
+	tr := &quic.Transport{Conn: udp}
+	t.Cleanup(func() { _ = tr.Close() })
+	ln, err := tr.Listen(tlsCfg, &quic.Config{HandshakeIdleTimeout: 2 * time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = ln.Accept(ctx)
+	}()
+
+	addr := udp.LocalAddr().(*net.UDPAddr).AddrPort()
+	cfg := Config{
+		EphemeralPriv: consumerPriv,
+		PeerPin:       seederPub,
+		Now:           func() time.Time { return now },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err = Dial(ctx, addr, cfg)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrALPNMismatch) || errors.Is(err, ErrHandshakeFailed),
+		"got %v", err)
+}
+
 func TestTunnel_ReceiveContextCancel(t *testing.T) {
 	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
