@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+
+	"github.com/token-bay/token-bay/shared/ids"
 )
 
 // TLogKind classifies an admission.tlog record per admission-design §4.3.
@@ -143,4 +145,301 @@ func unmarshalTLogRecord(buf []byte) (TLogRecord, int, error) {
 		Payload: append([]byte(nil), buf[tlogPayloadOffset:payloadEnd]...),
 	}
 	return rec, frameLen, nil
+}
+
+// SettlementPayload is the on-disk form of a TLogKindSettlement record.
+type SettlementPayload struct {
+	ConsumerID  ids.IdentityID
+	SeederID    ids.IdentityID
+	CostCredits uint64
+	Flags       uint32 // bit 0 = consumer_sig_missing
+}
+
+// MarshalBinary returns the on-disk byte form. Implements the io interface
+// the writer wraps to keep persistEvent (Task 8) generic.
+func (p SettlementPayload) MarshalBinary() ([]byte, error) { return marshalSettlementPayload(p) }
+
+// UnmarshalBinary populates p from buf.
+func (p *SettlementPayload) UnmarshalBinary(buf []byte) error {
+	got, err := unmarshalSettlementPayload(buf)
+	if err != nil {
+		return err
+	}
+	*p = got
+	return nil
+}
+
+func marshalSettlementPayload(p SettlementPayload) ([]byte, error) {
+	buf := make([]byte, 32+32+8+4)
+	copy(buf[0:32], p.ConsumerID[:])
+	copy(buf[32:64], p.SeederID[:])
+	binary.BigEndian.PutUint64(buf[64:72], p.CostCredits)
+	binary.BigEndian.PutUint32(buf[72:76], p.Flags)
+	return buf, nil
+}
+
+func unmarshalSettlementPayload(buf []byte) (SettlementPayload, error) {
+	if len(buf) < 32+32+8+4 {
+		return SettlementPayload{}, fmt.Errorf("admission/tlog: settlement payload short: %d bytes", len(buf))
+	}
+	var p SettlementPayload
+	copy(p.ConsumerID[:], buf[0:32])
+	copy(p.SeederID[:], buf[32:64])
+	p.CostCredits = binary.BigEndian.Uint64(buf[64:72])
+	p.Flags = binary.BigEndian.Uint32(buf[72:76])
+	return p, nil
+}
+
+// DisputePayload covers TLogKindDisputeFiled and TLogKindDisputeResolved.
+// Upheld is meaningful only for "resolved"; "filed" carries Upheld=false.
+type DisputePayload struct {
+	ConsumerID ids.IdentityID
+	Upheld     bool
+}
+
+// MarshalBinary returns the on-disk form.
+func (p DisputePayload) MarshalBinary() ([]byte, error) { return marshalDisputePayload(p) }
+
+// UnmarshalBinary populates p from buf.
+func (p *DisputePayload) UnmarshalBinary(buf []byte) error {
+	got, err := unmarshalDisputePayload(buf)
+	if err != nil {
+		return err
+	}
+	*p = got
+	return nil
+}
+
+func marshalDisputePayload(p DisputePayload) ([]byte, error) {
+	buf := make([]byte, 32+1)
+	copy(buf[0:32], p.ConsumerID[:])
+	if p.Upheld {
+		buf[32] = 1
+	}
+	return buf, nil
+}
+
+func unmarshalDisputePayload(buf []byte) (DisputePayload, error) {
+	if len(buf) < 33 {
+		return DisputePayload{}, fmt.Errorf("admission/tlog: dispute payload short: %d bytes", len(buf))
+	}
+	var p DisputePayload
+	copy(p.ConsumerID[:], buf[0:32])
+	p.Upheld = buf[32] != 0
+	return p, nil
+}
+
+// SnapshotMarkPayload points at the snapshot file the replay should
+// load before this record's seq.
+type SnapshotMarkPayload struct {
+	SnapshotSeq uint64
+	// Path is the on-disk snapshot path (best-effort hint for replay; the
+	// authoritative discovery is via enumerateSnapshots).
+	Path string
+}
+
+// Seq is the field name persistEvent references.
+func (p SnapshotMarkPayload) Seq() uint64 { return p.SnapshotSeq }
+
+// MarshalBinary returns the on-disk form.
+func (p SnapshotMarkPayload) MarshalBinary() ([]byte, error) {
+	return marshalSnapshotMarkPayload(p)
+}
+
+// UnmarshalBinary populates p from buf.
+func (p *SnapshotMarkPayload) UnmarshalBinary(buf []byte) error {
+	got, err := unmarshalSnapshotMarkPayload(buf)
+	if err != nil {
+		return err
+	}
+	*p = got
+	return nil
+}
+
+func marshalSnapshotMarkPayload(p SnapshotMarkPayload) ([]byte, error) {
+	out := make([]byte, 0, 8+4+len(p.Path))
+	hdr := make([]byte, 8)
+	binary.BigEndian.PutUint64(hdr, p.SnapshotSeq)
+	out = append(out, hdr...)
+	out = appendLenPrefixed(out, []byte(p.Path))
+	return out, nil
+}
+
+func unmarshalSnapshotMarkPayload(buf []byte) (SnapshotMarkPayload, error) {
+	if len(buf) < 8 {
+		return SnapshotMarkPayload{}, fmt.Errorf("admission/tlog: snapshot_mark payload short: %d bytes", len(buf))
+	}
+	p := SnapshotMarkPayload{SnapshotSeq: binary.BigEndian.Uint64(buf[:8])}
+	if len(buf) > 8 {
+		path, _, err := readLenPrefixed(buf[8:])
+		if err != nil {
+			return SnapshotMarkPayload{}, fmt.Errorf("snapshot_mark path: %w", err)
+		}
+		p.Path = string(path)
+	}
+	return p, nil
+}
+
+// OperatorOverridePayload is the on-disk form of TLogKindOperatorOverride.
+type OperatorOverridePayload struct {
+	OperatorID string
+	Action     string
+	Params     []byte // opaque JSON
+	Ts         int64  // unix seconds — set by writeOperatorOverride
+}
+
+// ParamsJSON is an alias for Params used by Task 11's helper.
+func (p *OperatorOverridePayload) ParamsJSON() []byte { return p.Params }
+
+// MarshalBinary returns the on-disk form.
+func (p OperatorOverridePayload) MarshalBinary() ([]byte, error) {
+	return marshalOperatorOverridePayload(p)
+}
+
+// UnmarshalBinary populates p from buf.
+func (p *OperatorOverridePayload) UnmarshalBinary(buf []byte) error {
+	got, err := unmarshalOperatorOverridePayload(buf)
+	if err != nil {
+		return err
+	}
+	*p = got
+	return nil
+}
+
+func marshalOperatorOverridePayload(p OperatorOverridePayload) ([]byte, error) {
+	out := make([]byte, 0, 4+len(p.OperatorID)+4+len(p.Action)+4+len(p.Params)+8)
+	out = appendLenPrefixed(out, []byte(p.OperatorID))
+	out = appendLenPrefixed(out, []byte(p.Action))
+	out = appendLenPrefixed(out, p.Params)
+	tsBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(tsBuf, uint64(p.Ts)) //nolint:gosec // G115 — post-1970 unix
+	out = append(out, tsBuf...)
+	return out, nil
+}
+
+func unmarshalOperatorOverridePayload(buf []byte) (OperatorOverridePayload, error) {
+	op, rest, err := readLenPrefixed(buf)
+	if err != nil {
+		return OperatorOverridePayload{}, fmt.Errorf("operator_id: %w", err)
+	}
+	action, rest, err := readLenPrefixed(rest)
+	if err != nil {
+		return OperatorOverridePayload{}, fmt.Errorf("action: %w", err)
+	}
+	params, rest, err := readLenPrefixed(rest)
+	if err != nil {
+		return OperatorOverridePayload{}, fmt.Errorf("params: %w", err)
+	}
+	out := OperatorOverridePayload{
+		OperatorID: string(op),
+		Action:     string(action),
+		Params:     params,
+	}
+	if len(rest) >= 8 {
+		out.Ts = int64(binary.BigEndian.Uint64(rest[:8])) //nolint:gosec // G115 — post-1970 unix
+	}
+	return out, nil
+}
+
+func appendLenPrefixed(dst, val []byte) []byte {
+	hdr := make([]byte, 4)
+	binary.BigEndian.PutUint32(hdr, uint32(len(val))) //nolint:gosec // G115 — len bounded by frame cap
+	dst = append(dst, hdr...)
+	return append(dst, val...)
+}
+
+func readLenPrefixed(buf []byte) ([]byte, []byte, error) {
+	if len(buf) < 4 {
+		return nil, nil, fmt.Errorf("admission/tlog: length-prefix truncated")
+	}
+	n := int(binary.BigEndian.Uint32(buf[:4]))
+	if 4+n > len(buf) {
+		return nil, nil, fmt.Errorf("admission/tlog: length-prefixed payload truncated")
+	}
+	return buf[4 : 4+n], buf[4+n:], nil
+}
+
+// TransferDirection encodes the sign of a transfer payload.
+type TransferDirection uint8
+
+const (
+	// TransferIn = consumer received credits.
+	TransferIn TransferDirection = 1
+	// TransferOut = consumer sent credits.
+	TransferOut TransferDirection = 2
+)
+
+// TransferPayload is the on-disk form of TLogKindTransfer.
+type TransferPayload struct {
+	ConsumerID  ids.IdentityID
+	CostCredits uint64
+	Direction   TransferDirection
+}
+
+// MarshalBinary returns the on-disk form.
+func (p TransferPayload) MarshalBinary() ([]byte, error) { return marshalTransferPayload(p) }
+
+// UnmarshalBinary populates p from buf.
+func (p *TransferPayload) UnmarshalBinary(buf []byte) error {
+	got, err := unmarshalTransferPayload(buf)
+	if err != nil {
+		return err
+	}
+	*p = got
+	return nil
+}
+
+func marshalTransferPayload(p TransferPayload) ([]byte, error) {
+	buf := make([]byte, 32+8+1)
+	copy(buf[0:32], p.ConsumerID[:])
+	binary.BigEndian.PutUint64(buf[32:40], p.CostCredits)
+	buf[40] = uint8(p.Direction)
+	return buf, nil
+}
+
+func unmarshalTransferPayload(buf []byte) (TransferPayload, error) {
+	if len(buf) < 41 {
+		return TransferPayload{}, fmt.Errorf("admission/tlog: transfer payload short: %d bytes", len(buf))
+	}
+	var p TransferPayload
+	copy(p.ConsumerID[:], buf[0:32])
+	p.CostCredits = binary.BigEndian.Uint64(buf[32:40])
+	p.Direction = TransferDirection(buf[40])
+	return p, nil
+}
+
+// StarterGrantPayload is the on-disk form of TLogKindStarterGrant.
+type StarterGrantPayload struct {
+	ConsumerID  ids.IdentityID
+	CostCredits uint64
+}
+
+// MarshalBinary returns the on-disk form.
+func (p StarterGrantPayload) MarshalBinary() ([]byte, error) { return marshalStarterGrantPayload(p) }
+
+// UnmarshalBinary populates p from buf.
+func (p *StarterGrantPayload) UnmarshalBinary(buf []byte) error {
+	got, err := unmarshalStarterGrantPayload(buf)
+	if err != nil {
+		return err
+	}
+	*p = got
+	return nil
+}
+
+func marshalStarterGrantPayload(p StarterGrantPayload) ([]byte, error) {
+	buf := make([]byte, 32+8)
+	copy(buf[0:32], p.ConsumerID[:])
+	binary.BigEndian.PutUint64(buf[32:40], p.CostCredits)
+	return buf, nil
+}
+
+func unmarshalStarterGrantPayload(buf []byte) (StarterGrantPayload, error) {
+	if len(buf) < 40 {
+		return StarterGrantPayload{}, fmt.Errorf("admission/tlog: starter_grant payload short: %d bytes", len(buf))
+	}
+	var p StarterGrantPayload
+	copy(p.ConsumerID[:], buf[0:32])
+	p.CostCredits = binary.BigEndian.Uint64(buf[32:40])
+	return p, nil
 }

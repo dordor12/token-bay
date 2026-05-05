@@ -9,6 +9,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettlementPayload_RoundTrip(t *testing.T) {
+	p := SettlementPayload{
+		ConsumerID:  makeID(0xC1),
+		SeederID:    makeID(0x5E),
+		CostCredits: 1234,
+		Flags:       0,
+	}
+	buf, err := marshalSettlementPayload(p)
+	require.NoError(t, err)
+	got, err := unmarshalSettlementPayload(buf)
+	require.NoError(t, err)
+	assert.Equal(t, p, got)
+}
+
+func TestDisputePayload_RoundTrip(t *testing.T) {
+	p := DisputePayload{ConsumerID: makeID(0x42), Upheld: true}
+	buf, err := marshalDisputePayload(p)
+	require.NoError(t, err)
+	got, err := unmarshalDisputePayload(buf)
+	require.NoError(t, err)
+	assert.Equal(t, p, got)
+}
+
+func TestSnapshotMarkPayload_RoundTrip(t *testing.T) {
+	p := SnapshotMarkPayload{SnapshotSeq: 9999}
+	buf, err := marshalSnapshotMarkPayload(p)
+	require.NoError(t, err)
+	got, err := unmarshalSnapshotMarkPayload(buf)
+	require.NoError(t, err)
+	assert.Equal(t, p, got)
+}
+
+func TestOperatorOverridePayload_RoundTrip(t *testing.T) {
+	p := OperatorOverridePayload{
+		OperatorID: "alice@example",
+		Action:     "queue_drain",
+		Params:     []byte(`{"n":5}`),
+	}
+	buf, err := marshalOperatorOverridePayload(p)
+	require.NoError(t, err)
+	got, err := unmarshalOperatorOverridePayload(buf)
+	require.NoError(t, err)
+	assert.Equal(t, p, got)
+}
+
+func TestTransferPayload_RoundTrip(t *testing.T) {
+	p := TransferPayload{ConsumerID: makeID(0x11), CostCredits: 500, Direction: TransferIn}
+	buf, err := marshalTransferPayload(p)
+	require.NoError(t, err)
+	got, err := unmarshalTransferPayload(buf)
+	require.NoError(t, err)
+	assert.Equal(t, p, got)
+}
+
+func TestStarterGrantPayload_RoundTrip(t *testing.T) {
+	p := StarterGrantPayload{ConsumerID: makeID(0x42), CostCredits: 1000}
+	buf, err := marshalStarterGrantPayload(p)
+	require.NoError(t, err)
+	got, err := unmarshalStarterGrantPayload(buf)
+	require.NoError(t, err)
+	assert.Equal(t, p, got)
+}
+
+func TestUnmarshalShorterThanExpected_Errors(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func([]byte) error
+	}{
+		{"settlement", func(b []byte) error { _, err := unmarshalSettlementPayload(b); return err }},
+		{"dispute", func(b []byte) error { _, err := unmarshalDisputePayload(b); return err }},
+		{"snapshot_mark", func(b []byte) error { _, err := unmarshalSnapshotMarkPayload(b); return err }},
+		{"transfer", func(b []byte) error { _, err := unmarshalTransferPayload(b); return err }},
+		{"starter_grant", func(b []byte) error { _, err := unmarshalStarterGrantPayload(b); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn([]byte{1, 2, 3})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestTLogRecord_RoundTrip(t *testing.T) {
 	rec := TLogRecord{
 		Seq:     42,
