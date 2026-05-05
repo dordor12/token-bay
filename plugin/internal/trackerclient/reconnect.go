@@ -118,6 +118,10 @@ func (s *supervisor) run() {
 			}
 		})
 
+		if s.cfg.OfferHandler != nil || s.cfg.SettlementHandler != nil {
+			go runPushAcceptor(s.ctx, conn, s.cfg.OfferHandler, s.cfg.SettlementHandler, s.cfg.MaxFrameSize)
+		}
+
 		select {
 		case <-conn.Done():
 		case err := <-hbErrCh:

@@ -95,6 +95,52 @@ func (s *Server) handle(ctx context.Context, stream transport.Stream) {
 	s.respond(stream, status, resp, rerr)
 }
 
+// PushOffer opens a server-initiated stream and writes the offer-class
+// tag (0x01) + a single OfferPush. Returns the matching OfferDecision.
+func (s *Server) PushOffer(ctx context.Context, push *tbproto.OfferPush) (*tbproto.OfferDecision, error) {
+	stream, err := s.Conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	if _, err := stream.Write([]byte{0x01}); err != nil {
+		return nil, err
+	}
+	if err := wire.Write(stream, push, s.MaxFrameSz); err != nil {
+		return nil, err
+	}
+	if err := stream.CloseWrite(); err != nil {
+		return nil, err
+	}
+	var dec tbproto.OfferDecision
+	if err := wire.Read(stream, &dec, s.MaxFrameSz); err != nil {
+		return nil, err
+	}
+	return &dec, nil
+}
+
+// PushSettlement opens a server-initiated stream and writes the
+// settlement-class tag (0x02) + a single SettlementPush. Returns when
+// the client acks via SettleAck.
+func (s *Server) PushSettlement(ctx context.Context, push *tbproto.SettlementPush) error {
+	stream, err := s.Conn.OpenStreamSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	if _, err := stream.Write([]byte{0x02}); err != nil {
+		return err
+	}
+	if err := wire.Write(stream, push, s.MaxFrameSz); err != nil {
+		return err
+	}
+	if err := stream.CloseWrite(); err != nil {
+		return err
+	}
+	var ack tbproto.SettleAck
+	return wire.Read(stream, &ack, s.MaxFrameSz)
+}
+
 func (s *Server) respond(stream transport.Stream, status tbproto.RpcStatus, payload proto.Message, rerr *tbproto.RpcError) {
 	out := &tbproto.RpcResponse{Status: status, Error: rerr}
 	if payload != nil {
