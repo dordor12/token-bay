@@ -1927,33 +1927,971 @@ EOF
 
 ---
 
-## Tasks 6-15: focused detail
+## Task 6: snapshot emitter — periodic write + retention pruning
 
-The full TDD code for each remaining task follows the same shape as tasks 1-5 above (failing test → implementation → run-and-confirm → commit). Below is the per-task scope, file map, key code shapes, and acceptance criteria. Run `make check` after each task; fix lint findings inline using the patterns established in plan 2 (G115 nolint, gofumpt -w, revive var-naming, unused-symbol cleanup).
+**Goal.** Spawn a ticker-driven goroutine that calls `writeSnapshot` every `cfg.SnapshotIntervalS` seconds, prunes older snapshots beyond `cfg.SnapshotsRetained`, and appends a `TLogKindSnapshotMark` record so replay can locate the snapshot's tlog seq.
 
-### Task 6: SnapshotEmit goroutine + retention pruning
+- [ ] **Step 1: Failing test — `tracker/internal/admission/snapshot_emitter_test.go` (new)**
 
-- File: `snapshot.go` (extend) + `snapshot_test.go` (extend)
-- `(s *Subsystem) startSnapshotEmitter()` — `time.Ticker(cfg.SnapshotIntervalS * time.Second)`, calls `writeSnapshot` with the current state, prunes oldest if total > `cfg.SnapshotsRetained`, writes `TLogKindSnapshotMark` at the new seq.
-- Plumbing: add `s.snapshotEmitter` lifecycle to `admission.go`; spawn from `Open` after the aggregator.
-- Tests: emit on tick, retention prunes oldest, snapshot-mark appended to tlog, race-clean concurrent emit + OnLedgerEvent.
+```go
+package admission
 
-### Task 7: StartupReplay — snapshot load + tlog replay + ledger cross-check
+import (
+	"path/filepath"
+	"testing"
+	"time"
 
-- File: `replay.go` + `replay_test.go`
-- `(s *Subsystem) StartupReplay(ctx) error` per admission-design §5.7.
-- Latest snapshot → fall back on corruption → next-older. If all corrupt: degraded mode, return nil with `degraded_mode_active = 1`.
-- Replay tlog records with `seq > snapshot.seq`; mid-file CRC error halts and surfaces.
-- Ledger cross-check: query plan-2's `LedgerEventObserver` source for entries with `seq > tlog_max_seq`; synthesize missing TLogRecords + apply.
-- Tests: clean restart, missing snapshot, corrupt latest snapshot falls back, corrupt all snapshots → degraded mode, partial trailing tlog frame heals, mid-file corrupt tlog halts.
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
-### Task 8: Wire OnLedgerEvent → tlog write
+func TestSnapshotEmitter_TickEmitsAndPrunes(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	clk := newFixedClock(now)
+	dir := t.TempDir()
+	s, _ := openTempSubsystem(t,
+		WithClock(clk.Now),
+		WithSnapshotPrefix(filepath.Join(dir, "snap")),
+		WithTLogPath(filepath.Join(dir, "admission.tlog")),
+		WithSnapshotsRetained(2),
+	)
 
-- File: `events.go` (modify) + `events_test.go` (modify)
-- Add `s.tlog *tlogWriter` field to Subsystem; spawn in `Open`.
-- Each `applySettlement` / `applyTransfer` / `applyStarterGrant` / `applyDispute` first marshals its payload, then `s.tlog.Append(rec)`. In-memory mutation happens after a successful append (so a write failure doesn't leave state ahead of disk).
-- Disputes get the writer's synchronous-fsync path automatically (kind-based routing in tlog writer).
-- Tests: update existing 7 events tests to assert tlog.Append was called with the right kind + payload (use a fake writer interface in tests). Reuse `bytes.Buffer`-backed `tlogWriter` for assertion.
+	// Drive three emits manually (the ticker is wired separately).
+	for i := 0; i < 3; i++ {
+		require.NoError(t, s.runSnapshotEmitOnce(clk.Advance(0)))
+	}
+
+	files, err := enumerateSnapshots(filepath.Join(dir, "snap"))
+	require.NoError(t, err)
+	assert.Len(t, files, 2, "retention=2 keeps the two newest")
+	assert.Greater(t, files[1].seq, files[0].seq)
+}
+
+func TestSnapshotEmitter_TickAppendsSnapshotMark(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	clk := newFixedClock(now)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t,
+		WithClock(clk.Now),
+		WithSnapshotPrefix(filepath.Join(dir, "snap")),
+		WithTLogPath(tlogPath),
+	)
+
+	require.NoError(t, s.runSnapshotEmitOnce(now))
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.NotEmpty(t, recs)
+	last := recs[len(recs)-1]
+	assert.Equal(t, TLogKindSnapshotMark, last.Kind)
+}
+
+func TestSnapshotEmitter_RaceCleanConcurrentEmitAndEvent(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	clk := newFixedClock(now)
+	dir := t.TempDir()
+	s, _ := openTempSubsystem(t,
+		WithClock(clk.Now),
+		WithSnapshotPrefix(filepath.Join(dir, "snap")),
+		WithTLogPath(filepath.Join(dir, "admission.tlog")),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			s.OnLedgerEvent(LedgerEvent{
+				Kind: LedgerEventSettlement, ConsumerID: makeIDi(i),
+				CostCredits: 10, Timestamp: now,
+			})
+		}
+	}()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, s.runSnapshotEmitOnce(now))
+	}
+	<-done
+}
+```
+
+- [ ] **Step 2: Run, confirm RED** (`runSnapshotEmitOnce` and `WithSnapshotPrefix`/`WithTLogPath`/`WithSnapshotsRetained` don't exist yet).
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 -run TestSnapshotEmitter ./internal/admission/...
+```
+
+Expected: `undefined: WithSnapshotPrefix` etc. — compile error → RED.
+
+- [ ] **Step 3: Implement — extend `tracker/internal/admission/snapshot.go`**
+
+Add the emitter logic:
+
+```go
+// startSnapshotEmitter spawns the ticker goroutine. Called from Open after
+// the aggregator. Tear-down is signaled by s.stop and waited via s.wg.
+func (s *Subsystem) startSnapshotEmitter() {
+	if s.cfg.SnapshotIntervalS == 0 {
+		return // disabled
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		t := time.NewTicker(time.Duration(s.cfg.SnapshotIntervalS) * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case ts := <-t.C:
+				if err := s.runSnapshotEmitOnce(ts); err != nil {
+					// Best-effort: emitter failure is observable via the
+					// admission_snapshot_emit_failures_total metric (Task 12)
+					// and the next tick will retry.
+					continue
+				}
+			}
+		}
+	}()
+}
+
+// runSnapshotEmitOnce performs one write+prune+mark cycle. Exposed for tests
+// so we don't have to wait for a real ticker.
+func (s *Subsystem) runSnapshotEmitOnce(ts time.Time) error {
+	if s.snapshotPrefix == "" {
+		return nil // tests without persistence skip
+	}
+	seq := s.tlog.LastSeq() // monotone within process; replay sees it
+	snap := s.snapshotState(seq, ts)
+	path := fmt.Sprintf("%s.%020d", s.snapshotPrefix, seq)
+	if err := writeSnapshot(path, snap); err != nil {
+		return err
+	}
+	if err := s.pruneSnapshots(); err != nil {
+		return err
+	}
+	if s.tlog != nil {
+		mark := SnapshotMarkPayload{Seq: seq, Path: path}
+		body, _ := mark.MarshalBinary()
+		_ = s.tlog.Append(TLogRecord{Kind: TLogKindSnapshotMark, Payload: body, Ts: ts})
+	}
+	return nil
+}
+
+// snapshotState assembles a Snapshot from the live shard maps. Acquires each
+// shard's read lock once; entries are deep-copied so subsequent mutation
+// can't tear the snapshot.
+func (s *Subsystem) snapshotState(seq uint64, ts time.Time) *Snapshot {
+	snap := &Snapshot{
+		Seq:       seq,
+		Ts:        ts.UTC(),
+		Consumers: make(map[ids.IdentityID]*ConsumerCreditState),
+		Seeders:   make(map[ids.IdentityID]*SeederHeartbeatState),
+	}
+	for _, sh := range s.consumerShards {
+		sh.mu.RLock()
+		for id, st := range sh.m {
+			cp := *st
+			snap.Consumers[id] = &cp
+		}
+		sh.mu.RUnlock()
+	}
+	for _, sh := range s.seederShards {
+		sh.mu.RLock()
+		for id, st := range sh.m {
+			cp := *st
+			snap.Seeders[id] = &cp
+		}
+		sh.mu.RUnlock()
+	}
+	return snap
+}
+
+// pruneSnapshots removes the oldest snapshots so at most cfg.SnapshotsRetained
+// remain on disk.
+func (s *Subsystem) pruneSnapshots() error {
+	files, err := enumerateSnapshots(s.snapshotPrefix)
+	if err != nil {
+		return err
+	}
+	keep := s.cfg.SnapshotsRetained
+	if keep <= 0 {
+		keep = 3 // sane default if config left it zero
+	}
+	if len(files) <= keep {
+		return nil
+	}
+	for _, f := range files[:len(files)-keep] {
+		_ = os.Remove(f.path)
+	}
+	return nil
+}
+```
+
+Add the option helpers in `tracker/internal/admission/admission.go`:
+
+```go
+// WithSnapshotPrefix sets the snapshot path prefix (snapshots are written
+// to <prefix>.<seq>). Empty disables persistence.
+func WithSnapshotPrefix(prefix string) Option {
+	return func(s *Subsystem) { s.snapshotPrefix = prefix }
+}
+
+// WithTLogPath sets the active tlog file path. Empty disables tlog writes.
+func WithTLogPath(path string) Option {
+	return func(s *Subsystem) { s.tlogPath = path }
+}
+
+// WithSnapshotsRetained overrides cfg.SnapshotsRetained for tests.
+func WithSnapshotsRetained(n int) Option {
+	return func(s *Subsystem) { s.cfg.SnapshotsRetained = n }
+}
+```
+
+Extend `Subsystem` with the new fields and wire `Open` to construct the tlog writer + spawn the emitter:
+
+```go
+type Subsystem struct {
+	// ... existing fields ...
+	tlog           *tlogWriter
+	tlogPath       string
+	snapshotPrefix string
+}
+
+// In Open, after s.startAggregator():
+if s.tlogPath != "" {
+	w, err := openTLogWriter(s.tlogPath, s.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("admission: open tlog: %w", err)
+	}
+	s.tlog = w
+}
+s.startSnapshotEmitter()
+```
+
+Update `helpers_test.go` — `openTempSubsystem` should default `tlogPath`/`snapshotPrefix` to a `t.TempDir()` if a test passes neither, so existing plan-2 tests don't suddenly need persistence.
+
+- [ ] **Step 4: Run, confirm PASS**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 ./internal/admission/...
+```
+
+Expected: all 3 new tests + every existing plan-2 test PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tracker/internal/admission/snapshot.go \
+        tracker/internal/admission/snapshot_emitter_test.go \
+        tracker/internal/admission/admission.go \
+        tracker/internal/admission/helpers_test.go
+git commit -m "$(cat <<'EOF'
+feat(tracker/admission): periodic snapshot emitter + retention pruning
+
+Per admission-design §4.3 + §6.5:
+  - startSnapshotEmitter spawns a SnapshotIntervalS ticker goroutine
+  - each tick: writeSnapshot at current tlog.LastSeq(), prune to
+    SnapshotsRetained, append TLogKindSnapshotMark
+  - state is captured via snapshotState (deep-copy per shard under RLock)
+    so live mutation never tears a write
+
+WithSnapshotPrefix / WithTLogPath / WithSnapshotsRetained Options let
+tests drive the cycle without real timers; runSnapshotEmitOnce is the
+test seam.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 7: StartupReplay — snapshot load + tlog replay + ledger cross-check
+
+**Goal.** Implement `(s *Subsystem) StartupReplay(ctx) error` per admission-design §5.7. The decision tree (per §3.4 of this plan):
+1. Find newest snapshot. Try to load it. On failure, walk back to the next-older.
+2. If all snapshots are corrupt or absent → set degraded mode, accept tlog/ledger from seq=0.
+3. Replay tlog records with `seq > snapshot.seq`. A mid-file CRC error halts replay and surfaces.
+4. Cross-check against the injected `LedgerSource` (a thin interface returning entries with seq > local-max). Apply any missing records.
+
+- [ ] **Step 1: Failing tests — `tracker/internal/admission/replay_test.go` (new)**
+
+```go
+package admission
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestReplay_CleanRestart(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+	prefix := filepath.Join(dir, "snap")
+
+	// First boot: drive 5 settlements, emit snapshot, close.
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSnapshotPrefix(prefix))
+	for i := 0; i < 5; i++ {
+		s1.OnLedgerEvent(LedgerEvent{
+			Kind: LedgerEventSettlement, ConsumerID: makeIDi(i),
+			CostCredits: 10, Timestamp: now,
+		})
+	}
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.Close())
+
+	// Second boot: replay → state matches.
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSnapshotPrefix(prefix), WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+
+	for i := 0; i < 5; i++ {
+		shard := consumerShardFor(s2.consumerShards, makeIDi(i))
+		st, ok := shard.get(makeIDi(i))
+		require.True(t, ok, "consumer %d state not replayed", i)
+		assert.Equal(t, uint32(1), st.SettlementBuckets[dayBucketIndex(now, rollingWindowDays)].Total)
+	}
+	assert.False(t, s2.DegradedMode())
+}
+
+func TestReplay_NoSnapshotOnlyTLog(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlog))
+	s1.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(7),
+		CostCredits: 10, Timestamp: now,
+	})
+	require.NoError(t, s1.Close())
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+
+	shard := consumerShardFor(s2.consumerShards, makeIDi(7))
+	_, ok := shard.get(makeIDi(7))
+	assert.True(t, ok)
+	assert.False(t, s2.DegradedMode())
+}
+
+func TestReplay_CorruptLatestSnapshotFallsBackToOlder(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+	prefix := filepath.Join(dir, "snap")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSnapshotPrefix(prefix))
+	s1.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(1),
+		CostCredits: 10, Timestamp: now,
+	})
+	require.NoError(t, s1.runSnapshotEmitOnce(now)) // older snapshot
+	s1.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(2),
+		CostCredits: 10, Timestamp: now,
+	})
+	require.NoError(t, s1.runSnapshotEmitOnce(now)) // newer snapshot
+	require.NoError(t, s1.Close())
+
+	// Corrupt the newest snapshot (flip a body byte).
+	files, err := enumerateSnapshots(prefix)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	corruptByteAt(t, files[1].path, 30)
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSnapshotPrefix(prefix), WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+	assert.False(t, s2.DegradedMode(), "older snapshot loaded successfully")
+}
+
+func TestReplay_AllSnapshotsCorrupt_DegradedMode(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+	prefix := filepath.Join(dir, "snap")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSnapshotPrefix(prefix))
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.runSnapshotEmitOnce(now))
+	require.NoError(t, s1.Close())
+
+	files, err := enumerateSnapshots(prefix)
+	require.NoError(t, err)
+	for _, f := range files {
+		corruptByteAt(t, f.path, 30)
+	}
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSnapshotPrefix(prefix), WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+	assert.True(t, s2.DegradedMode(), "all snapshots corrupt → degraded")
+}
+
+func TestReplay_PartialTrailingTLogFrameHeals(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlog))
+	for i := 0; i < 3; i++ {
+		s1.OnLedgerEvent(LedgerEvent{
+			Kind: LedgerEventSettlement, ConsumerID: makeIDi(i),
+			CostCredits: 10, Timestamp: now,
+		})
+	}
+	require.NoError(t, s1.Close())
+	truncateLastBytes(t, tlog, 2) // half-written tail
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSkipAutoReplay())
+	require.NoError(t, s2.StartupReplay(context.Background()))
+	// All 3 records were already flushed before the synthetic truncate.
+	for i := 0; i < 3; i++ {
+		_, ok := consumerShardFor(s2.consumerShards, makeIDi(i)).get(makeIDi(i))
+		assert.True(t, ok)
+	}
+}
+
+func TestReplay_MidFileCorruptHalts(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+
+	s1, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlog))
+	for i := 0; i < 5; i++ {
+		s1.OnLedgerEvent(LedgerEvent{
+			Kind: LedgerEventSettlement, ConsumerID: makeIDi(i),
+			CostCredits: 10, Timestamp: now,
+		})
+	}
+	require.NoError(t, s1.Close())
+	corruptByteAt(t, tlog, 20) // first record's body
+
+	s2, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSkipAutoReplay())
+	err := s2.StartupReplay(context.Background())
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrTLogCorrupt)
+}
+
+func TestReplay_LedgerCrossCheck_AppliesMissingEntries(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlog := filepath.Join(dir, "admission.tlog")
+
+	src := &fakeLedgerSource{events: []LedgerEvent{
+		{Kind: LedgerEventSettlement, ConsumerID: makeIDi(99), CostCredits: 50, Timestamp: now},
+	}}
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)),
+		WithTLogPath(tlog), WithSkipAutoReplay(), WithLedgerSource(src))
+	require.NoError(t, s.StartupReplay(context.Background()))
+
+	_, ok := consumerShardFor(s.consumerShards, makeIDi(99)).get(makeIDi(99))
+	assert.True(t, ok, "ledger cross-check applied missing settlement")
+}
+```
+
+`helpers_test.go` additions: `corruptByteAt`, `truncateLastBytes`, and `fakeLedgerSource` go alongside the existing fixtures.
+
+- [ ] **Step 2: Run, confirm RED**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 -run TestReplay ./internal/admission/...
+```
+
+Expected: undefined symbols → RED.
+
+- [ ] **Step 3: Implement — `tracker/internal/admission/replay.go` (new)**
+
+```go
+package admission
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"time"
+)
+
+// LedgerSource is the cross-check interface admission consults during
+// StartupReplay. Real ledger emission is a separate plan; tests inject a
+// fake.
+type LedgerSource interface {
+	// EventsAfter returns ledger events with seq > minSeq. May return zero
+	// entries; must never return an unbounded sequence (caller iterates
+	// once).
+	EventsAfter(ctx context.Context, minSeq uint64) ([]LedgerEvent, error)
+}
+
+// nullLedgerSource is the default — no cross-check.
+type nullLedgerSource struct{}
+
+func (nullLedgerSource) EventsAfter(context.Context, uint64) ([]LedgerEvent, error) {
+	return nil, nil
+}
+
+// WithLedgerSource injects a LedgerSource (production wiring lands in the
+// ledger event-bus plan).
+func WithLedgerSource(src LedgerSource) Option {
+	return func(s *Subsystem) { s.ledgerSrc = src }
+}
+
+// WithSkipAutoReplay leaves startup replay to the caller's explicit
+// StartupReplay invocation (production wiring will call it from cmd
+// before serving requests).
+func WithSkipAutoReplay() Option {
+	return func(s *Subsystem) { s.skipAutoReplay = true }
+}
+
+// DegradedMode reports whether admission is running with no recoverable
+// snapshot. While true, decisions still flow but persistence-derived
+// features (recompute, /admission/queue replay) are suppressed.
+func (s *Subsystem) DegradedMode() bool {
+	return s.degradedMode.Load() != 0
+}
+
+// StartupReplay executes the §5.7 replay decision tree. Idempotent — safe
+// to call once at boot. Caller is expected to acquire the subsystem before
+// any external callers issue Decide.
+func (s *Subsystem) StartupReplay(ctx context.Context) error {
+	snap, err := s.loadNewestUsableSnapshot()
+	switch {
+	case err == nil && snap != nil:
+		s.applySnapshot(snap)
+	case errors.Is(err, errNoUsableSnapshot):
+		s.degradedMode.Store(1)
+	case err != nil:
+		return err
+	}
+
+	startSeq := uint64(0)
+	if snap != nil {
+		startSeq = snap.Seq
+	}
+	if err := s.replayTLog(startSeq); err != nil {
+		return err
+	}
+
+	src := s.ledgerSrc
+	if src == nil {
+		src = nullLedgerSource{}
+	}
+	missing, err := src.EventsAfter(ctx, s.tlog.LastSeq())
+	if err != nil {
+		return fmt.Errorf("admission/replay: ledger cross-check: %w", err)
+	}
+	for _, ev := range missing {
+		s.OnLedgerEvent(ev)
+	}
+	return nil
+}
+
+var errNoUsableSnapshot = errors.New("admission: no usable snapshot")
+
+func (s *Subsystem) loadNewestUsableSnapshot() (*Snapshot, error) {
+	if s.snapshotPrefix == "" {
+		return nil, errNoUsableSnapshot
+	}
+	files, err := enumerateSnapshots(s.snapshotPrefix)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(files) - 1; i >= 0; i-- {
+		snap, err := readSnapshot(files[i].path)
+		if err == nil {
+			return snap, nil
+		}
+		// On corruption, advance the snapshot_load_failures{which="snapshot"}
+		// counter (Task 12 wires the gauge).
+	}
+	return nil, errNoUsableSnapshot
+}
+
+// applySnapshot installs every consumer + seeder state into the live
+// shard maps. Caller holds no locks; getOrInit acquires per-shard.
+func (s *Subsystem) applySnapshot(snap *Snapshot) {
+	now := time.Now() // only used for FirstSeenAt fallback; snap carries its own
+	for id, st := range snap.Consumers {
+		live := consumerShardFor(s.consumerShards, id).getOrInit(id, now)
+		*live = *st
+	}
+	for id, st := range snap.Seeders {
+		live := seederShardFor(s.seederShards, id).getOrInit(id, now)
+		*live = *st
+	}
+}
+
+// replayTLog reads every record with seq > startSeq and re-applies it. Mid-file
+// CRC corruption halts and surfaces ErrTLogCorrupt; trailing-frame truncation
+// is healed by the reader.
+func (s *Subsystem) replayTLog(startSeq uint64) error {
+	if s.tlogPath == "" {
+		return nil
+	}
+	files, err := enumerateTLogFiles(s.tlogPath)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		recs, err := readTLogFile(f)
+		if err != nil {
+			return err
+		}
+		for _, r := range recs {
+			if r.Seq <= startSeq {
+				continue
+			}
+			s.applyTLogRecord(r)
+		}
+	}
+	return nil
+}
+
+// applyTLogRecord routes a replayed record to the same in-memory mutator
+// OnLedgerEvent uses, but skips the tlog write (would cause replay loops).
+func (s *Subsystem) applyTLogRecord(r TLogRecord) {
+	switch r.Kind {
+	case TLogKindSettlement:
+		var p SettlementPayload
+		if err := p.UnmarshalBinary(r.Payload); err == nil {
+			s.OnLedgerEvent(p.toLedgerEvent(r.Ts))
+		}
+	case TLogKindDispute:
+		var p DisputePayload
+		if err := p.UnmarshalBinary(r.Payload); err == nil {
+			s.OnLedgerEvent(p.toLedgerEvent(r.Ts))
+		}
+	case TLogKindTransfer:
+		var p TransferPayload
+		if err := p.UnmarshalBinary(r.Payload); err == nil {
+			s.OnLedgerEvent(p.toLedgerEvent(r.Ts))
+		}
+	case TLogKindStarterGrant:
+		var p StarterGrantPayload
+		if err := p.UnmarshalBinary(r.Payload); err == nil {
+			s.OnLedgerEvent(p.toLedgerEvent(r.Ts))
+		}
+	case TLogKindSnapshotMark, TLogKindOperatorOverride:
+		// Markers and audit-only — no in-memory mutation.
+	}
+}
+```
+
+Add to `Subsystem` (in `admission.go`):
+
+```go
+type Subsystem struct {
+	// ... existing ...
+	ledgerSrc      LedgerSource
+	skipAutoReplay bool
+	degradedMode   atomic.Uint32
+}
+```
+
+Modify `Open` to call `StartupReplay` automatically unless `skipAutoReplay` is set:
+
+```go
+if !s.skipAutoReplay {
+	if err := s.StartupReplay(context.Background()); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+}
+```
+
+Note: `applyTLogRecord` calls back into `OnLedgerEvent`, which will append a fresh tlog record. To avoid replay-loop writes, gate the append in Task 8's `OnLedgerEvent` rewrite with an `s.replaying atomic.Bool`. Set it true around `replayTLog`.
+
+- [ ] **Step 4: Run, confirm PASS**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 ./internal/admission/...
+```
+
+Expected: every replay test PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tracker/internal/admission/replay.go \
+        tracker/internal/admission/replay_test.go \
+        tracker/internal/admission/admission.go \
+        tracker/internal/admission/helpers_test.go
+git commit -m "$(cat <<'EOF'
+feat(tracker/admission): StartupReplay — snapshot + tlog + ledger cross-check
+
+Per admission-design §5.7:
+  - Walk newest→oldest snapshots; first one that loads is applied.
+  - All-corrupt → degraded mode (decisions still flow, persistence
+    features suppressed).
+  - Replay tlog records with seq > snapshot.seq; mid-file CRC halts,
+    trailing-frame truncation heals.
+  - LedgerSource cross-check fills any gap between local tlog and
+    authoritative ledger. v1 default is null; production wiring lands
+    in the ledger event-bus plan.
+
+WithLedgerSource / WithSkipAutoReplay Options + DegradedMode accessor.
+applyTLogRecord routes by Kind back through OnLedgerEvent (Task 8 will
+gate the tlog append on s.replaying so replay doesn't double-write).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 8: Wire OnLedgerEvent → tlog write
+
+**Goal.** Modify the existing `OnLedgerEvent` so each in-memory state change is persisted to the tlog *first*, then applied. A write failure aborts the apply (state never gets ahead of disk). Disputes get synchronous fsync; everything else is batched. During replay, tlog writes are suppressed via the `s.replaying` flag.
+
+- [ ] **Step 1: Failing test additions — `tracker/internal/admission/events_test.go` (extend)**
+
+Add at the end of the existing file:
+
+```go
+func TestOnLedgerEvent_PersistsSettlementToTLog(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(11),
+		SeederID: makeIDi(99), CostCredits: 42, Timestamp: now,
+	})
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindSettlement, recs[0].Kind)
+
+	var p SettlementPayload
+	require.NoError(t, p.UnmarshalBinary(recs[0].Payload))
+	assert.Equal(t, makeIDi(11), p.ConsumerID)
+	assert.Equal(t, uint64(42), p.CostCredits)
+}
+
+func TestOnLedgerEvent_DisputeForcesFsync(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventDisputeFiled, ConsumerID: makeIDi(11),
+		Timestamp: now,
+	})
+	// Dispute path syncs synchronously — readable without explicit Close.
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindDispute, recs[0].Kind)
+}
+
+func TestOnLedgerEvent_TransferRoundtrip(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventTransferIn, ConsumerID: makeIDi(11),
+		CostCredits: 100, Timestamp: now,
+	})
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindTransfer, recs[0].Kind)
+}
+
+func TestOnLedgerEvent_StarterGrantRoundtrip(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventStarterGrant, ConsumerID: makeIDi(11),
+		CostCredits: 1000, Timestamp: now,
+	})
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindStarterGrant, recs[0].Kind)
+}
+
+func TestOnLedgerEvent_DuringReplay_NoDoubleWrite(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.replaying.Store(true)
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(7),
+		CostCredits: 10, Timestamp: now,
+	})
+	s.replaying.Store(false)
+	require.NoError(t, s.tlog.Close())
+
+	recs, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	assert.Empty(t, recs, "replay path must not append to tlog")
+}
+```
+
+- [ ] **Step 2: Run, confirm RED.**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 -run TestOnLedgerEvent ./internal/admission/...
+```
+
+Expected: tlog write missing → settlement records empty → RED.
+
+- [ ] **Step 3: Implement — modify `tracker/internal/admission/events.go`**
+
+Add the `replaying` flag on `Subsystem` (`admission.go`):
+
+```go
+type Subsystem struct {
+	// ... existing ...
+	replaying atomic.Bool
+}
+```
+
+Wire `replayTLog` (Task 7) to set `s.replaying` true on entry, false on exit.
+
+Rewrite `OnLedgerEvent` so each branch builds + appends a tlog record before mutating:
+
+```go
+func (s *Subsystem) OnLedgerEvent(ev LedgerEvent) {
+	switch ev.Kind {
+	case LedgerEventSettlement:
+		if err := s.persistEvent(TLogKindSettlement, settlementPayloadFor(ev), ev.Timestamp); err != nil {
+			return
+		}
+		s.applySettlement(ev)
+	case LedgerEventTransferIn:
+		if err := s.persistEvent(TLogKindTransfer, transferPayloadFor(ev, true), ev.Timestamp); err != nil {
+			return
+		}
+		s.applyTransfer(ev.ConsumerID, signedDelta(ev.CostCredits, true), ev.Timestamp)
+	case LedgerEventTransferOut:
+		if err := s.persistEvent(TLogKindTransfer, transferPayloadFor(ev, false), ev.Timestamp); err != nil {
+			return
+		}
+		s.applyTransfer(ev.ConsumerID, signedDelta(ev.CostCredits, false), ev.Timestamp)
+	case LedgerEventStarterGrant:
+		if err := s.persistEvent(TLogKindStarterGrant, starterGrantPayloadFor(ev), ev.Timestamp); err != nil {
+			return
+		}
+		s.applyStarterGrant(ev)
+	case LedgerEventDisputeFiled:
+		if err := s.persistEvent(TLogKindDispute, disputePayloadFor(ev, false), ev.Timestamp); err != nil {
+			return
+		}
+		s.applyDispute(ev, false)
+	case LedgerEventDisputeResolved:
+		if !ev.DisputeUpheld {
+			return
+		}
+		if err := s.persistEvent(TLogKindDispute, disputePayloadFor(ev, true), ev.Timestamp); err != nil {
+			return
+		}
+		s.applyDispute(ev, true)
+	case LedgerEventUnspecified:
+		// no-op
+	}
+}
+
+// persistEvent appends a TLogRecord. Skipped when s.replaying is true (the
+// records being applied are coming from disk; double-writing would create
+// an infinite-growth loop on every restart).
+func (s *Subsystem) persistEvent(kind TLogKind, body interface{ MarshalBinary() ([]byte, error) }, ts time.Time) error {
+	if s.replaying.Load() || s.tlog == nil {
+		return nil
+	}
+	payload, err := body.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return s.tlog.Append(TLogRecord{Kind: kind, Payload: payload, Ts: ts})
+}
+
+func settlementPayloadFor(ev LedgerEvent) SettlementPayload { /* ... field copy ... */ }
+func transferPayloadFor(ev LedgerEvent, in bool) TransferPayload { /* ... */ }
+func starterGrantPayloadFor(ev LedgerEvent) StarterGrantPayload { /* ... */ }
+func disputePayloadFor(ev LedgerEvent, upheld bool) DisputePayload { /* ... */ }
+```
+
+The four `*payloadFor` helpers map a `LedgerEvent` onto its payload struct (defined in Task 2). Each is ~5 lines of field assignment.
+
+The reverse direction (`payload.toLedgerEvent`) used by `applyTLogRecord` (Task 7) lives alongside its payload type in `tracker/internal/admission/tlog_payloads.go`.
+
+- [ ] **Step 4: Run, confirm PASS**
+
+```bash
+cd /Users/dor.amid/.superset/worktrees/token-bay/tracker_admission/tracker
+PATH="$HOME/go/bin:$HOME/.local/share/mise/shims:$PATH" go test -race -count=1 ./internal/admission/...
+```
+
+Expected: every events test (existing 7 + 5 new) PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tracker/internal/admission/events.go \
+        tracker/internal/admission/events_test.go \
+        tracker/internal/admission/admission.go \
+        tracker/internal/admission/tlog_payloads.go
+git commit -m "$(cat <<'EOF'
+feat(tracker/admission): persist OnLedgerEvent to tlog before mutating
+
+Each branch of OnLedgerEvent now:
+  1. Marshals its kind-specific payload (Task 2 types).
+  2. Appends a TLogRecord via s.tlog.Append.
+  3. Applies the in-memory mutation only on append success.
+
+Persist-then-apply ordering means a write failure leaves disk and memory
+consistent: the event is dropped, the next OnLedgerEvent call is a fresh
+attempt.
+
+Disputes get synchronous fsync (kind-based routing in the tlogWriter from
+Task 3); other kinds are batched.
+
+s.replaying is set during StartupReplay so applyTLogRecord can re-route
+through OnLedgerEvent without double-writing.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
 
 ### Task 9: Failure-mode integration tests (§7.1-7.4 + degraded mode)
 
