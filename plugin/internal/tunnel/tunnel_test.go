@@ -52,6 +52,7 @@ func dialAcceptPair(t *testing.T) (consumer, seeder *Tunnel, cleanup func()) {
 	// directly to the underlying stream so Accept can return; we do
 	// this below the framing layer so the byte is consumed by the
 	// helper and the seeder Tunnel starts at a clean wire boundary.
+	// The byte value is arbitrary — drained on the seeder side below.
 	_, err = consumer.stream.Write([]byte{0xff})
 	require.NoError(t, err)
 

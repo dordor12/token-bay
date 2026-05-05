@@ -103,7 +103,8 @@ func (t *Tunnel) SendOK() error {
 }
 
 // SendError writes the error status byte and msg. Caller should
-// CloseWrite afterwards.
+// CloseWrite afterwards. Messages longer than 4 KiB are silently
+// truncated to fit the wire-format bound (see doc.go "Wire format").
 func (t *Tunnel) SendError(msg string) error {
 	t.mu.Lock()
 	closed := t.closed
