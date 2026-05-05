@@ -78,6 +78,61 @@ func (t *Tunnel) Receive(ctx context.Context) (status, io.Reader, error) {
 	return st, t.stream, nil
 }
 
+// ReadRequest reads the consumer's request body, bounded by
+// cfg.MaxRequestBytes. Seeder-side helper.
+func (t *Tunnel) ReadRequest() ([]byte, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, ErrTunnelClosed
+	}
+	return readRequest(t.stream, t.cfg.MaxRequestBytes)
+}
+
+// SendOK writes the success status byte. Subsequent ResponseWriter()
+// writes form the SSE body.
+func (t *Tunnel) SendOK() error {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return ErrTunnelClosed
+	}
+	return writeResponseStatus(t.stream, statusOK)
+}
+
+// SendError writes the error status byte and msg. Caller should
+// CloseWrite afterwards.
+func (t *Tunnel) SendError(msg string) error {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return ErrTunnelClosed
+	}
+	return writeResponseError(t.stream, msg)
+}
+
+// ResponseWriter exposes the underlying stream for verbatim SSE relay.
+// Only valid after SendOK / SendError.
+func (t *Tunnel) ResponseWriter() io.Writer { return t.stream }
+
+// CloseWrite signals end-of-response. The peer's Receive reader will
+// observe io.EOF on the next Read.
+func (t *Tunnel) CloseWrite() error {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return ErrTunnelClosed
+	}
+	if t.stream == nil {
+		return nil
+	}
+	return t.stream.Close() // quic-go: closes the send direction
+}
+
 // Close tears down the QUIC connection. Idempotent.
 func (t *Tunnel) Close() error {
 	t.mu.Lock()
