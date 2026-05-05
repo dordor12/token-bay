@@ -11,7 +11,9 @@ import (
 )
 
 // Listener is the seeder-side accept loop. One Listener may produce
-// many *Tunnel via Accept.
+// many *Tunnel via Accept. Accept is safe to call from multiple
+// goroutines; Close is idempotent and may race with in-flight Accept
+// calls (those return a quic-wrapped error after Close lands).
 type Listener struct {
 	cfg       Config
 	transport *quic.Transport
@@ -74,7 +76,8 @@ func (l *Listener) LocalAddr() netip.AddrPort { return l.addr }
 
 // Accept returns the next handshaked tunnel. Blocks until a peer
 // completes the QUIC + TLS handshake AND opens the bidi stream, or
-// ctx fires.
+// ctx fires. After Close, in-flight or subsequent Accept calls return
+// a quic-wrapped error (mapped via mapHandshakeErr).
 func (l *Listener) Accept(ctx context.Context) (*Tunnel, error) {
 	conn, err := l.ln.Accept(ctx)
 	if err != nil {

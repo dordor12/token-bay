@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
-	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -111,16 +110,16 @@ func TestListener_LocalAddr_AfterClose(t *testing.T) {
 	}
 	ln, err := Listen(netip.MustParseAddrPort("127.0.0.1:0"), cfg)
 	require.NoError(t, err)
+	preCloseAddr := ln.LocalAddr()
 	require.NoError(t, ln.Close())
 
 	// Second Close is a no-op (idempotent).
 	assert.NoError(t, ln.Close())
 
 	// LocalAddr after close returns the last known address.
-	_ = ln.LocalAddr()
+	assert.Equal(t, preCloseAddr, ln.LocalAddr())
 
 	// Bad bind also surfaces ErrInvalidConfig.
 	_, err = Listen(netip.AddrPort{}, cfg)
 	require.Error(t, err)
-	_ = net.IPv4zero
 }
