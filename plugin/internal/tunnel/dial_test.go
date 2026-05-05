@@ -154,3 +154,48 @@ func TestDial_BadConfig(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfig))
 }
+
+func TestTunnel_ReceiveContextCancel(t *testing.T) {
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	consumerPub, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	addr, ln, cleanup := loopbackListener(t, seederPriv, consumerPub)
+	defer cleanup()
+
+	// Seeder accepts but never writes — Receive should block until ctx fires.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := ln.Accept(ctx)
+		if err != nil {
+			return
+		}
+		_, _ = conn.AcceptStream(ctx)
+		// Hold the stream open without writing.
+		<-ctx.Done()
+		_ = conn.CloseWithError(0, "test done")
+	}()
+
+	cfg := Config{
+		EphemeralPriv: consumerPriv,
+		PeerPin:       seederPub,
+		Now:           func() time.Time { return time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC) },
+	}
+	dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tun, err := Dial(dialCtx, addr, cfg)
+	require.NoError(t, err)
+	defer tun.Close()
+	// Send "ping" to flush a STREAM frame so the seeder accepts.
+	require.NoError(t, tun.Send([]byte("ping")))
+
+	rxCtx, rxCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer rxCancel()
+	start := time.Now()
+	_, _, err = tun.Receive(rxCtx)
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	require.Less(t, elapsed, 2*time.Second, "Receive did not honor ctx deadline; took %v", elapsed)
+}

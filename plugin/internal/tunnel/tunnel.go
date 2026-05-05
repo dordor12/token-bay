@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 )
@@ -22,7 +23,10 @@ type Tunnel struct {
 }
 
 // Send writes the consumer→seeder request body in length-prefixed form.
-// Returns ErrTunnelClosed if Close has been called.
+// If Close has *completed* before Send is entered, returns ErrTunnelClosed.
+// Concurrent Close after the closed-check yields a quic-wrapped network
+// error from the underlying stream.Write — Tunnel is half-duplex single-
+// stream by contract; callers should not race Close against Send.
 func (t *Tunnel) Send(body []byte) error {
 	t.mu.Lock()
 	closed := t.closed
@@ -34,8 +38,20 @@ func (t *Tunnel) Send(body []byte) error {
 }
 
 // Receive returns the seeder's response status and an io.Reader of the
-// remaining content bytes (until the peer closes write). status==statusError
-// implies the reader yields the UTF-8 error message.
+// remaining content bytes (until the peer closes write or the QUIC
+// connection terminates). status==statusError implies the reader yields
+// the UTF-8 error message.
+//
+// If ctx has a deadline, it is propagated to the stream's read path
+// (SetReadDeadline). ctx cancellation interrupts any in-flight read by
+// setting the read deadline to time.Now(); the caller will receive a
+// QUIC-wrapped error.
+//
+// If Close has *completed* before Receive is entered, returns
+// ErrTunnelClosed. Concurrent Close after the closed-check yields a
+// quic-wrapped network error from the underlying stream.Read — Tunnel is
+// half-duplex single-stream by contract; callers should not race Close
+// against Receive.
 func (t *Tunnel) Receive(ctx context.Context) (status, io.Reader, error) {
 	t.mu.Lock()
 	closed := t.closed
@@ -43,6 +59,18 @@ func (t *Tunnel) Receive(ctx context.Context) (status, io.Reader, error) {
 	if closed {
 		return 0, nil, ErrTunnelClosed
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		_ = t.stream.SetReadDeadline(dl)
+	}
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = t.stream.SetReadDeadline(time.Now())
+		case <-doneCh:
+		}
+	}()
 	st, err := readResponseStatus(t.stream)
 	if err != nil {
 		return 0, nil, err
