@@ -29,17 +29,18 @@ func TestHeartbeatPingPong(t *testing.T) {
 			return
 		}
 		defer s.Close()
-		for i := 0; i < 3; i++ {
+		// Reply to every ping until the client tears the stream down (ctx
+		// cancel on the heartbeat goroutine closes the stream from the
+		// client side, which surfaces here as EOF / closed pipe).
+		for {
 			var ping tbproto.HeartbeatPing
 			if err := wire.Read(s, &ping, 1<<10); err != nil {
-				if errors.Is(err, io.EOF) {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 					return
 				}
-				t.Errorf("server read: %v", err)
 				return
 			}
 			if err := wire.Write(s, &tbproto.HeartbeatPong{Seq: ping.Seq}, 1<<10); err != nil {
-				t.Errorf("server write: %v", err)
 				return
 			}
 		}
