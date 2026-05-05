@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -573,6 +577,91 @@ func (w *tlogWriter) flushLoop() {
 			w.mu.Unlock()
 		}
 	}
+}
+
+// readTLogFile reads every TLogRecord from the file at path. Returns the
+// records in file order, the byte offset of the last successfully-parsed
+// record's end (so callers can truncate any trailing garbage), and an
+// error.
+//
+// Truncated trailing record (ErrTLogTruncated) is NOT propagated as an
+// error — it's the expected post-crash state. Caller treats lastGoodOffset
+// as authoritative and (optionally) truncates the file there.
+//
+// Mid-file corruption (ErrTLogCorrupt) IS propagated; replay halts and
+// surfaces the error to the operator (admission-design §7.2).
+func readTLogFile(path string) (records []TLogRecord, lastGoodOffset int64, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	var pos int
+	for pos < len(data) {
+		rec, n, err := unmarshalTLogRecord(data[pos:])
+		switch {
+		case errors.Is(err, ErrTLogTruncated):
+			return records, int64(pos), nil
+		case errors.Is(err, ErrTLogCorrupt):
+			return records, int64(pos), err
+		case err != nil:
+			return records, int64(pos), err
+		}
+		records = append(records, rec)
+		pos += n
+	}
+	return records, int64(pos), nil
+}
+
+// enumerateTLogFiles returns every tlog file (rotated + active) for a
+// given base path, in seq-ascending order with the active file last.
+//
+// Naming convention:
+//   - rotated: <basePath>.<lastSeqInFile>
+//   - active:  <basePath>
+//
+// Suffixes that fail to parse as uint64 are ignored (defensive against
+// unrelated files in the directory).
+func enumerateTLogFiles(basePath string) ([]string, error) {
+	dir := filepath.Dir(basePath)
+	base := filepath.Base(basePath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	type rotated struct {
+		path string
+		seq  uint64
+	}
+	var rotateds []rotated
+	var hasActive bool
+
+	for _, e := range entries {
+		name := e.Name()
+		if name == base {
+			hasActive = true
+			continue
+		}
+		if !strings.HasPrefix(name, base+".") {
+			continue
+		}
+		suffix := strings.TrimPrefix(name, base+".")
+		seq, err := strconv.ParseUint(suffix, 10, 64)
+		if err != nil {
+			continue
+		}
+		rotateds = append(rotateds, rotated{path: filepath.Join(dir, name), seq: seq})
+	}
+	sort.Slice(rotateds, func(i, j int) bool { return rotateds[i].seq < rotateds[j].seq })
+
+	out := make([]string, 0, len(rotateds)+1)
+	for _, r := range rotateds {
+		out = append(out, r.path)
+	}
+	if hasActive {
+		out = append(out, basePath)
+	}
+	return out, nil
 }
 
 // rotateLocked renames the active file and opens a new one. Caller must
