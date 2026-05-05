@@ -261,6 +261,82 @@ func decodeSeederState(buf []byte) (ids.IdentityID, *SeederHeartbeatState, int, 
 	return id, st, fixed, nil
 }
 
+// runSnapshotEmitOnce performs one write+prune+mark cycle. Exposed for
+// tests so we don't have to wait for a real ticker. No-op when persistence
+// is disabled (snapshotPrefix unset).
+func (s *Subsystem) runSnapshotEmitOnce(ts time.Time) error {
+	if s.snapshotPrefix == "" {
+		return nil
+	}
+	var seq uint64
+	if s.tlog != nil {
+		seq = s.tlog.LastSeq()
+	}
+	consumers, seeders := s.snapshotState()
+	path := fmt.Sprintf("%s.%020d", s.snapshotPrefix, seq)
+	if err := writeSnapshot(path, seq, ts, consumers, seeders); err != nil {
+		return err
+	}
+	if err := s.pruneSnapshots(); err != nil {
+		return err
+	}
+	if s.tlog != nil {
+		mark := SnapshotMarkPayload{SnapshotSeq: seq, Path: path}
+		body, _ := mark.MarshalBinary()
+		_ = s.tlog.Append(TLogRecord{
+			Kind:    TLogKindSnapshotMark,
+			Payload: body,
+			Ts:      uint64(ts.Unix()), //nolint:gosec // G115 — post-1970
+		})
+	}
+	return nil
+}
+
+// snapshotState returns deep-copied per-shard maps. Each shard's RLock
+// is held only for the copy; subsequent live mutation cannot tear the
+// snapshot.
+func (s *Subsystem) snapshotState() (map[ids.IdentityID]*ConsumerCreditState, map[ids.IdentityID]*SeederHeartbeatState) {
+	consumers := make(map[ids.IdentityID]*ConsumerCreditState)
+	for _, sh := range s.consumerShards {
+		sh.mu.RLock()
+		for id, st := range sh.m {
+			cp := *st
+			consumers[id] = &cp
+		}
+		sh.mu.RUnlock()
+	}
+	seeders := make(map[ids.IdentityID]*SeederHeartbeatState)
+	for _, sh := range s.seederShards {
+		sh.mu.RLock()
+		for id, st := range sh.m {
+			cp := *st
+			seeders[id] = &cp
+		}
+		sh.mu.RUnlock()
+	}
+	return consumers, seeders
+}
+
+// pruneSnapshots removes the oldest snapshots so at most cfg.SnapshotsRetained
+// remain on disk.
+func (s *Subsystem) pruneSnapshots() error {
+	files, err := enumerateSnapshots(s.snapshotPrefix)
+	if err != nil {
+		return err
+	}
+	keep := s.cfg.SnapshotsRetained
+	if keep <= 0 {
+		keep = 3 // sane default if config left it zero
+	}
+	if len(files) <= keep {
+		return nil
+	}
+	for _, f := range files[:len(files)-keep] {
+		_ = os.Remove(f.path)
+	}
+	return nil
+}
+
 // snapshotFile is one entry returned by enumerateSnapshots.
 type snapshotFile struct {
 	path string

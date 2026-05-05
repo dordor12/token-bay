@@ -75,7 +75,9 @@ func (s *Subsystem) OnLedgerEvent(ev LedgerEvent) {
 func (s *Subsystem) applySettlement(ev LedgerEvent) {
 	idx := dayBucketIndex(ev.Timestamp, rollingWindowDays)
 
-	cst := consumerShardFor(s.consumerShards, ev.ConsumerID).getOrInit(ev.ConsumerID, ev.Timestamp)
+	csh := consumerShardFor(s.consumerShards, ev.ConsumerID)
+	cst := csh.getOrInit(ev.ConsumerID, ev.Timestamp)
+	csh.mu.Lock()
 	cst.SettlementBuckets[idx] = rotateIfStale(cst.SettlementBuckets[idx], ev.Timestamp, rollingWindowDays)
 	cst.SettlementBuckets[idx].Total++
 	if ev.Flags&1 == 0 {
@@ -84,37 +86,50 @@ func (s *Subsystem) applySettlement(ev LedgerEvent) {
 	cst.FlowBuckets[idx] = rotateIfStale(cst.FlowBuckets[idx], ev.Timestamp, rollingWindowDays)
 	cst.FlowBuckets[idx].B += uint32(ev.CostCredits) //nolint:gosec // G115 — cost is ≤ uint32 ceiling in practice
 	cst.LastBalanceSeen -= int64(ev.CostCredits)     //nolint:gosec // G115 — same
+	csh.mu.Unlock()
 
 	if ev.SeederID != (ids.IdentityID{}) {
-		sst := consumerShardFor(s.consumerShards, ev.SeederID).getOrInit(ev.SeederID, ev.Timestamp)
+		ssh := consumerShardFor(s.consumerShards, ev.SeederID)
+		sst := ssh.getOrInit(ev.SeederID, ev.Timestamp)
+		ssh.mu.Lock()
 		sst.FlowBuckets[idx] = rotateIfStale(sst.FlowBuckets[idx], ev.Timestamp, rollingWindowDays)
 		sst.FlowBuckets[idx].A += uint32(ev.CostCredits) //nolint:gosec // G115
 		sst.LastBalanceSeen += int64(ev.CostCredits)     //nolint:gosec // G115
+		ssh.mu.Unlock()
 	}
 }
 
 func (s *Subsystem) applyTransfer(id ids.IdentityID, delta int64, now time.Time) {
-	st := consumerShardFor(s.consumerShards, id).getOrInit(id, now)
+	sh := consumerShardFor(s.consumerShards, id)
+	st := sh.getOrInit(id, now)
+	sh.mu.Lock()
 	st.LastBalanceSeen += delta
+	sh.mu.Unlock()
 }
 
 func (s *Subsystem) applyStarterGrant(ev LedgerEvent) {
-	st := consumerShardFor(s.consumerShards, ev.ConsumerID).getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh := consumerShardFor(s.consumerShards, ev.ConsumerID)
+	st := sh.getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh.mu.Lock()
 	if st.FirstSeenAt.IsZero() || st.FirstSeenAt.After(ev.Timestamp) {
 		st.FirstSeenAt = ev.Timestamp
 	}
 	st.LastBalanceSeen = int64(ev.CostCredits) //nolint:gosec // G115
+	sh.mu.Unlock()
 }
 
 func (s *Subsystem) applyDispute(ev LedgerEvent, upheld bool) {
 	idx := dayBucketIndex(ev.Timestamp, rollingWindowDays)
-	st := consumerShardFor(s.consumerShards, ev.ConsumerID).getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh := consumerShardFor(s.consumerShards, ev.ConsumerID)
+	st := sh.getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh.mu.Lock()
 	st.DisputeBuckets[idx] = rotateIfStale(st.DisputeBuckets[idx], ev.Timestamp, rollingWindowDays)
 	if upheld {
 		st.DisputeBuckets[idx].B++
 	} else {
 		st.DisputeBuckets[idx].A++
 	}
+	sh.mu.Unlock()
 }
 
 // signedDelta returns +cost for positive transfers (in) and -cost for
