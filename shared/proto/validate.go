@@ -181,3 +181,90 @@ func allZero(b []byte) bool {
 	}
 	return true
 }
+
+// ValidateRPCRequest enforces structural invariants on an incoming
+// RpcRequest. method must be one of the defined non-zero values
+// (method zero is the heartbeat-channel marker, validated separately).
+// payload must not exceed MaxRPCPayloadSize.
+func ValidateRPCRequest(r *RpcRequest) error {
+	if r == nil {
+		return errors.New("proto: RpcRequest is nil")
+	}
+	switch r.Method {
+	case RpcMethod_RPC_METHOD_ENROLL,
+		RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		RpcMethod_RPC_METHOD_BALANCE,
+		RpcMethod_RPC_METHOD_SETTLE,
+		RpcMethod_RPC_METHOD_USAGE_REPORT,
+		RpcMethod_RPC_METHOD_ADVERTISE,
+		RpcMethod_RPC_METHOD_TRANSFER_REQUEST,
+		RpcMethod_RPC_METHOD_STUN_ALLOCATE,
+		RpcMethod_RPC_METHOD_TURN_RELAY_OPEN:
+	default:
+		return fmt.Errorf("proto: RpcRequest.Method invalid: %v", r.Method)
+	}
+	if len(r.Payload) > MaxRPCPayloadSize {
+		return fmt.Errorf("proto: RpcRequest.Payload %d > %d", len(r.Payload), MaxRPCPayloadSize)
+	}
+	return nil
+}
+
+// ValidateRPCResponse enforces invariants on an RpcResponse. status must
+// be one of the defined non-zero values. If status != OK, error must be
+// non-nil and have a non-empty code.
+func ValidateRPCResponse(r *RpcResponse) error {
+	if r == nil {
+		return errors.New("proto: RpcResponse is nil")
+	}
+	switch r.Status {
+	case RpcStatus_RPC_STATUS_OK,
+		RpcStatus_RPC_STATUS_INVALID,
+		RpcStatus_RPC_STATUS_NO_CAPACITY,
+		RpcStatus_RPC_STATUS_FROZEN,
+		RpcStatus_RPC_STATUS_INTERNAL,
+		RpcStatus_RPC_STATUS_UNAUTHENTICATED,
+		RpcStatus_RPC_STATUS_NOT_FOUND:
+	default:
+		return fmt.Errorf("proto: RpcResponse.Status invalid: %v", r.Status)
+	}
+	if r.Status != RpcStatus_RPC_STATUS_OK {
+		if r.Error == nil || r.Error.Code == "" {
+			return errors.New("proto: RpcResponse.Error required when Status != OK")
+		}
+	}
+	if len(r.Payload) > MaxRPCPayloadSize {
+		return fmt.Errorf("proto: RpcResponse.Payload %d > %d", len(r.Payload), MaxRPCPayloadSize)
+	}
+	return nil
+}
+
+// ValidateOfferPush — non-empty consumer_id (32) + envelope_hash (32) + model.
+func ValidateOfferPush(o *OfferPush) error {
+	if o == nil {
+		return errors.New("proto: OfferPush is nil")
+	}
+	if len(o.ConsumerId) != 32 {
+		return fmt.Errorf("proto: OfferPush.ConsumerId len=%d, want 32", len(o.ConsumerId))
+	}
+	if len(o.EnvelopeHash) != 32 {
+		return fmt.Errorf("proto: OfferPush.EnvelopeHash len=%d, want 32", len(o.EnvelopeHash))
+	}
+	if o.Model == "" {
+		return errors.New("proto: OfferPush.Model empty")
+	}
+	return nil
+}
+
+// ValidateSettlementPush — non-empty preimage_hash (32) + preimage_body.
+func ValidateSettlementPush(s *SettlementPush) error {
+	if s == nil {
+		return errors.New("proto: SettlementPush is nil")
+	}
+	if len(s.PreimageHash) != 32 {
+		return fmt.Errorf("proto: SettlementPush.PreimageHash len=%d, want 32", len(s.PreimageHash))
+	}
+	if len(s.PreimageBody) == 0 {
+		return errors.New("proto: SettlementPush.PreimageBody empty")
+	}
+	return nil
+}
