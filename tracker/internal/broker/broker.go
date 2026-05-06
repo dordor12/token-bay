@@ -76,7 +76,7 @@ func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps
 	if resv == nil {
 		resv = NewReservations()
 	}
-	return &Broker{
+	b := &Broker{
 		cfg:           cfg,
 		scfg:          scfg,
 		deps:          deps,
@@ -85,7 +85,9 @@ func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps
 		pendingQueued: make(map[[16]byte]pendingEnv),
 		queueDrainCh:  make(chan struct{}, 1),
 		stop:          make(chan struct{}),
-	}, nil
+	}
+	b.startQueueDrain()
+	return b, nil
 }
 
 // Close shuts down all broker goroutines. Idempotent.
