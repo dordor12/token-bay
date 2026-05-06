@@ -43,6 +43,12 @@
 // With every side-effecting primitive disabled at the flag layer and
 // the subprocess running in a freshly-mkdir'd empty CWD, the residual
 // risk surface is "Claude Code's flag enforcement is correct" — a
-// focused, testable property covered by the conformance suite at
-// plugin/test/conformance and the in-process subset in conformance.go.
+// focused, testable property covered by:
+//
+//   - plugin/test/conformance (build tag `localintegtest`) — drives
+//     the real claude binary against an adversarial corpus. Run via
+//     `make -C plugin localintegtest`. Never runs in CI; gated by
+//     the lefthook pre-commit hook on relevant path changes.
+//   - the in-process subset in conformance.go (RunStartupConformance) —
+//     the sidecar's seeder-advertise gate, runs against any Runner.
 package ccbridge

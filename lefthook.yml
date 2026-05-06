@@ -35,10 +35,14 @@ pre-commit:
       priority: 2
       glob: 'tracker/**/*.go'
       run: cd tracker && golangci-lint run --new-from-rev=HEAD
-    plugin-conformance:
+    # Local integration tests that spawn the real `claude` binary.
+    # Run only when relevant paths change. Never executed in CI —
+    # GitHub Actions has no claude binary and `make check` doesn't
+    # set the build tag.
+    plugin-localintegtest:
       priority: 3
       glob:
         - 'plugin/internal/ccbridge/**/*.go'
         - 'plugin/test/conformance/**/*.go'
         - 'plugin/test/fixtures/**'
-      run: make -C plugin conformance
+      run: make -C plugin localintegtest

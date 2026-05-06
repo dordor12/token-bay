@@ -1,14 +1,17 @@
-//go:build conformance
-// +build conformance
+//go:build localintegtest
 
 // Package conformance runs adversarial prompts against a real `claude -p`
 // invocation with the current tool-disabling flag set and asserts zero
 // observable side effects. This test is the load-bearing check on the
 // seeder role's safety argument (plugin spec §6.2 + §12).
 //
-// Skips cleanly when the `claude` binary is not on PATH so CI/dev
-// environments without Claude Code installed can still go test ./...
-// (with -tags=conformance) without spurious failures.
+// Build tag `localintegtest`: this suite spawns the real Claude Code
+// binary and consumes the developer's local Anthropic quota. It is a
+// *local-only* integration test — invoked via `make -C plugin
+// localintegtest` and the matching lefthook pre-commit hook when
+// `plugin/internal/ccbridge/**` or `plugin/test/conformance/**` is
+// staged. It never runs in GitHub Actions; CI installs no claude
+// binary and `make check` never sets the build tag.
 package conformance
 
 import (
