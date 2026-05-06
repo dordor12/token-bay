@@ -751,6 +751,8 @@ Three upstream-spec amendments:
 
 All three amendments ship in the same PR as the admission implementation so the repo is never internally inconsistent.
 
+> **Implementation status (2026-05-07):** Amendments 2 (BrokerRequestResponse oneof) and 3 (`-race` list) are realized in the broker subsystem; see `docs/superpowers/specs/tracker/2026-05-07-tracker-broker-design.md` and `docs/superpowers/plans/2026-05-07-tracker-broker.md`. The tracker-side admission accessors `PopReadyForBroker` and `PressureGauge` were added to support broker queue-drain.
+
 ## 12. Future work
 
 - **Settle-ack piggyback on next `broker_request`** — tracker spec §5.2 amendment to reduce per-prompt round-trips. Out of scope here; logged as a separate optimization PR.
