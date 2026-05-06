@@ -56,27 +56,28 @@ func defaultScoreConfig() config.AdmissionConfig {
 
 // openTempSubsystem returns a wired *Subsystem with fixed clock, default
 // config, empty registry, and the fixture tracker keypair. Cleanup hooks
-// close it on test completion.
-func openTempSubsystem(t *testing.T, opts ...Option) (*Subsystem, ids.IdentityID) {
-	t.Helper()
-	require.Len(t, fixtureTrackerSeed, ed25519.SeedSize)
+// close it on test completion. Accepts testing.TB so benchmarks can call
+// it too.
+func openTempSubsystem(tb testing.TB, opts ...Option) (*Subsystem, ids.IdentityID) {
+	tb.Helper()
+	require.Len(tb, fixtureTrackerSeed, ed25519.SeedSize)
 	priv := ed25519.NewKeyFromSeed(fixtureTrackerSeed)
 
 	reg, err := registry.New(16)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	s, err := Open(defaultScoreConfig(), reg, priv, opts...)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	require.NoError(tb, err)
+	tb.Cleanup(func() { _ = s.Close() })
 	return s, s.trackerID
 }
 
 // fixturePeerKeypair returns the fixture peer-tracker (Ed25519) keypair
 // + its derived IdentityID. Used in attestation-validation tests where
 // the peer is the "issuer" of imported attestations.
-func fixturePeerKeypair(t *testing.T) (ed25519.PrivateKey, ids.IdentityID) {
-	t.Helper()
-	require.Len(t, fixturePeerSeed, ed25519.SeedSize)
+func fixturePeerKeypair(tb testing.TB) (ed25519.PrivateKey, ids.IdentityID) {
+	tb.Helper()
+	require.Len(tb, fixturePeerSeed, ed25519.SeedSize)
 	priv := ed25519.NewKeyFromSeed(fixturePeerSeed)
 	pub := priv.Public().(ed25519.PublicKey)
 	var id ids.IdentityID
@@ -231,4 +232,47 @@ func (s *fakeLedgerSource) append(ev LedgerEvent) {
 	s.mu.Lock()
 	s.events = append(s.events, ev)
 	s.mu.Unlock()
+}
+
+// allowAllPeerSet treats every issuer as a recognized peer.
+type allowAllPeerSet struct{}
+
+func (allowAllPeerSet) Contains(ids.IdentityID) bool { return true }
+
+// rejectAllPeerSet rejects every issuer (the v1 default behavior).
+type rejectAllPeerSet struct{}
+
+func (rejectAllPeerSet) Contains(ids.IdentityID) bool { return false }
+
+// signedTestAttestation builds a peer-issued attestation that passes every
+// validation step except the optional clamp. Useful as a baseline to
+// tamper with in §10 #17 (forged) tests.
+func signedTestAttestation(tb testing.TB, s *Subsystem) *admission.SignedCreditAttestation {
+	tb.Helper()
+	return signedTestAttestationWithScore(tb, s, 7000)
+}
+
+// signedTestAttestationWithScore builds a peer-issued attestation with a
+// declared score (raw uint32, fixed-point /10000). §10 #19 uses the
+// inflated value to test the MaxAttestationScoreImported clamp.
+func signedTestAttestationWithScore(tb testing.TB, s *Subsystem, rawScore uint32) *admission.SignedCreditAttestation {
+	tb.Helper()
+	now := s.nowFn()
+	priv, peerID := fixturePeerKeypair(tb)
+	consumerID := makeID(0xC1)
+	body := &admission.CreditAttestationBody{
+		IdentityId:            consumerID[:],
+		IssuerTrackerId:       peerID[:],
+		Score:                 rawScore,
+		TenureDays:            60,
+		SettlementReliability: 9000,
+		DisputeRate:           100,
+		NetCreditFlow_30D:     50000,
+		BalanceCushionLog2:    1,
+		ComputedAt:            uint64(now.Add(-time.Hour).Unix()),     //nolint:gosec // G115 — post-1970
+		ExpiresAt:             uint64(now.Add(23 * time.Hour).Unix()), //nolint:gosec // G115 — post-1970
+	}
+	sig, err := signing.SignCreditAttestation(priv, body)
+	require.NoError(tb, err)
+	return &admission.SignedCreditAttestation{Body: body, TrackerSig: sig}
 }
