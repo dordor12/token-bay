@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/shared/ids"
+	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 )
 

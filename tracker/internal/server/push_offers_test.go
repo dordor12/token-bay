@@ -58,7 +58,7 @@ func TestPushOfferTo_NoMatchingPeer_ReturnsNilFalse(t *testing.T) {
 	srv := newSrvWithKey(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	go func() { _ = srv.Run(ctx) }()
 	if waitForListen(srv, 2*time.Second) == "" {
 		t.Fatal("listener never bound")
 	}
@@ -84,7 +84,7 @@ func TestPushSettlementTo_NoMatchingPeer_ReturnsNilFalse(t *testing.T) {
 	srv := newSrvWithKey(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	go func() { _ = srv.Run(ctx) }()
 	if waitForListen(srv, 2*time.Second) == "" {
 		t.Fatal("listener never bound")
 	}

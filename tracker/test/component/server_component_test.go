@@ -150,12 +150,15 @@ func TestComponent_Enroll_OK(t *testing.T) {
 func TestComponent_BrokerRequest_NotImplemented(t *testing.T) {
 	stubAssertion(t, tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST)
 }
+
 func TestComponent_Settle_NotImplemented(t *testing.T) {
 	stubAssertion(t, tbproto.RpcMethod_RPC_METHOD_SETTLE)
 }
+
 func TestComponent_UsageReport_NotImplemented(t *testing.T) {
 	stubAssertion(t, tbproto.RpcMethod_RPC_METHOD_USAGE_REPORT)
 }
+
 func TestComponent_TransferRequest_NotImplemented(t *testing.T) {
 	stubAssertion(t, tbproto.RpcMethod_RPC_METHOD_TRANSFER_REQUEST)
 }

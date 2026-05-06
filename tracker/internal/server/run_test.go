@@ -41,7 +41,7 @@ func dialClient(t *testing.T, addr string, serverPin [32]byte) *quicgo.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cliCert, err := server.ServerCertFromIdentity(cliPriv)
+	cliCert, err := server.CertFromIdentity(cliPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestRun_AcceptsConnection_PeerCountToggles(t *testing.T) {
 		t.Fatal("listener never bound")
 	}
 
-	serverCert, _ := server.ServerCertFromIdentity(priv)
+	serverCert, _ := server.CertFromIdentity(priv)
 	parsed, _ := x509.ParseCertificate(serverCert.Certificate[0])
 	pin := sha256.Sum256(parsed.RawSubjectPublicKeyInfo)
 

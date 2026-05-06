@@ -3,7 +3,6 @@ package server_test
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,7 +19,7 @@ func TestShutdown_Idempotent(t *testing.T) {
 	srv := newSrvWithKey(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	go func() { _ = srv.Run(ctx) }()
 	if waitForListen(srv, 2*time.Second) == "" {
 		t.Fatal("listener never bound")
 	}
@@ -39,9 +38,8 @@ func TestShutdown_Idempotent(t *testing.T) {
 // blockingDispatcher counts how many calls are in-flight via wg
 // release; the (sleeping) handler exits when releaseAll fires.
 type blockingDispatcher struct {
-	inflight    atomic.Int32
-	releaseAll  chan struct{}
-	releasedMu  sync.Mutex
+	inflight   atomic.Int32
+	releaseAll chan struct{}
 }
 
 func (b *blockingDispatcher) Dispatch(_ context.Context, _ *api.RequestCtx, _ *tbproto.RpcRequest) *tbproto.RpcResponse {
@@ -59,7 +57,7 @@ func TestShutdown_DrainsCompletedRPCs_NoForceClose(t *testing.T) {
 	srv := newSrvWithKey(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	go func() { _ = srv.Run(ctx) }()
 	if waitForListen(srv, 2*time.Second) == "" {
 		t.Fatal("listener never bound")
 	}
@@ -103,7 +101,7 @@ func TestShutdown_ForceClosesOverGrace(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go srv.Run(ctx)
+	go func() { _ = srv.Run(ctx) }()
 	if waitForListen(srv, 2*time.Second) == "" {
 		cancel()
 		t.Fatal("listener never bound")

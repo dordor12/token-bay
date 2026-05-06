@@ -10,7 +10,7 @@ import (
 
 func TestStartListener_BindsAndCloses(t *testing.T) {
 	priv := loadKey(t, "server")
-	cert, err := server.ServerCertFromIdentity(priv)
+	cert, err := server.CertFromIdentity(priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestStartListener_BindsAndCloses(t *testing.T) {
 
 func TestStartListener_RejectsBadAddr(t *testing.T) {
 	priv := loadKey(t, "server")
-	cert, _ := server.ServerCertFromIdentity(priv)
+	cert, _ := server.CertFromIdentity(priv)
 	cfg := &config.ServerConfig{
 		ListenAddr:         "not-a-host-port",
 		IdleTimeoutS:       60,

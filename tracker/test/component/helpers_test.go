@@ -96,13 +96,6 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 
-	type stunAdapter struct {
-		alloc *stunturn.Allocator
-	}
-	type stunService interface {
-		ReflectAddr(netip.AddrPort) netip.AddrPort
-		Allocate(consumer, seeder ids.IdentityID, requestID [16]byte, now time.Time) (stunturn.Session, error)
-	}
 	router, err := api.NewRouter(api.Deps{
 		Logger:   zerolog.Nop(),
 		Now:      time.Now,
@@ -113,7 +106,6 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = stunService(stAdapter{}) // type assertion compile-check
 
 	srv, err := server.New(server.Deps{
 		Config: &config.Config{
@@ -151,7 +143,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal("listener never bound")
 	}
 
-	srvCert, _ := server.ServerCertFromIdentity(srvPriv)
+	srvCert, _ := server.CertFromIdentity(srvPriv)
 	parsed, _ := x509.ParseCertificate(srvCert.Certificate[0])
 	pin := sha256.Sum256(parsed.RawSubjectPublicKeyInfo)
 
@@ -162,7 +154,7 @@ func newFixture(t *testing.T) *fixture {
 		runCancel()
 		t.Fatal(err)
 	}
-	cliCert, _ := server.ServerCertFromIdentity(cliPriv)
+	cliCert, _ := server.CertFromIdentity(cliPriv)
 	cliParsed, _ := x509.ParseCertificate(cliCert.Certificate[0])
 	cliPeer, _ := server.SPKIToIdentityID(cliParsed)
 
@@ -214,7 +206,7 @@ func (f *fixture) shutdown() {
 // server-side peerID equals f.cliPeer).
 func (f *fixture) dial(t *testing.T) *quicgo.Conn {
 	t.Helper()
-	cliCert, err := server.ServerCertFromIdentity(f.cliPriv)
+	cliCert, err := server.CertFromIdentity(f.cliPriv)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -105,7 +105,7 @@ func TestIntegration_Handshake_Concurrent_10x(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		cert, _ := server.ServerCertFromIdentity(priv)
+		cert, _ := server.CertFromIdentity(priv)
 		tlsCfg := &tls.Config{
 			Certificates:       []tls.Certificate{cert},
 			InsecureSkipVerify: true, //nolint:gosec

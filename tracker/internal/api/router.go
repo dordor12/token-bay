@@ -153,4 +153,3 @@ func notImpl(rpc string) handlerFunc {
 		return nil, ErrNotImplemented(rpc)
 	}
 }
-

@@ -20,11 +20,11 @@ import (
 // internal/idtls.ALPN — both ends MUST agree.
 const ALPN = "tokenbay/1"
 
-// ServerCertFromIdentity issues a self-signed X.509 cert wrapping priv.
+// CertFromIdentity issues a self-signed X.509 cert wrapping priv.
 // The cert is generated deterministically (modulo the CSPRNG bytes that
 // X.509 sprinkles into ephemeral places) from the keypair; safe to
 // regenerate per process start.
-func ServerCertFromIdentity(priv ed25519.PrivateKey) (tls.Certificate, error) {
+func CertFromIdentity(priv ed25519.PrivateKey) (tls.Certificate, error) {
 	if len(priv) != ed25519.PrivateKeySize {
 		return tls.Certificate{}, fmt.Errorf("server: priv length %d, want %d",
 			len(priv), ed25519.PrivateKeySize)

@@ -27,9 +27,9 @@ func loadKey(t *testing.T, name string) ed25519.PrivateKey {
 	return ed25519.PrivateKey(b)
 }
 
-func TestServerCertFromIdentity_OK(t *testing.T) {
+func TestCertFromIdentity_OK(t *testing.T) {
 	priv := loadKey(t, "server")
-	cert, err := server.ServerCertFromIdentity(priv)
+	cert, err := server.CertFromIdentity(priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,8 +38,8 @@ func TestServerCertFromIdentity_OK(t *testing.T) {
 	}
 }
 
-func TestServerCertFromIdentity_RejectsBadKeyLength(t *testing.T) {
-	_, err := server.ServerCertFromIdentity(ed25519.PrivateKey{0x01})
+func TestCertFromIdentity_RejectsBadKeyLength(t *testing.T) {
+	_, err := server.CertFromIdentity(ed25519.PrivateKey{0x01})
 	if err == nil {
 		t.Fatal("want error on short key")
 	}
@@ -47,7 +47,7 @@ func TestServerCertFromIdentity_RejectsBadKeyLength(t *testing.T) {
 
 func TestSPKIToIdentityID_RoundTrip(t *testing.T) {
 	priv := loadKey(t, "server")
-	cert, _ := server.ServerCertFromIdentity(priv)
+	cert, _ := server.CertFromIdentity(priv)
 	parsed, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestVerifyClientCert_RejectsEmptyChain(t *testing.T) {
 
 func TestVerifyClientCert_RejectsMultipleCerts(t *testing.T) {
 	priv := loadKey(t, "client")
-	cert, _ := server.ServerCertFromIdentity(priv)
+	cert, _ := server.CertFromIdentity(priv)
 	err := server.VerifyClientCert([][]byte{cert.Certificate[0], cert.Certificate[0]})
 	if err == nil || !strings.Contains(err.Error(), "more than one") {
 		t.Fatalf("err = %v", err)
@@ -114,7 +114,7 @@ func TestVerifyClientCert_RejectsMultipleCerts(t *testing.T) {
 
 func TestVerifyClientCert_AcceptsValidEd25519(t *testing.T) {
 	priv := loadKey(t, "client")
-	cert, _ := server.ServerCertFromIdentity(priv)
+	cert, _ := server.CertFromIdentity(priv)
 	if err := server.VerifyClientCert([][]byte{cert.Certificate[0]}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestVerifyClientCert_AcceptsValidEd25519(t *testing.T) {
 
 func TestMakeServerTLSConfig_Defaults(t *testing.T) {
 	priv := loadKey(t, "server")
-	cert, _ := server.ServerCertFromIdentity(priv)
+	cert, _ := server.CertFromIdentity(priv)
 	cfg := server.MakeServerTLSConfig(cert)
 	if cfg.MinVersion != tls.VersionTLS13 {
 		t.Fatalf("min version = %#x", cfg.MinVersion)

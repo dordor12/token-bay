@@ -145,12 +145,12 @@ func newFixture(t *testing.T, opts ...func(*config.Config)) *fixture {
 		t.Fatal("listener never bound")
 	}
 
-	srvCert, _ := server.ServerCertFromIdentity(srvPriv)
+	srvCert, _ := server.CertFromIdentity(srvPriv)
 	parsed, _ := x509.ParseCertificate(srvCert.Certificate[0])
 	pin := sha256.Sum256(parsed.RawSubjectPublicKeyInfo)
 
 	_, cliPriv, _ := ed25519.GenerateKey(crand.Reader)
-	cliCert, _ := server.ServerCertFromIdentity(cliPriv)
+	cliCert, _ := server.CertFromIdentity(cliPriv)
 	cliParsed, _ := x509.ParseCertificate(cliCert.Certificate[0])
 	cliPeer, _ := server.SPKIToIdentityID(cliParsed)
 	reg.Register(registry.SeederRecord{IdentityID: cliPeer})
@@ -225,7 +225,7 @@ func withRSAClient(t *testing.T) dialOpt {
 // Caller MUST close the returned conn.
 func (f *fixture) dial(t *testing.T, opts ...dialOpt) (*quicgo.Conn, error) {
 	t.Helper()
-	cliCert, err := server.ServerCertFromIdentity(f.cliPriv)
+	cliCert, err := server.CertFromIdentity(f.cliPriv)
 	if err != nil {
 		t.Fatal(err)
 	}

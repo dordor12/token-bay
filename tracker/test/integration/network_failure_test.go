@@ -111,7 +111,7 @@ func ed25519BlankCert(t *testing.T) tls.Certificate {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := server.ServerCertFromIdentity(priv)
+	cert, err := server.CertFromIdentity(priv)
 	if err != nil {
 		t.Fatal(err)
 	}

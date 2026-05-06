@@ -23,10 +23,10 @@ import (
 // enrollLedger). The handler only calls IssueStarterGrant; SignedBalance
 // is present so the type satisfies the union.
 type fakeEnrollLedger struct {
-	gotID      []byte
-	gotAmount  uint64
-	retEntry   *tbproto.Entry
-	retErr     error
+	gotID     []byte
+	gotAmount uint64
+	retEntry  *tbproto.Entry
+	retErr    error
 }
 
 func (f *fakeEnrollLedger) IssueStarterGrant(_ context.Context, id []byte, amount uint64) (*tbproto.Entry, error) {

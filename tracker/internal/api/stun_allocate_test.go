@@ -59,7 +59,7 @@ func TestStunAllocate_GarbagePayload_Invalid(t *testing.T) {
 	fake := &fakeStunService{}
 	r, _ := api.NewRouter(api.Deps{StunTurn: fake})
 	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
-		Method: tbproto.RpcMethod_RPC_METHOD_STUN_ALLOCATE,
+		Method:  tbproto.RpcMethod_RPC_METHOD_STUN_ALLOCATE,
 		Payload: []byte{0xff, 0xff, 0xff},
 	})
 	if resp.Status != tbproto.RpcStatus_RPC_STATUS_INVALID {

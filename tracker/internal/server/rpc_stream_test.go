@@ -19,10 +19,10 @@ import (
 
 // fakeDispatcher records calls + returns a fixed response.
 type fakeDispatcher struct {
-	mu       sync.Mutex
-	called   int
-	resp     *tbproto.RpcResponse
-	doPanic  bool
+	mu        sync.Mutex
+	called    int
+	resp      *tbproto.RpcResponse
+	doPanic   bool
 	gotMethod tbproto.RpcMethod
 }
 

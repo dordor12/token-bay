@@ -118,7 +118,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server: read identity key: %w", err)
 	}
-	cert, err := ServerCertFromIdentity(ed25519.PrivateKey(keyBytes))
+	cert, err := CertFromIdentity(ed25519.PrivateKey(keyBytes))
 	if err != nil {
 		return err
 	}
@@ -209,12 +209,12 @@ func (s *Server) serveConn(qc *quicgo.Conn) {
 
 // Shutdown gracefully drains.
 //
-//   1. Mark stopped so PushOfferTo / PushSettlementTo refuse new work.
-//   2. Cancel serverCtx → all derived contexts → goroutines exit. The
-//      listener goroutine watches serverCtx.Done() and closes the
-//      listener (in Run's lambda); accept loop exits.
-//   3. Wait for in-flight RPC dispatch goroutines (Server.wg) up to ctx.
-//   4. Force-close every connection on grace expiry, return ctx.Err.
+//  1. Mark stopped so PushOfferTo / PushSettlementTo refuse new work.
+//  2. Cancel serverCtx → all derived contexts → goroutines exit. The
+//     listener goroutine watches serverCtx.Done() and closes the
+//     listener (in Run's lambda); accept loop exits.
+//  3. Wait for in-flight RPC dispatch goroutines (Server.wg) up to ctx.
+//  4. Force-close every connection on grace expiry, return ctx.Err.
 //
 // Idempotent: a second Shutdown returns nil immediately. A Shutdown
 // before Run also returns nil.
