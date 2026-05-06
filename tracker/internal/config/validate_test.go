@@ -134,6 +134,42 @@ func TestValidate_ListenerCollision_StunAndTurn(t *testing.T) {
 	assert.Equal(t, "stun_turn.turn_listen_addr", ve.Errors[0].Field)
 }
 
+func TestValidate_ServerMaxFrameSizeTooSmall(t *testing.T) {
+	c := validConfig(t)
+	c.Server.MaxFrameSize = 512
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "server.max_frame_size")
+}
+
+func TestValidate_ServerIdleTimeoutSZero(t *testing.T) {
+	c := validConfig(t)
+	c.Server.IdleTimeoutS = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "server.idle_timeout_s")
+}
+
+func TestValidate_ServerMaxIncomingStreamsTooSmall(t *testing.T) {
+	c := validConfig(t)
+	c.Server.MaxIncomingStreams = 8
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "server.max_incoming_streams")
+}
+
+func TestValidate_ServerShutdownGraceSNegative(t *testing.T) {
+	c := validConfig(t)
+	c.Server.ShutdownGraceS = -1
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "server.shutdown_grace_s")
+}
+
 func TestValidate_LedgerMerkleIntervalMustBePositive(t *testing.T) {
 	c := validConfig(t)
 	c.Ledger.MerkleRootIntervalMin = 0

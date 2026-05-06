@@ -26,6 +26,20 @@ type ServerConfig struct {
 	IdentityKeyPath string `yaml:"identity_key_path"`
 	TLSCertPath     string `yaml:"tls_cert_path"`
 	TLSKeyPath      string `yaml:"tls_key_path"`
+
+	// MaxFrameSize bounds the length-prefix declared on each stream frame
+	// (see internal/server/framing.go). 1 MiB matches plugin trackerclient.
+	MaxFrameSize int `yaml:"max_frame_size"`
+
+	// IdleTimeoutS is the QUIC idle timeout. Connections silent for
+	// IdleTimeoutS seconds are torn down by quic-go.
+	IdleTimeoutS int `yaml:"idle_timeout_s"`
+
+	// MaxIncomingStreams is the per-connection cap on inbound bidi streams.
+	MaxIncomingStreams int `yaml:"max_incoming_streams"`
+
+	// ShutdownGraceS bounds the Server.Shutdown drain window.
+	ShutdownGraceS int `yaml:"shutdown_grace_s"`
 }
 
 type AdminConfig struct {
@@ -143,6 +157,12 @@ type MetricsConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		LogLevel: "info",
+		Server: ServerConfig{
+			MaxFrameSize:       1 << 20, // 1 MiB
+			IdleTimeoutS:       60,
+			MaxIncomingStreams: 1024,
+			ShutdownGraceS:     30,
+		},
 		Admin: AdminConfig{
 			ListenAddr: "127.0.0.1:9090",
 		},

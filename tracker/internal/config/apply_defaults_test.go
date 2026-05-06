@@ -95,6 +95,33 @@ func cloneConfig(c *Config) *Config {
 
 // Sanity: DefaultConfig has no slice values, so after one ApplyDefaults call
 // against an empty config the slice fields stay nil (not empty slices).
+func TestApplyDefaults_ServerNewFieldsGetDefaults(t *testing.T) {
+	c := &Config{}
+
+	ApplyDefaults(c)
+
+	assert.Equal(t, 1<<20, c.Server.MaxFrameSize)
+	assert.Equal(t, 60, c.Server.IdleTimeoutS)
+	assert.Equal(t, 1024, c.Server.MaxIncomingStreams)
+	assert.Equal(t, 30, c.Server.ShutdownGraceS)
+}
+
+func TestApplyDefaults_ServerExplicitValuesPreserved(t *testing.T) {
+	c := &Config{Server: ServerConfig{
+		MaxFrameSize:       2 << 20,
+		IdleTimeoutS:       120,
+		MaxIncomingStreams: 4096,
+		ShutdownGraceS:     90,
+	}}
+
+	ApplyDefaults(c)
+
+	assert.Equal(t, 2<<20, c.Server.MaxFrameSize)
+	assert.Equal(t, 120, c.Server.IdleTimeoutS)
+	assert.Equal(t, 4096, c.Server.MaxIncomingStreams)
+	assert.Equal(t, 90, c.Server.ShutdownGraceS)
+}
+
 func TestApplyDefaults_BlocklistStaysNilWhenNotSet(t *testing.T) {
 	c := &Config{}
 
