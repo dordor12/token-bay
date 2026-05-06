@@ -30,6 +30,7 @@ Authoritative spec: `docs/superpowers/specs/plugin/2026-04-22-plugin-design.md`.
 
 - `cmd/token-bay-sidecar/` — thin entry point; wires subcommands via cobra
 - `internal/<module>/` — one directory per subsystem module; unit tests adjacent as `*_test.go`
+- `internal/trackerclient/` — long-lived mTLS QUIC client to the regional tracker. Owns connection lifecycle, reconnect, heartbeat, the nine unary RPCs, and the offer/settlement push acceptors. See `docs/superpowers/specs/plugin/2026-05-02-trackerclient-design.md`.
 - `test/e2e/` — end-to-end with stubbed tracker + stubbed `claude`
 - `test/conformance/` — bridge conformance: real `claude` binary, adversarial prompts, asserts zero side effects
 - `commands/` + `hooks/` + `.claude-plugin/plugin.json` — Claude Code plugin surfaces
