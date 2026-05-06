@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,9 @@ func TestRotate_MovesContentToArchiveAndOpensFresh(t *testing.T) {
 }
 
 func TestRotate_FreshFileHasMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not honor Unix file modes; mode bits are 0666 regardless of OpenFile perm")
+	}
 	p := filepath.Join(t.TempDir(), "audit.log")
 	l, err := Open(p)
 	require.NoError(t, err)

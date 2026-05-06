@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,17 +10,21 @@ import (
 )
 
 // validConfig returns a Config that passes Validate. Tests mutate it
-// to trigger one rule at a time.
-func validConfig() *Config {
+// to trigger one rule at a time. Path fields are populated from
+// t.TempDir() so the test runs on Windows (filepath.IsAbs requires a
+// drive letter; "/tmp/..." is not absolute on Windows).
+func validConfig(t *testing.T) *Config {
+	t.Helper()
+	tmp := t.TempDir()
 	c := &Config{Role: "both", Tracker: "auto"}
 	ApplyDefaults(c)
-	c.IdentityKeyPath = "/tmp/identity.key"
-	c.AuditLogPath = "/tmp/audit.log"
+	c.IdentityKeyPath = filepath.Join(tmp, "identity.key")
+	c.AuditLogPath = filepath.Join(tmp, "audit.log")
 	return c
 }
 
 func TestValidate_HappyPath(t *testing.T) {
-	require.NoError(t, Validate(validConfig()))
+	require.NoError(t, Validate(validConfig(t)))
 }
 
 func TestValidate_MissingRequired(t *testing.T) {
@@ -51,7 +56,7 @@ func TestValidate_AccumulatesEveryFailure(t *testing.T) {
 }
 
 func TestValidate_BadRole(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Role = "wrong"
 
 	err := Validate(c)
@@ -61,25 +66,25 @@ func TestValidate_BadRole(t *testing.T) {
 }
 
 func TestValidate_TrackerAutoIsValid(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Tracker = "auto"
 	require.NoError(t, Validate(c))
 }
 
 func TestValidate_TrackerHTTPSIsValid(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Tracker = "https://eu-central-1.bootstrap.token-bay.dev"
 	require.NoError(t, Validate(c))
 }
 
 func TestValidate_TrackerQUICIsValid(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Tracker = "quic://eu-central-1.bootstrap.token-bay.dev:7777"
 	require.NoError(t, Validate(c))
 }
 
 func TestValidate_TrackerWrongScheme(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Tracker = "ftp://example.com"
 
 	err := Validate(c)
@@ -89,7 +94,7 @@ func TestValidate_TrackerWrongScheme(t *testing.T) {
 }
 
 func TestValidate_TrackerNoHost(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Tracker = "https://"
 
 	err := Validate(c)
@@ -99,7 +104,7 @@ func TestValidate_TrackerNoHost(t *testing.T) {
 }
 
 func TestValidate_NonAbsolutePathRejected(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.AuditLogPath = "relative/path/audit.log"
 
 	err := Validate(c)
@@ -109,7 +114,7 @@ func TestValidate_NonAbsolutePathRejected(t *testing.T) {
 }
 
 func TestValidate_SandboxEnabledNeedsDriver(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.CCBridge.Sandbox.Enabled = true
 	c.CCBridge.Sandbox.Driver = "kvm"
 
@@ -120,7 +125,7 @@ func TestValidate_SandboxEnabledNeedsDriver(t *testing.T) {
 }
 
 func TestValidate_SandboxDisabledIgnoresDriver(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.CCBridge.Sandbox.Enabled = false
 	c.CCBridge.Sandbox.Driver = "anything-goes"
 
@@ -128,7 +133,7 @@ func TestValidate_SandboxDisabledIgnoresDriver(t *testing.T) {
 }
 
 func TestValidate_NetworkModeTTLPositive(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Consumer.NetworkModeTTL = 0
 
 	err := Validate(c)
@@ -138,7 +143,7 @@ func TestValidate_NetworkModeTTLPositive(t *testing.T) {
 }
 
 func TestValidate_HeadroomWindowPositive(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.Seeder.HeadroomWindow = 0
 
 	err := Validate(c)
@@ -148,7 +153,7 @@ func TestValidate_HeadroomWindowPositive(t *testing.T) {
 }
 
 func TestValidate_IdleModeUnknown(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.IdlePolicy.Mode = "weekends"
 
 	err := Validate(c)
@@ -158,14 +163,14 @@ func TestValidate_IdleModeUnknown(t *testing.T) {
 }
 
 func TestValidate_AlwaysOnDoesNotRequireWindow(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.IdlePolicy.Mode = "always_on"
 	c.IdlePolicy.Window = ""
 	require.NoError(t, Validate(c))
 }
 
 func TestValidate_ScheduledRequiresWindow(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.IdlePolicy.Mode = "scheduled"
 	c.IdlePolicy.Window = ""
 
@@ -186,7 +191,7 @@ func TestValidate_WindowMustMatchPattern(t *testing.T) {
 	}
 	for _, w := range cases {
 		t.Run(w, func(t *testing.T) {
-			c := validConfig()
+			c := validConfig(t)
 			c.IdlePolicy.Window = w
 
 			err := Validate(c)
@@ -198,7 +203,7 @@ func TestValidate_WindowMustMatchPattern(t *testing.T) {
 }
 
 func TestValidate_ActivityGracePositive(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.IdlePolicy.ActivityGrace = 0
 
 	err := Validate(c)
@@ -208,7 +213,7 @@ func TestValidate_ActivityGracePositive(t *testing.T) {
 }
 
 func TestValidate_PrivacyTierUnknown(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.PrivacyTier = "obfuscated"
 
 	err := Validate(c)
@@ -218,7 +223,7 @@ func TestValidate_PrivacyTierUnknown(t *testing.T) {
 }
 
 func TestValidate_NegativeMaxSpend(t *testing.T) {
-	c := validConfig()
+	c := validConfig(t)
 	c.MaxSpendPerHour = -1
 
 	err := Validate(c)

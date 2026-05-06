@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -16,6 +17,9 @@ import (
 )
 
 func TestOpen_CreatesFileMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not honor Unix file modes; mode bits are 0666 regardless of OpenFile perm")
+	}
 	p := filepath.Join(t.TempDir(), "audit.log")
 
 	l, err := Open(p)
