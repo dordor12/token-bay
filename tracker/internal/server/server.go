@@ -207,7 +207,17 @@ func (s *Server) serveConn(qc *quicgo.Conn) {
 	}
 }
 
-// Shutdown gracefully drains. Wired in Phase 9.
+// Shutdown gracefully drains.
+//
+//   1. Mark stopped so PushOfferTo / PushSettlementTo refuse new work.
+//   2. Cancel serverCtx → all derived contexts → goroutines exit. The
+//      listener goroutine watches serverCtx.Done() and closes the
+//      listener (in Run's lambda); accept loop exits.
+//   3. Wait for in-flight RPC dispatch goroutines (Server.wg) up to ctx.
+//   4. Force-close every connection on grace expiry, return ctx.Err.
+//
+// Idempotent: a second Shutdown returns nil immediately. A Shutdown
+// before Run also returns nil.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.running {
@@ -219,8 +229,32 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.stopped = true
+	cancel := s.serverCancel
 	s.mu.Unlock()
-	return errors.New("server: Shutdown not yet implemented (Phase 9)")
+
+	cancel() // signal accept loop, heartbeat, push goroutines
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		s.mu.Lock()
+		conns := make([]*Connection, 0, len(s.connsByPeer))
+		for _, c := range s.connsByPeer {
+			conns = append(conns, c)
+		}
+		s.mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+		return ctx.Err()
+	}
 }
 
 // PushOfferTo and PushSettlementTo are defined in push_offers.go and
