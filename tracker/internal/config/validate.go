@@ -27,6 +27,7 @@ func Validate(c *Config) error {
 	v.checkReputation(c)
 	v.checkAdmission(c)
 	v.checkSTUNTURN(c)
+	v.checkPricing(c)
 	return v.toError()
 }
 
@@ -174,6 +175,12 @@ func (v *validator) checkBroker(c *Config) {
 	if c.Broker.BrokerRequestRatePerSec <= 0 {
 		v.add("broker.broker_request_rate_per_sec", "must be > 0")
 	}
+	if c.Broker.QueueDrainIntervalMs < 100 || c.Broker.QueueDrainIntervalMs > 60000 {
+		v.add("broker.queue_drain_interval_ms", "must be in [100, 60000]")
+	}
+	if c.Broker.InflightTerminalTTLS < 60 {
+		v.add("broker.inflight_terminal_ttl_s", "must be >= 60")
+	}
 }
 
 // §6.5
@@ -202,6 +209,9 @@ func (v *validator) checkSettlement(c *Config) {
 			v.add("settlement.reservation_ttl_s",
 				"must be >= settlement_timeout_s (TTL must outlast settlement)")
 		}
+	}
+	if c.Settlement.StaleTipRetries < 0 || c.Settlement.StaleTipRetries > 10 {
+		v.add("settlement.stale_tip_retries", "must be in [0, 10]")
 	}
 }
 
@@ -359,6 +369,25 @@ func (v *validator) checkSTUNTURN(c *Config) {
 	}
 	if c.STUNTURN.SessionTTLSeconds <= 0 {
 		v.add("stun_turn.session_ttl_seconds", "must be > 0")
+	}
+}
+
+// §6.10
+func (v *validator) checkPricing(c *Config) {
+	if len(c.Pricing.Models) == 0 {
+		v.add("pricing.models", "must contain at least one model")
+		return
+	}
+	for name, m := range c.Pricing.Models {
+		if name == "" {
+			v.add("pricing.models", "model name empty")
+		}
+		if m.InCreditsPerToken == 0 {
+			v.add("pricing.models."+name+".in_credits_per_token", "must be > 0")
+		}
+		if m.OutCreditsPerToken == 0 {
+			v.add("pricing.models."+name+".out_credits_per_token", "must be > 0")
+		}
 	}
 }
 

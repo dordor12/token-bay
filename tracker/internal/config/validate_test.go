@@ -583,3 +583,33 @@ func TestValidate_STUNTurn_SessionTTLSecondsZero(t *testing.T) {
 
 	assertOneFieldError(t, err, "stun_turn.session_ttl_seconds")
 }
+
+func TestValidate_Pricing_RejectsEmpty(t *testing.T) {
+	c := DefaultConfig()
+	c.Pricing.Models = map[string]ModelPriceConfig{}
+	err := Validate(c)
+	require.ErrorContains(t, err, "pricing.models")
+}
+
+func TestValidate_Pricing_RejectsZeroRates(t *testing.T) {
+	c := DefaultConfig()
+	c.Pricing.Models["claude-opus-4-7"] = ModelPriceConfig{InCreditsPerToken: 0, OutCreditsPerToken: 75}
+	err := Validate(c)
+	require.ErrorContains(t, err, "in_credits_per_token")
+}
+
+func TestValidate_Broker_QueueDrainIntervalRange(t *testing.T) {
+	c := DefaultConfig()
+	c.Broker.QueueDrainIntervalMs = 50
+	require.ErrorContains(t, Validate(c), "queue_drain_interval_ms")
+	c.Broker.QueueDrainIntervalMs = 60001
+	require.ErrorContains(t, Validate(c), "queue_drain_interval_ms")
+}
+
+func TestValidate_Settlement_StaleTipRetriesRange(t *testing.T) {
+	c := DefaultConfig()
+	c.Settlement.StaleTipRetries = -1
+	require.ErrorContains(t, Validate(c), "stale_tip_retries")
+	c.Settlement.StaleTipRetries = 11
+	require.ErrorContains(t, Validate(c), "stale_tip_retries")
+}

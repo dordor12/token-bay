@@ -61,6 +61,12 @@ func ApplyDefaults(c *Config) {
 	if c.Broker.BrokerRequestRatePerSec == 0 {
 		c.Broker.BrokerRequestRatePerSec = d.Broker.BrokerRequestRatePerSec
 	}
+	if c.Broker.QueueDrainIntervalMs == 0 {
+		c.Broker.QueueDrainIntervalMs = d.Broker.QueueDrainIntervalMs
+	}
+	if c.Broker.InflightTerminalTTLS == 0 {
+		c.Broker.InflightTerminalTTLS = d.Broker.InflightTerminalTTLS
+	}
 
 	// Settlement
 	if c.Settlement.TunnelSetupMs == 0 {
@@ -74,6 +80,9 @@ func ApplyDefaults(c *Config) {
 	}
 	if c.Settlement.ReservationTTLS == 0 {
 		c.Settlement.ReservationTTLS = d.Settlement.ReservationTTLS
+	}
+	if c.Settlement.StaleTipRetries == 0 {
+		c.Settlement.StaleTipRetries = d.Settlement.StaleTipRetries
 	}
 
 	// Federation
@@ -211,5 +220,10 @@ func ApplyDefaults(c *Config) {
 	// Metrics
 	if c.Metrics.ListenAddr == "" {
 		c.Metrics.ListenAddr = d.Metrics.ListenAddr
+	}
+
+	// Pricing
+	if len(c.Pricing.Models) == 0 {
+		c.Pricing.Models = d.Pricing.Models
 	}
 }
