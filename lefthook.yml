@@ -42,7 +42,7 @@ pre-commit:
     plugin-localintegtest:
       priority: 3
       glob:
-        - 'plugin/internal/ccbridge/**/*.go'
-        - 'plugin/test/conformance/**/*.go'
+        - 'plugin/internal/ccbridge/**'
+        - 'plugin/test/conformance/**'
         - 'plugin/test/fixtures/**'
       run: make -C plugin localintegtest
