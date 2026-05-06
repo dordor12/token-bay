@@ -15,6 +15,20 @@ func ApplyDefaults(c *Config) {
 		c.LogLevel = d.LogLevel
 	}
 
+	// Server (optional fields only — required fields stay zero-valued)
+	if c.Server.MaxFrameSize == 0 {
+		c.Server.MaxFrameSize = d.Server.MaxFrameSize
+	}
+	if c.Server.IdleTimeoutS == 0 {
+		c.Server.IdleTimeoutS = d.Server.IdleTimeoutS
+	}
+	if c.Server.MaxIncomingStreams == 0 {
+		c.Server.MaxIncomingStreams = d.Server.MaxIncomingStreams
+	}
+	if c.Server.ShutdownGraceS == 0 {
+		c.Server.ShutdownGraceS = d.Server.ShutdownGraceS
+	}
+
 	// Admin
 	if c.Admin.ListenAddr == "" {
 		c.Admin.ListenAddr = d.Admin.ListenAddr

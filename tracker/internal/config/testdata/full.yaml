@@ -6,6 +6,10 @@ server:
   identity_key_path: /etc/token-bay/identity.key
   tls_cert_path: /etc/token-bay/cert.pem
   tls_key_path: /etc/token-bay/cert.key
+  max_frame_size: 1048576
+  idle_timeout_s: 60
+  max_incoming_streams: 1024
+  shutdown_grace_s: 30
 
 admin:
   listen_addr: "127.0.0.1:9090"

@@ -19,6 +19,7 @@ func Validate(c *Config) error {
 	v.checkRequired(c)
 	v.checkLogLevel(c)
 	v.checkListeners(c)
+	v.checkServer(c)
 	v.checkLedger(c)
 	v.checkBroker(c)
 	v.checkSettlement(c)
@@ -76,6 +77,28 @@ func (v *validator) checkLogLevel(c *Config) {
 		// called without ApplyDefaults the empty value is still valid.
 	default:
 		v.add("log_level", "must be one of: debug, info, warn, error")
+	}
+}
+
+// §6.2a — server transport knobs (mTLS / framing / QUIC / shutdown).
+// Listener-addr parsing happens in checkListeners; required-field
+// non-empty checks happen in checkRequired.
+func (v *validator) checkServer(c *Config) {
+	if c.Server.MaxFrameSize < 1024 {
+		v.add("server.max_frame_size",
+			"must be >= 1024, got "+strconv.Itoa(c.Server.MaxFrameSize))
+	}
+	if c.Server.IdleTimeoutS <= 0 {
+		v.add("server.idle_timeout_s",
+			"must be > 0, got "+strconv.Itoa(c.Server.IdleTimeoutS))
+	}
+	if c.Server.MaxIncomingStreams < 16 {
+		v.add("server.max_incoming_streams",
+			"must be >= 16, got "+strconv.Itoa(c.Server.MaxIncomingStreams))
+	}
+	if c.Server.ShutdownGraceS < 0 {
+		v.add("server.shutdown_grace_s",
+			"must be >= 0, got "+strconv.Itoa(c.Server.ShutdownGraceS))
 	}
 }
 

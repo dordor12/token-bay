@@ -33,7 +33,7 @@ Authoritative spec: `docs/superpowers/specs/tracker/2026-04-22-tracker-design.md
 ## Project layout
 
 - `cmd/token-bay-tracker/` — thin entry point
-- `internal/<module>/` — server, api, session, registry, broker, ledger, federation, reputation, stunturn, admin, config, metrics
+- `internal/<module>/` — server, api, registry, broker, ledger, federation, reputation, stunturn, admin, config, metrics
 - `test/e2e/` — end-to-end with stubbed plugin clients
 - `test/integration/` — cross-module integration using the real SQLite backend
 - `deployments/` — systemd unit, Dockerfile
