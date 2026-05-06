@@ -68,6 +68,10 @@ type Subsystem struct {
 	// OnLedgerEvent callers (race-clean test) get distinct seqs.
 	nextSeq atomic.Uint64
 
+	// admin — plan 3.
+	adminBlocklistOnce sync.Once
+	adminBlocklist     *adminBlocklist
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
