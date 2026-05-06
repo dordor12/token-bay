@@ -64,10 +64,10 @@ message EnrollResponse {
   bytes starter_grant_entry   = 3;  // serialized EntrySigned
 }
 
-message BrokerResponse {
+message SeederAssignment {
   bytes  seeder_addr        = 1;  // utf-8 host:port
   bytes  seeder_pubkey      = 2;  // 32
-  bytes  reservation_token  = 3;
+  bytes  reservation_token  = 3;  // 16 bytes — equals request_id
 }
 
 message NoCapacity {

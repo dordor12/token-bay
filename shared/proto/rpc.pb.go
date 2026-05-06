@@ -460,29 +460,29 @@ func (x *EnrollResponse) GetStarterGrantEntry() []byte {
 	return nil
 }
 
-type BrokerResponse struct {
+type SeederAssignment struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	SeederAddr       []byte                 `protobuf:"bytes,1,opt,name=seeder_addr,json=seederAddr,proto3" json:"seeder_addr,omitempty"`       // utf-8 host:port
-	SeederPubkey     []byte                 `protobuf:"bytes,2,opt,name=seeder_pubkey,json=seederPubkey,proto3" json:"seeder_pubkey,omitempty"` // 32
-	ReservationToken []byte                 `protobuf:"bytes,3,opt,name=reservation_token,json=reservationToken,proto3" json:"reservation_token,omitempty"`
+	SeederAddr       []byte                 `protobuf:"bytes,1,opt,name=seeder_addr,json=seederAddr,proto3" json:"seeder_addr,omitempty"`                   // utf-8 host:port
+	SeederPubkey     []byte                 `protobuf:"bytes,2,opt,name=seeder_pubkey,json=seederPubkey,proto3" json:"seeder_pubkey,omitempty"`             // 32
+	ReservationToken []byte                 `protobuf:"bytes,3,opt,name=reservation_token,json=reservationToken,proto3" json:"reservation_token,omitempty"` // 16 bytes — equals request_id
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
-func (x *BrokerResponse) Reset() {
-	*x = BrokerResponse{}
+func (x *SeederAssignment) Reset() {
+	*x = SeederAssignment{}
 	mi := &file_proto_rpc_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *BrokerResponse) String() string {
+func (x *SeederAssignment) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*BrokerResponse) ProtoMessage() {}
+func (*SeederAssignment) ProtoMessage() {}
 
-func (x *BrokerResponse) ProtoReflect() protoreflect.Message {
+func (x *SeederAssignment) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_rpc_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -494,26 +494,26 @@ func (x *BrokerResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use BrokerResponse.ProtoReflect.Descriptor instead.
-func (*BrokerResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use SeederAssignment.ProtoReflect.Descriptor instead.
+func (*SeederAssignment) Descriptor() ([]byte, []int) {
 	return file_proto_rpc_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *BrokerResponse) GetSeederAddr() []byte {
+func (x *SeederAssignment) GetSeederAddr() []byte {
 	if x != nil {
 		return x.SeederAddr
 	}
 	return nil
 }
 
-func (x *BrokerResponse) GetSeederPubkey() []byte {
+func (x *SeederAssignment) GetSeederPubkey() []byte {
 	if x != nil {
 		return x.SeederPubkey
 	}
 	return nil
 }
 
-func (x *BrokerResponse) GetReservationToken() []byte {
+func (x *SeederAssignment) GetReservationToken() []byte {
 	if x != nil {
 		return x.ReservationToken
 	}
@@ -1534,8 +1534,8 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\videntity_id\x18\x01 \x01(\fR\n" +
 	"identityId\x122\n" +
 	"\x15starter_grant_credits\x18\x02 \x01(\x04R\x13starterGrantCredits\x12.\n" +
-	"\x13starter_grant_entry\x18\x03 \x01(\fR\x11starterGrantEntry\"\x83\x01\n" +
-	"\x0eBrokerResponse\x12\x1f\n" +
+	"\x13starter_grant_entry\x18\x03 \x01(\fR\x11starterGrantEntry\"\x85\x01\n" +
+	"\x10SeederAssignment\x12\x1f\n" +
 	"\vseeder_addr\x18\x01 \x01(\fR\n" +
 	"seederAddr\x12#\n" +
 	"\rseeder_pubkey\x18\x02 \x01(\fR\fseederPubkey\x12+\n" +
@@ -1652,7 +1652,7 @@ var file_proto_rpc_proto_goTypes = []any{
 	(*RpcResponse)(nil),           // 4: tokenbay.proto.v1.RpcResponse
 	(*EnrollRequest)(nil),         // 5: tokenbay.proto.v1.EnrollRequest
 	(*EnrollResponse)(nil),        // 6: tokenbay.proto.v1.EnrollResponse
-	(*BrokerResponse)(nil),        // 7: tokenbay.proto.v1.BrokerResponse
+	(*SeederAssignment)(nil),      // 7: tokenbay.proto.v1.SeederAssignment
 	(*NoCapacity)(nil),            // 8: tokenbay.proto.v1.NoCapacity
 	(*BalanceRequest)(nil),        // 9: tokenbay.proto.v1.BalanceRequest
 	(*SettleRequest)(nil),         // 10: tokenbay.proto.v1.SettleRequest
