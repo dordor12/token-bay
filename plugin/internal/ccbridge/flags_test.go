@@ -18,10 +18,12 @@ func TestBuildArgv_HappyPath_IncludesAirtightFlags(t *testing.T) {
 	assert.Contains(t, got, "--output-format")
 	assert.Contains(t, got, "stream-json")
 	assert.Contains(t, got, "--verbose")
+	assert.Contains(t, got, "--tools")
 	assert.Contains(t, got, "--disallowedTools")
 	assert.Contains(t, got, "*")
 	assert.Contains(t, got, "--mcp-config")
-	assert.Contains(t, got, "/dev/null")
+	assert.Contains(t, got, `{"mcpServers":{}}`)
+	assert.Contains(t, got, "--strict-mcp-config")
 	assert.Contains(t, got, "--settings")
 	assert.Contains(t, got, `{"hooks":{}}`)
 }
@@ -48,10 +50,13 @@ func TestBuildArgv_RejectsEmptyModel(t *testing.T) {
 }
 
 func TestAirtightFlags_PinnedConstants(t *testing.T) {
+	assert.Equal(t, "--tools", FlagTools)
+	assert.Equal(t, "", ToolsNone)
 	assert.Equal(t, "--disallowedTools", FlagDisallowedTools)
 	assert.Equal(t, "*", DisallowedToolsAll)
 	assert.Equal(t, "--mcp-config", FlagMCPConfig)
-	assert.Equal(t, "/dev/null", MCPConfigNull)
+	assert.Equal(t, `{"mcpServers":{}}`, MCPConfigNull)
+	assert.Equal(t, "--strict-mcp-config", FlagStrictMCPConfig)
 	assert.Equal(t, "--settings", FlagSettings)
 	assert.Equal(t, `{"hooks":{}}`, SettingsNoHooks)
 }

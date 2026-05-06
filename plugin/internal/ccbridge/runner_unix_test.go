@@ -28,7 +28,8 @@ func TestExecRunner_Run_HappyPath(t *testing.T) {
 	writeFakeClaude(t, bin, `#!/bin/sh
 echo "$@" | grep -q -- '--disallowedTools' || exit 17
 echo "$@" | grep -q -- '--mcp-config' || exit 17
-echo "$@" | grep -q -- '/dev/null' || exit 17
+echo "$@" | grep -q -- '{"mcpServers":{}}' || exit 17
+echo "$@" | grep -q -- '--strict-mcp-config' || exit 17
 echo "$@" | grep -q -- '--settings' || exit 17
 echo "$@" | grep -q -- '{"hooks":{}}' || exit 17
 echo '{"type":"system","subtype":"init"}'

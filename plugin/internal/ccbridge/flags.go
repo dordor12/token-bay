@@ -10,8 +10,23 @@ const (
 	FlagVerbose         = "--verbose"
 	FlagDisallowedTools = "--disallowedTools"
 	DisallowedToolsAll  = "*"
-	FlagMCPConfig       = "--mcp-config"
-	MCPConfigNull       = "/dev/null"
+	// FlagTools is the explicit allow-list. The spec template uses
+	// --disallowedTools "*" but current Claude Code (2.1.x) does not
+	// honor "*" as a wildcard — only enumerated names. --tools ""
+	// (empty allow-list) is the airtight equivalent and is the
+	// load-bearing flag for the safety argument.
+	FlagTools     = "--tools"
+	ToolsNone     = ""
+	FlagMCPConfig = "--mcp-config"
+	// MCPConfigNull is a valid-JSON empty MCP server map. Spec §6.2 used
+	// "/dev/null" as the conceptual null config but current Claude Code
+	// validates the file as JSON and rejects the literal device file.
+	// {"mcpServers":{}} is the minimal payload the validator accepts.
+	MCPConfigNull = `{"mcpServers":{}}`
+	// FlagStrictMCPConfig restricts MCP servers to those declared by
+	// FlagMCPConfig (i.e., none, given MCPConfigNull). Without this,
+	// Claude Code merges in user settings.json's MCP servers.
+	FlagStrictMCPConfig = "--strict-mcp-config"
 	FlagSettings        = "--settings"
 	SettingsNoHooks     = `{"hooks":{}}`
 )
@@ -31,8 +46,10 @@ func BuildArgv(req Request) []string {
 		FlagPrompt, req.Prompt,
 		FlagOutputFormat, OutputFormatStream,
 		FlagVerbose,
+		FlagTools, ToolsNone,
 		FlagDisallowedTools, DisallowedToolsAll,
 		FlagMCPConfig, MCPConfigNull,
+		FlagStrictMCPConfig,
 		FlagSettings, SettingsNoHooks,
 	}
 	if req.Model != "" {
