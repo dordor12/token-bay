@@ -2,11 +2,16 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
+	"fmt"
+	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
+	quicgo "github.com/quic-go/quic-go"
 	"github.com/rs/zerolog"
 
 	"github.com/token-bay/token-bay/shared/ids"
@@ -50,12 +55,21 @@ type Server struct {
 	mu          sync.Mutex
 	running     bool
 	stopped     bool
+	listenAddr  string // populated when Run binds the listener; "" until then
 	connsByPeer map[ids.IdentityID]*Connection
 
 	serverCtx    context.Context
 	serverCancel context.CancelFunc
 
 	wg sync.WaitGroup // counts in-flight RPC dispatch goroutines
+}
+
+// ListenAddr returns the bound listener address, or "" before Run binds
+// or after Shutdown closes the listener. Used by tests dialing :0.
+func (s *Server) ListenAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listenAddr
 }
 
 // New validates Deps and returns a Server. Run binds the listener.
@@ -83,8 +97,12 @@ func (s *Server) PeerCount() int {
 }
 
 // Run blocks until ctx is cancelled or a fatal listener error occurs.
-// Phase 5 wires the accept loop; for now Run returns
-// ErrNotImplementedRun so cmd/run_cmd compiles against the real type.
+// It is the long-lived entry point for the QUIC server.
+//
+// Lifecycle:
+//   - bind listener
+//   - for each accepted QUIC conn: spawn serveConn (heartbeat + RPC streams)
+//   - return when serverCtx cancels (Shutdown) or listener fails
 func (s *Server) Run(ctx context.Context) error {
 	s.mu.Lock()
 	if s.running {
@@ -96,8 +114,97 @@ func (s *Server) Run(ctx context.Context) error {
 	s.mu.Unlock()
 	defer s.serverCancel()
 
-	// Wired in Phase 5 (Task 17).
-	return errors.New("server: Run not yet implemented (Phase 5)")
+	keyBytes, err := os.ReadFile(s.deps.Config.Server.IdentityKeyPath)
+	if err != nil {
+		return fmt.Errorf("server: read identity key: %w", err)
+	}
+	cert, err := ServerCertFromIdentity(ed25519.PrivateKey(keyBytes))
+	if err != nil {
+		return err
+	}
+
+	l, err := StartListener(&s.deps.Config.Server, cert)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.listenAddr = l.Addr().String()
+	s.mu.Unlock()
+	s.deps.Logger.Info().Str("addr", l.Addr().String()).Msg("server: listening")
+
+	// Close the listener when Shutdown cancels serverCtx.
+	go func() {
+		<-s.serverCtx.Done()
+		_ = l.Close()
+	}()
+
+	for {
+		conn, err := l.Accept(s.serverCtx)
+		if err != nil {
+			if s.serverCtx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("server: accept: %w", err)
+		}
+		go s.serveConn(conn)
+	}
+}
+
+// serveConn runs the per-peer state machine: extract IdentityID from
+// mTLS, register the *Connection, accept the heartbeat stream, accept
+// RPC streams (Phase 7), tear down on disconnect.
+func (s *Server) serveConn(qc *quicgo.Conn) {
+	state := qc.ConnectionState().TLS
+	if len(state.PeerCertificates) != 1 {
+		_ = qc.CloseWithError(0, "missing peer cert")
+		return
+	}
+	peerID, err := SPKIToIdentityID(state.PeerCertificates[0])
+	if err != nil {
+		_ = qc.CloseWithError(0, "bad SPKI")
+		return
+	}
+	udp, ok := qc.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		_ = qc.CloseWithError(0, "non-UDP remote")
+		return
+	}
+	addr := udp.AddrPort()
+
+	c := newConnection(s.serverCtx, qc, peerID, addr)
+	s.mu.Lock()
+	s.connsByPeer[peerID] = c
+	s.mu.Unlock()
+	s.deps.Logger.Info().Hex("peer", peerID[:]).Str("addr", addr.String()).
+		Msg("server: peer connected")
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.connsByPeer, peerID)
+		s.mu.Unlock()
+		c.Close()
+		s.deps.Logger.Info().Hex("peer", peerID[:]).Msg("server: peer disconnected")
+	}()
+
+	// First client-initiated stream → heartbeat. Mirror of the merged
+	// plugin client behavior (heartbeat opens before any RPC).
+	hbStream, err := qc.AcceptStream(s.serverCtx)
+	if err != nil {
+		return
+	}
+	c.streamSeq.Add(1)
+	go runHeartbeat(s.serverCtx, hbStream, peerID, s.deps.Registry,
+		s.deps.Now, s.deps.Config.Server.MaxFrameSize, s.deps.Logger)
+
+	// Subsequent streams = RPC. Phase 7 wires handleRPCStream.
+	for {
+		stream, err := qc.AcceptStream(s.serverCtx)
+		if err != nil {
+			return
+		}
+		c.streamSeq.Add(1)
+		go s.handleRPCStream(s.serverCtx, stream, c)
+	}
 }
 
 // Shutdown gracefully drains. Wired in Phase 9.
