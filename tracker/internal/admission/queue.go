@@ -94,6 +94,22 @@ func (h *queueHeap) Reheapify() {
 	heap.Init((*queueHeapAdapter)(h))
 }
 
+// PopReadyForBroker peeks the queue head. If empty or its EffectivePriority(now)
+// is < minServePriority, returns (_, false). Otherwise pops and returns the entry.
+func (s *Subsystem) PopReadyForBroker(now time.Time, minServePriority float64) (QueueEntry, bool) {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	s.queue.AdvanceTime(now)
+	if s.queue.Len() == 0 {
+		return QueueEntry{}, false
+	}
+	head, _ := s.queue.Peek()
+	if head.EffectivePriority(now, s.cfg.AgingAlphaPerMinute) < minServePriority {
+		return QueueEntry{}, false
+	}
+	return s.queue.Pop(), true
+}
+
 // queueHeapAdapter exposes queueHeap as a heap.Interface implementation
 // without forcing queueHeap itself to expose Push/Pop in the heap.Interface
 // shape (which would conflict with our Push/Pop methods).
