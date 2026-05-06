@@ -18,9 +18,9 @@ type PriceTable struct {
 
 func DefaultPriceTable() *PriceTable {
 	return &PriceTable{byModel: map[string]ModelPrices{
-		"claude-opus-4-7":            {InCreditsPerToken: 15, OutCreditsPerToken: 75},
-		"claude-sonnet-4-6":          {InCreditsPerToken: 3, OutCreditsPerToken: 15},
-		"claude-haiku-4-5-20251001":  {InCreditsPerToken: 1, OutCreditsPerToken: 5},
+		"claude-opus-4-7":           {InCreditsPerToken: 15, OutCreditsPerToken: 75},
+		"claude-sonnet-4-6":         {InCreditsPerToken: 3, OutCreditsPerToken: 15},
+		"claude-haiku-4-5-20251001": {InCreditsPerToken: 1, OutCreditsPerToken: 5},
 	}}
 }
 

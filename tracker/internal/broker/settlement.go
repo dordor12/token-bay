@@ -23,8 +23,8 @@ import (
 //
 // Construct via OpenSettlement; tear down via Close.
 type Settlement struct {
-	cfg  config.SettlementConfig
-	deps Deps
+	cfg   config.SettlementConfig
+	deps  Deps
 	inflt *Inflight
 	resv  *Reservations
 	stop  chan struct{}

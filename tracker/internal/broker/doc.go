@@ -4,12 +4,12 @@
 //
 // Broker is two sibling subsystems sharing in-memory state:
 //   - *Broker     — selection: validates pricing, reserves credits, scores
-//                   candidates from the registry, runs the offer push loop.
-//                   Exposes Submit(ctx, env) → *Result.
+//     candidates from the registry, runs the offer push loop.
+//     Exposes Submit(ctx, env) → *Result.
 //   - *Settlement — finalization: receives usage_report from the seeder,
-//                   pushes settle_request to the consumer, awaits the
-//                   counter-sig (or times out → ConsumerSigMissing entry),
-//                   appends via internal/ledger.
+//     pushes settle_request to the consumer, awaits the
+//     counter-sig (or times out → ConsumerSigMissing entry),
+//     appends via internal/ledger.
 //
 // The two share *Inflight + *Reservations. Construct via Open which returns
 // a *Subsystems composite; cmd/run_cmd threads each into api.Deps.

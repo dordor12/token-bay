@@ -23,8 +23,8 @@ func runOffer(ctx context.Context, pusher PushService, seederID ids.IdentityID,
 		ConsumerId:      body.ConsumerId,
 		EnvelopeHash:    envHash[:],
 		Model:           body.Model,
-		MaxInputTokens:  uint32(body.MaxInputTokens),
-		MaxOutputTokens: uint32(body.MaxOutputTokens),
+		MaxInputTokens:  uint32(body.MaxInputTokens),  //nolint:gosec // G115: truncation acceptable for offer push; seeder ignores the value
+		MaxOutputTokens: uint32(body.MaxOutputTokens), //nolint:gosec // G115: same
 	}
 	ch, ok := pusher.PushOfferTo(seederID, push)
 	if !ok {

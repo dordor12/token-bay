@@ -18,16 +18,16 @@ type brokerMetrics struct {
 	ReservationTTLExpired   prometheus.Counter
 
 	// Settlement
-	SettlementDecisions        *prometheus.CounterVec
-	SettlementDuration         prometheus.Histogram
-	ConsumerSigMissing         prometheus.Counter
-	LedgerAppendFailure        prometheus.Counter
-	StaleTipRetries            prometheus.Counter
+	SettlementDecisions *prometheus.CounterVec
+	SettlementDuration  prometheus.Histogram
+	ConsumerSigMissing  prometheus.Counter
+	LedgerAppendFailure prometheus.Counter
+	StaleTipRetries     prometheus.Counter
 
 	// Operational
-	QueueDrainPops              prometheus.Counter
-	QueueDrainAdmitOutcomes     *prometheus.CounterVec
-	SeederPostAcceptDisconnect  prometheus.Counter
+	QueueDrainPops             prometheus.Counter
+	QueueDrainAdmitOutcomes    *prometheus.CounterVec
+	SeederPostAcceptDisconnect prometheus.Counter
 }
 
 // newBrokerMetrics constructs all metrics. The returned struct must be

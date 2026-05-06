@@ -59,5 +59,5 @@ func (s *stubReputation) Score(id ids.IdentityID) (float64, bool) {
 	v, ok := s.scores[id]
 	return v, ok
 }
-func (s *stubReputation) IsFrozen(id ids.IdentityID) bool { return s.frozen[id] }
+func (s *stubReputation) IsFrozen(id ids.IdentityID) bool           { return s.frozen[id] }
 func (s *stubReputation) RecordOfferOutcome(ids.IdentityID, string) {}

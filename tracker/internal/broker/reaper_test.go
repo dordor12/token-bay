@@ -14,7 +14,7 @@ func TestReaper_ExpiresStaleReservation(t *testing.T) {
 	fr := newFakeRegistry()
 	seeder := seederRecord(t, ids.IdentityID{0xDD}, 0.9, "claude-sonnet-4-6")
 	fr.Add(seeder)
-	fr.IncLoad(seeder.IdentityID) // simulate broker's IncLoad on accept
+	_, _ = fr.IncLoad(seeder.IdentityID) // simulate broker's IncLoad on accept
 	deps.Registry = fr
 
 	inflt := NewInflight()

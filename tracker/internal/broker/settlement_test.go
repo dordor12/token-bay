@@ -264,7 +264,7 @@ func TestHandleUsageReport_AppendsConsumerSigMissing(t *testing.T) {
 	fr := newFakeRegistry()
 	seederRec := seederRecord(t, ids.IdentityID{0xDD}, 0.9, "claude-sonnet-4-6")
 	fr.Add(seederRec)
-	fr.IncLoad(seederRec.IdentityID)
+	_, _ = fr.IncLoad(seederRec.IdentityID)
 	deps.Registry = fr
 
 	inflt := NewInflight()
