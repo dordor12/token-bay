@@ -223,12 +223,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return errors.New("server: Shutdown not yet implemented (Phase 9)")
 }
 
-// PushOfferTo enqueues an OfferPush. Wired in Phase 8.
-func (s *Server) PushOfferTo(_ ids.IdentityID, _ *tbproto.OfferPush) (<-chan *tbproto.OfferDecision, bool) {
-	return nil, false
-}
-
-// PushSettlementTo mirrors PushOfferTo. Wired in Phase 8.
-func (s *Server) PushSettlementTo(_ ids.IdentityID, _ *tbproto.SettlementPush) (<-chan *tbproto.SettleAck, bool) {
-	return nil, false
-}
+// PushOfferTo and PushSettlementTo are defined in push_offers.go and
+// push_settlements.go (Phase 8). Server holds the dispatch state; the
+// push files own the per-stream wire dance.
