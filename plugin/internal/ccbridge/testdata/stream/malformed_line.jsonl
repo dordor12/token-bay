@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init"}
+this-is-not-json
+{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":2}}

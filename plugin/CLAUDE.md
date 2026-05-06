@@ -42,17 +42,19 @@ Authoritative spec: `docs/superpowers/specs/plugin/2026-04-22-plugin-design.md`.
 | `make test` | Unit + integration tests with race detector |
 | `make lint` | `golangci-lint run ./...` |
 | `make build` | Build `bin/token-bay-sidecar` |
-| `make conformance` | Bridge conformance suite against the installed `claude` binary |
+| `make localintegtest` | Tests that spawn the real `claude` binary (bridge conformance et al). **Local-only — never runs in CI.** Triggered automatically by lefthook pre-commit when `internal/ccbridge/**`, `test/conformance/**`, or `test/fixtures/**` is staged. |
 | `make check` | `test` + `lint` |
 | `make install` | Build + install as a local Claude Code plugin |
 
 ## Bridge conformance — why it's special
 
-The seeder role's entire safety argument rests on `claude -p` tool-disabling flags being airtight. Any change to `internal/ccbridge/` or `test/conformance/` triggers a pre-commit conformance run (enforced via lefthook).
+The seeder role's entire safety argument rests on `claude -p` tool-disabling flags being airtight. Any change to `internal/ccbridge/` or `test/conformance/` triggers a pre-commit `make localintegtest` run (enforced via lefthook).
 
-The suite in `test/conformance/` runs a corpus of adversarial prompts (attempts to `Bash`, `Read`, `Write`, `WebFetch`, trigger MCP servers, fire hooks) against a real `claude -p` invocation with the current flag set. It asserts zero observable side effects on a sandboxed filesystem, process table, and network. A regression in Claude Code's flag enforcement is a CVE-class event and blocks seeder advertise until fixed.
+The suite in `test/conformance/` runs a corpus of adversarial prompts (attempts to `Bash`, `Read`, `Write`, `WebFetch`, trigger MCP servers, fire hooks) against a real `claude -p` invocation with the current flag set. It asserts no side-effecting tool appears in the init event's `tools` array. A regression in Claude Code's flag enforcement is a CVE-class event and blocks seeder advertise until fixed.
 
 The sidecar runs a subset of the conformance suite at startup (`internal/ccbridge/conformance.go`) — if it fails, `advertise=true` is refused.
+
+**Why `localintegtest`-only.** The conformance harness consumes Anthropic API quota (it actually calls a model to drive the adversarial corpus) and depends on the developer's installed `claude` binary. GitHub Actions has neither — running this in CI would either burn credentials or skip silently. The build-tag gate (`//go:build localintegtest`) means `make check` and `go test ./...` never pick it up. The user's pre-commit hook is the gate; CI provides defense-in-depth via the in-process startup check (`internal/ccbridge.RunStartupConformance`) that runs against the configured Runner.
 
 ## Things that look surprising and aren't bugs
 

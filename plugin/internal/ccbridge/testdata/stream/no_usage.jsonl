@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"s3","model":"claude-sonnet-4-6","tools":[]}
+{"type":"assistant","message":{"id":"msg_x","type":"message","role":"assistant","content":[{"type":"text","text":"part"}]}}

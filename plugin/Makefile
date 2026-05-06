@@ -1,4 +1,4 @@
-.PHONY: all test test-integration lint check build conformance clean install
+.PHONY: all test test-integration lint check build localintegtest clean install
 
 all: check build
 
@@ -14,9 +14,9 @@ test-integration:
 lint:
 	golangci-lint run ./...
 
-conformance:
-	@echo "Running bridge conformance suite..."
-	go test -tags=conformance ./test/conformance/...
+localintegtest:
+	@echo "Running local integration tests (requires real claude binary)..."
+	go test -tags=localintegtest ./...
 
 check: test lint
 
