@@ -52,6 +52,13 @@ func (s *Server) runOfferPush(c *Connection, push *tbproto.OfferPush, out chan<-
 	}
 	defer stream.Close()
 
+	// Bound the entire I/O dance by the same deadline. quic-go.Stream
+	// honors SetReadDeadline / SetWriteDeadline; without these the
+	// ReadFrame for OfferDecision would block past ctx expiry.
+	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+	_ = stream.SetWriteDeadline(deadline)
+	_ = stream.SetReadDeadline(deadline)
+
 	if _, err := stream.Write([]byte{api.PushTagOffer}); err != nil {
 		out <- &tbproto.OfferDecision{Accept: false, RejectReason: rejectReason(ctx, err)}
 		return
@@ -63,10 +70,22 @@ func (s *Server) runOfferPush(c *Connection, push *tbproto.OfferPush, out chan<-
 
 	var dec tbproto.OfferDecision
 	if err := ReadFrame(stream, &dec, maxFrame); err != nil {
-		out <- &tbproto.OfferDecision{Accept: false, RejectReason: rejectReason(ctx, err)}
+		out <- &tbproto.OfferDecision{Accept: false, RejectReason: timeoutOrLost(deadline, err)}
 		return
 	}
 	out <- &dec
+}
+
+// timeoutOrLost classifies a stream-IO error: if the deadline has
+// passed, it's a timeout; otherwise the connection is gone.
+func timeoutOrLost(deadline time.Time, err error) string {
+	if time.Now().After(deadline) {
+		return "timeout"
+	}
+	if err != nil {
+		return "connection_lost"
+	}
+	return "connection_lost"
 }
 
 // rejectReason classifies an error from the push pipeline. ctx

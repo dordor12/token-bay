@@ -46,6 +46,10 @@ func (s *Server) runSettlementPush(c *Connection, push *tbproto.SettlementPush, 
 	}
 	defer stream.Close()
 
+	deadline := time.Now().Add(time.Duration(timeoutS) * time.Second)
+	_ = stream.SetWriteDeadline(deadline)
+	_ = stream.SetReadDeadline(deadline)
+
 	if _, err := stream.Write([]byte{api.PushTagSettlement}); err != nil {
 		return
 	}

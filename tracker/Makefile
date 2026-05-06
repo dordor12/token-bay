@@ -1,4 +1,4 @@
-.PHONY: all test lint check build clean run-local docker
+.PHONY: all test test-integration lint check build clean run-local docker
 
 all: check build
 
@@ -7,6 +7,12 @@ build:
 
 test:
 	go test -race -coverprofile=coverage.out ./...
+
+# test-integration runs the build-tagged integration tier under
+# tracker/test/integration. Real QUIC, real mTLS, real UDP on
+# 127.0.0.1. Excluded from `make test` to keep the default loop fast.
+test-integration:
+	go test -race -tags=integration ./test/integration/...
 
 lint:
 	golangci-lint run ./...
