@@ -116,6 +116,13 @@ type Result struct {
 // ComputedAt is zero; Decide treats that as "unconditional admit" until the
 // 5s aggregator first publishes.
 func (s *Subsystem) Decide(consumerID ids.IdentityID, att *sharedadmission.SignedCreditAttestation, now time.Time) Result {
+	start := time.Now()
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.DecisionDuration.Observe(time.Since(start).Seconds())
+		}
+	}()
+
 	score, _ := s.resolveCreditScore(consumerID, att, now)
 	s.recordDemandTick(now)
 
@@ -123,6 +130,7 @@ func (s *Subsystem) Decide(consumerID ids.IdentityID, att *sharedadmission.Signe
 
 	// Admit branch: low pressure or no supply data yet (boot-time).
 	if supply.ComputedAt.IsZero() || supply.Pressure < s.cfg.PressureAdmitThreshold {
+		s.bumpDecision("admit")
 		return Result{Outcome: OutcomeAdmit, CreditUsed: score}
 	}
 
@@ -141,6 +149,10 @@ func (s *Subsystem) Decide(consumerID ids.IdentityID, att *sharedadmission.Signe
 			s.queue.Push(entry)
 			pos := s.queue.Len()
 			s.queueMu.Unlock()
+			s.bumpDecision("queue")
+			if s.metrics != nil {
+				s.metrics.QueueDepth.Set(float64(pos))
+			}
 			return Result{
 				Outcome: OutcomeQueue,
 				Queued: &QueuedDetails{
@@ -152,12 +164,13 @@ func (s *Subsystem) Decide(consumerID ids.IdentityID, att *sharedadmission.Signe
 			}
 		}
 		s.queueMu.Unlock()
-		// Fall through to Reject when queue is full.
 	}
 
-	// Reject branch. mrand is fine here — jitter is anti-thundering-herd,
-	// not security-relevant.
 	retry := computeRetryAfterS(s.queue.Len(), 200*time.Millisecond, mrand.New(mrand.NewSource(now.UnixNano()))) //nolint:gosec // G404 — jitter
+	s.bumpDecision("reject")
+	if s.metrics != nil {
+		s.metrics.RejectionsByReason.WithLabelValues("region_overloaded").Inc()
+	}
 	return Result{
 		Outcome: OutcomeReject,
 		Rejected: &RejectedDetails{
@@ -165,6 +178,12 @@ func (s *Subsystem) Decide(consumerID ids.IdentityID, att *sharedadmission.Signe
 			RetryAfterS: retry,
 		},
 		CreditUsed: score,
+	}
+}
+
+func (s *Subsystem) bumpDecision(label string) {
+	if s.metrics != nil {
+		s.metrics.Decisions.WithLabelValues(label).Inc()
 	}
 }
 

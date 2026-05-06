@@ -51,6 +51,30 @@ type Subsystem struct {
 	// per-consumer attestation issuance rate limiter (Task 12).
 	attestRL *rateLimiter
 
+	// persistence — plan 3.
+	tlog           *tlogWriter
+	tlogPath       string
+	snapshotPrefix string
+
+	// replay state — plan 3.
+	ledgerSrc            LedgerSource
+	skipAutoReplay       bool
+	replaying            atomic.Bool
+	degradedMode         atomic.Uint32
+	snapshotLoadFailures atomic.Uint64
+	tlogCorruptions      atomic.Uint64
+
+	// nextSeq is the monotonic seq for tlog records. Atomic so concurrent
+	// OnLedgerEvent callers (race-clean test) get distinct seqs.
+	nextSeq atomic.Uint64
+
+	// admin — plan 3.
+	adminBlocklistOnce sync.Once
+	adminBlocklist     *adminBlocklist
+
+	// metrics — plan 3.
+	metrics *admissionMetrics
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -69,6 +93,23 @@ func WithClock(now func() time.Time) Option {
 // federation lands in a later plan.
 func WithPeerSet(p PeerSet) Option {
 	return func(s *Subsystem) { s.peers = p }
+}
+
+// WithSnapshotPrefix sets the snapshot path prefix (snapshots are written
+// to <prefix>.<seq>). Empty disables snapshot emission.
+func WithSnapshotPrefix(prefix string) Option {
+	return func(s *Subsystem) { s.snapshotPrefix = prefix }
+}
+
+// WithTLogPath sets the active tlog file path. Empty disables tlog writes.
+func WithTLogPath(path string) Option {
+	return func(s *Subsystem) { s.tlogPath = path }
+}
+
+// WithSnapshotsRetained overrides cfg.SnapshotsRetained (1-N). Useful for
+// tests that exercise pruning without needing many snapshots.
+func WithSnapshotsRetained(n int) Option {
+	return func(s *Subsystem) { s.cfg.SnapshotsRetained = n }
 }
 
 // PeerSet reports whether a tracker pubkey hash belongs to the local
@@ -121,6 +162,15 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	s.seederShards = newSeederShards(registry.DefaultShardCount)
 	s.queue = newQueueHeap(time.Time{}, cfg.AgingAlphaPerMinute)
 	s.attestRL = newRateLimiter(cfg.AttestationIssuancePerConsumerPerHour, registry.DefaultShardCount)
+	s.metrics = newAdmissionMetrics()
+
+	if s.tlogPath != "" {
+		w, err := newTLogWriter(s.tlogPath, 5*time.Millisecond, 1<<30)
+		if err != nil {
+			return nil, fmt.Errorf("admission: open tlog: %w", err)
+		}
+		s.tlog = w
+	}
 
 	s.startAggregator()
 	return s, nil
@@ -136,6 +186,9 @@ func (s *Subsystem) Close() error {
 		close(s.stop)
 	}
 	s.wg.Wait()
+	if s.tlog != nil {
+		_ = s.tlog.Close()
+	}
 	return nil
 }
 
