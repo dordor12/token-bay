@@ -1,9 +1,13 @@
 package auditlog
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 )
 
 // Logger appends audit-log entries to a single file. Safe for concurrent
@@ -14,6 +18,7 @@ import (
 // retire a file. See plugin CLAUDE.md rule #4.
 type Logger struct {
 	path string
+	now  func() time.Time // injectable for tests; defaults to time.Now
 
 	mu sync.Mutex
 	f  *os.File // nil after Close
@@ -27,7 +32,59 @@ func Open(path string) (*Logger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auditlog: open %s: %w", path, err)
 	}
-	return &Logger{path: path, f: f}, nil
+	return &Logger{path: path, f: f, now: time.Now}, nil
+}
+
+// Rotate closes the current file, renames it to <path>.<UTC-timestamp>Z,
+// and re-opens path fresh. The original path is the live tail; the
+// archive is the retired one. Atomic on POSIX (rename(2)).
+//
+// On a sub-second collision, a -<n> suffix is appended.
+func (l *Logger) Rotate() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return ErrClosed
+	}
+	if err := l.f.Close(); err != nil {
+		return fmt.Errorf("auditlog: close before rotate: %w", err)
+	}
+	l.f = nil
+
+	archive, err := uniqueArchivePath(l.path, l.now())
+	if err != nil {
+		return fmt.Errorf("auditlog: pick archive name: %w", err)
+	}
+	if err := os.Rename(l.path, archive); err != nil {
+		return fmt.Errorf("auditlog: rename for rotate: %w", err)
+	}
+	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("auditlog: re-open after rotate: %w", err)
+	}
+	l.f = f
+	return nil
+}
+
+// uniqueArchivePath builds a non-colliding rotated path of the form
+// "<base>.YYYYMMDDTHHMMSSZ" (UTC) — appending a "-N" disambiguator if a
+// prior rotation in the same second already claimed the bare name.
+func uniqueArchivePath(base string, now time.Time) (string, error) {
+	stem := base + "." + now.UTC().Format("20060102T150405Z")
+	if _, err := os.Stat(stem); errors.Is(err, fs.ErrNotExist) {
+		return stem, nil
+	} else if err != nil {
+		return "", err
+	}
+	for i := 1; i < 10000; i++ {
+		candidate := stem + "-" + strconv.Itoa(i)
+		if _, err := os.Stat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("auditlog: exhausted rotation suffixes for %s", stem)
 }
 
 // Path returns the absolute path the Logger was opened against. Stable
