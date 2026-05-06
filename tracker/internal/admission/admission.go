@@ -72,6 +72,9 @@ type Subsystem struct {
 	adminBlocklistOnce sync.Once
 	adminBlocklist     *adminBlocklist
 
+	// metrics — plan 3.
+	metrics *admissionMetrics
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -159,6 +162,7 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	s.seederShards = newSeederShards(registry.DefaultShardCount)
 	s.queue = newQueueHeap(time.Time{}, cfg.AgingAlphaPerMinute)
 	s.attestRL = newRateLimiter(cfg.AttestationIssuancePerConsumerPerHour, registry.DefaultShardCount)
+	s.metrics = newAdmissionMetrics()
 
 	if s.tlogPath != "" {
 		w, err := newTLogWriter(s.tlogPath, 5*time.Millisecond, 1<<30)
