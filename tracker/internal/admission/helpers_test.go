@@ -1,8 +1,10 @@
 package admission
 
 import (
+	"context"
 	"crypto/ed25519"
 	"math/rand"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -54,27 +56,28 @@ func defaultScoreConfig() config.AdmissionConfig {
 
 // openTempSubsystem returns a wired *Subsystem with fixed clock, default
 // config, empty registry, and the fixture tracker keypair. Cleanup hooks
-// close it on test completion.
-func openTempSubsystem(t *testing.T, opts ...Option) (*Subsystem, ids.IdentityID) {
-	t.Helper()
-	require.Len(t, fixtureTrackerSeed, ed25519.SeedSize)
+// close it on test completion. Accepts testing.TB so benchmarks can call
+// it too.
+func openTempSubsystem(tb testing.TB, opts ...Option) (*Subsystem, ids.IdentityID) {
+	tb.Helper()
+	require.Len(tb, fixtureTrackerSeed, ed25519.SeedSize)
 	priv := ed25519.NewKeyFromSeed(fixtureTrackerSeed)
 
 	reg, err := registry.New(16)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	s, err := Open(defaultScoreConfig(), reg, priv, opts...)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	require.NoError(tb, err)
+	tb.Cleanup(func() { _ = s.Close() })
 	return s, s.trackerID
 }
 
 // fixturePeerKeypair returns the fixture peer-tracker (Ed25519) keypair
 // + its derived IdentityID. Used in attestation-validation tests where
 // the peer is the "issuer" of imported attestations.
-func fixturePeerKeypair(t *testing.T) (ed25519.PrivateKey, ids.IdentityID) {
-	t.Helper()
-	require.Len(t, fixturePeerSeed, ed25519.SeedSize)
+func fixturePeerKeypair(tb testing.TB) (ed25519.PrivateKey, ids.IdentityID) {
+	tb.Helper()
+	require.Len(tb, fixturePeerSeed, ed25519.SeedSize)
 	priv := ed25519.NewKeyFromSeed(fixturePeerSeed)
 	pub := priv.Public().(ed25519.PublicKey)
 	var id ids.IdentityID
@@ -172,3 +175,104 @@ func makeIDi(i int) ids.IdentityID {
 
 // fixedRand returns a deterministic *rand.Rand for jitter tests.
 func fixedRand(seed int64) *rand.Rand { return rand.New(rand.NewSource(seed)) } //nolint:gosec // G404 — tests
+
+// corruptByteAt flips one bit in the byte at offset off in the file at
+// path. Used by replay tests to simulate on-disk corruption.
+func corruptByteAt(t *testing.T, path string, off int64) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	defer f.Close()
+	buf := make([]byte, 1)
+	_, err = f.ReadAt(buf, off)
+	require.NoError(t, err)
+	buf[0] ^= 0xff
+	_, err = f.WriteAt(buf, off)
+	require.NoError(t, err)
+}
+
+// appendGarbageBytes appends n random bytes to the file at path so a
+// would-be replay sees a partial trailing frame.
+func appendGarbageBytes(t *testing.T, path string, n int) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	defer f.Close()
+	garbage := make([]byte, n)
+	for i := range garbage {
+		garbage[i] = byte(i + 1)
+	}
+	_, err = f.Write(garbage)
+	require.NoError(t, err)
+}
+
+// fakeLedgerSource is the deterministic LedgerSource used by replay
+// cross-check tests.
+type fakeLedgerSource struct {
+	mu     sync.Mutex
+	events []LedgerEvent
+}
+
+// EventsAfter implements the LedgerSource contract; minSeq is unused
+// (the fake's events list is treated as authoritative).
+func (s *fakeLedgerSource) EventsAfter(_ context.Context, _ uint64) ([]LedgerEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]LedgerEvent, len(s.events))
+	copy(out, s.events)
+	return out, nil
+}
+
+// append is used by failure-mode tests (Task 9, Task 13) to grow the
+// fake ledger after the writer crashes. Marked nolint:unused so plan-3
+// tasks 1-7 build; later tasks consume it.
+//
+//nolint:unused // used by Task 9 + Task 13
+func (s *fakeLedgerSource) append(ev LedgerEvent) {
+	s.mu.Lock()
+	s.events = append(s.events, ev)
+	s.mu.Unlock()
+}
+
+// allowAllPeerSet treats every issuer as a recognized peer.
+type allowAllPeerSet struct{}
+
+func (allowAllPeerSet) Contains(ids.IdentityID) bool { return true }
+
+// rejectAllPeerSet rejects every issuer (the v1 default behavior).
+type rejectAllPeerSet struct{}
+
+func (rejectAllPeerSet) Contains(ids.IdentityID) bool { return false }
+
+// signedTestAttestation builds a peer-issued attestation that passes every
+// validation step except the optional clamp. Useful as a baseline to
+// tamper with in §10 #17 (forged) tests.
+func signedTestAttestation(tb testing.TB, s *Subsystem) *admission.SignedCreditAttestation {
+	tb.Helper()
+	return signedTestAttestationWithScore(tb, s, 7000)
+}
+
+// signedTestAttestationWithScore builds a peer-issued attestation with a
+// declared score (raw uint32, fixed-point /10000). §10 #19 uses the
+// inflated value to test the MaxAttestationScoreImported clamp.
+func signedTestAttestationWithScore(tb testing.TB, s *Subsystem, rawScore uint32) *admission.SignedCreditAttestation {
+	tb.Helper()
+	now := s.nowFn()
+	priv, peerID := fixturePeerKeypair(tb)
+	consumerID := makeID(0xC1)
+	body := &admission.CreditAttestationBody{
+		IdentityId:            consumerID[:],
+		IssuerTrackerId:       peerID[:],
+		Score:                 rawScore,
+		TenureDays:            60,
+		SettlementReliability: 9000,
+		DisputeRate:           100,
+		NetCreditFlow_30D:     50000,
+		BalanceCushionLog2:    1,
+		ComputedAt:            uint64(now.Add(-time.Hour).Unix()),     //nolint:gosec // G115 — post-1970
+		ExpiresAt:             uint64(now.Add(23 * time.Hour).Unix()), //nolint:gosec // G115 — post-1970
+	}
+	sig, err := signing.SignCreditAttestation(priv, body)
+	require.NoError(tb, err)
+	return &admission.SignedCreditAttestation{Body: body, TrackerSig: sig}
+}

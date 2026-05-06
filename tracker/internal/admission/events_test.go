@@ -1,6 +1,7 @@
 package admission
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -145,4 +146,98 @@ func TestOnLedgerEvent_UnspecifiedKind_NoOp(t *testing.T) {
 	s.OnLedgerEvent(LedgerEvent{Kind: LedgerEventUnspecified, ConsumerID: makeID(0x11), Timestamp: now})
 	_, ok := consumerShardFor(s.consumerShards, makeID(0x11)).get(makeID(0x11))
 	assert.False(t, ok, "unspecified kind must not initialize state")
+}
+
+func TestOnLedgerEvent_PersistsSettlementToTLog(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(11),
+		SeederID: makeIDi(99), CostCredits: 42, Timestamp: now,
+	})
+	require.NoError(t, s.tlog.Close())
+
+	recs, _, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindSettlement, recs[0].Kind)
+
+	var p SettlementPayload
+	require.NoError(t, p.UnmarshalBinary(recs[0].Payload))
+	assert.Equal(t, makeIDi(11), p.ConsumerID)
+	assert.Equal(t, uint64(42), p.CostCredits)
+}
+
+func TestOnLedgerEvent_DisputeForcesFsync(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventDisputeFiled, ConsumerID: makeIDi(11),
+		Timestamp: now,
+	})
+	recs, _, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindDisputeFiled, recs[0].Kind)
+}
+
+func TestOnLedgerEvent_TransferRoundtrip(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventTransferIn, ConsumerID: makeIDi(11),
+		CostCredits: 100, Timestamp: now,
+	})
+	require.NoError(t, s.tlog.Close())
+
+	recs, _, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindTransfer, recs[0].Kind)
+}
+
+func TestOnLedgerEvent_StarterGrantRoundtrip(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventStarterGrant, ConsumerID: makeIDi(11),
+		CostCredits: 1000, Timestamp: now,
+	})
+	require.NoError(t, s.tlog.Close())
+
+	recs, _, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, TLogKindStarterGrant, recs[0].Kind)
+}
+
+func TestOnLedgerEvent_DuringReplay_NoDoubleWrite(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	tlogPath := filepath.Join(dir, "admission.tlog")
+	s, _ := openTempSubsystem(t, WithClock(staticClockFn(now)), WithTLogPath(tlogPath))
+
+	s.replaying.Store(true)
+	s.OnLedgerEvent(LedgerEvent{
+		Kind: LedgerEventSettlement, ConsumerID: makeIDi(7),
+		CostCredits: 10, Timestamp: now,
+	})
+	s.replaying.Store(false)
+	require.NoError(t, s.tlog.Close())
+
+	recs, _, err := readTLogFile(tlogPath)
+	require.NoError(t, err)
+	assert.Empty(t, recs, "replay path must not append to tlog")
 }

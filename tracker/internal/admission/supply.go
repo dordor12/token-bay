@@ -43,6 +43,11 @@ func (s *Subsystem) Supply() *SupplySnapshot {
 // (Task 7) is the only caller in production; tests use it directly.
 func (s *Subsystem) publishSupply(snap *SupplySnapshot) {
 	s.supply.Store(snap)
+	if s.metrics != nil && snap != nil {
+		s.metrics.Pressure.Set(snap.Pressure)
+		s.metrics.SupplyTotal.Set(snap.TotalHeadroom)
+		s.metrics.SeedersContrib.Set(float64(snap.ContributingSeeders))
+	}
 }
 
 // aggregator state. Demand EWMA tracks broker_request arrival rate;

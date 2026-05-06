@@ -48,34 +48,94 @@ type LedgerEventObserver interface {
 	OnLedgerEvent(ev LedgerEvent)
 }
 
-// OnLedgerEvent updates in-memory bucket state per admission-design §5.6.
-// Persistence (admission.tlog) is plan 3 — this revision is in-memory only.
+// OnLedgerEvent persists each in-memory state change to the tlog first,
+// then applies it. A write failure aborts the apply so disk and memory
+// stay consistent; the next call retries.
+//
+// During StartupReplay the s.replaying flag suppresses tlog writes
+// (records are already on disk).
 func (s *Subsystem) OnLedgerEvent(ev LedgerEvent) {
+	seq := s.nextSeq.Add(1)
+
 	switch ev.Kind {
 	case LedgerEventSettlement:
+		p := SettlementPayload{
+			ConsumerID:  ev.ConsumerID,
+			SeederID:    ev.SeederID,
+			CostCredits: ev.CostCredits,
+			Flags:       ev.Flags,
+		}
+		if err := s.persistEvent(seq, TLogKindSettlement, p, ev.Timestamp); err != nil {
+			return
+		}
 		s.applySettlement(ev)
 	case LedgerEventTransferIn:
+		p := TransferPayload{ConsumerID: ev.ConsumerID, CostCredits: ev.CostCredits, Direction: TransferIn}
+		if err := s.persistEvent(seq, TLogKindTransfer, p, ev.Timestamp); err != nil {
+			return
+		}
 		s.applyTransfer(ev.ConsumerID, signedDelta(ev.CostCredits, true), ev.Timestamp)
 	case LedgerEventTransferOut:
+		p := TransferPayload{ConsumerID: ev.ConsumerID, CostCredits: ev.CostCredits, Direction: TransferOut}
+		if err := s.persistEvent(seq, TLogKindTransfer, p, ev.Timestamp); err != nil {
+			return
+		}
 		s.applyTransfer(ev.ConsumerID, signedDelta(ev.CostCredits, false), ev.Timestamp)
 	case LedgerEventStarterGrant:
+		p := StarterGrantPayload{ConsumerID: ev.ConsumerID, CostCredits: ev.CostCredits}
+		if err := s.persistEvent(seq, TLogKindStarterGrant, p, ev.Timestamp); err != nil {
+			return
+		}
 		s.applyStarterGrant(ev)
 	case LedgerEventDisputeFiled:
+		p := DisputePayload{ConsumerID: ev.ConsumerID, Upheld: false}
+		if err := s.persistEvent(seq, TLogKindDisputeFiled, p, ev.Timestamp); err != nil {
+			return
+		}
 		s.applyDispute(ev, false)
 	case LedgerEventDisputeResolved:
-		if ev.DisputeUpheld {
-			s.applyDispute(ev, true)
+		if !ev.DisputeUpheld {
+			return
 		}
-		// rejected resolutions: no state change beyond the original Filed.
+		p := DisputePayload{ConsumerID: ev.ConsumerID, Upheld: true}
+		if err := s.persistEvent(seq, TLogKindDisputeResolved, p, ev.Timestamp); err != nil {
+			return
+		}
+		s.applyDispute(ev, true)
 	case LedgerEventUnspecified:
 		// no-op
 	}
 }
 
+type binaryMarshaler interface {
+	MarshalBinary() ([]byte, error)
+}
+
+// persistEvent appends one TLogRecord. No-op when the tlog is disabled
+// or replay is in progress (records being applied came from disk;
+// double-writing would create infinite-growth loops on every restart).
+func (s *Subsystem) persistEvent(seq uint64, kind TLogKind, body binaryMarshaler, ts time.Time) error {
+	if s.replaying.Load() || s.tlog == nil {
+		return nil
+	}
+	payload, err := body.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return s.tlog.Append(TLogRecord{
+		Seq:     seq,
+		Kind:    kind,
+		Payload: payload,
+		Ts:      uint64(ts.Unix()), //nolint:gosec // G115 — post-1970
+	})
+}
+
 func (s *Subsystem) applySettlement(ev LedgerEvent) {
 	idx := dayBucketIndex(ev.Timestamp, rollingWindowDays)
 
-	cst := consumerShardFor(s.consumerShards, ev.ConsumerID).getOrInit(ev.ConsumerID, ev.Timestamp)
+	csh := consumerShardFor(s.consumerShards, ev.ConsumerID)
+	cst := csh.getOrInit(ev.ConsumerID, ev.Timestamp)
+	csh.mu.Lock()
 	cst.SettlementBuckets[idx] = rotateIfStale(cst.SettlementBuckets[idx], ev.Timestamp, rollingWindowDays)
 	cst.SettlementBuckets[idx].Total++
 	if ev.Flags&1 == 0 {
@@ -84,37 +144,50 @@ func (s *Subsystem) applySettlement(ev LedgerEvent) {
 	cst.FlowBuckets[idx] = rotateIfStale(cst.FlowBuckets[idx], ev.Timestamp, rollingWindowDays)
 	cst.FlowBuckets[idx].B += uint32(ev.CostCredits) //nolint:gosec // G115 — cost is ≤ uint32 ceiling in practice
 	cst.LastBalanceSeen -= int64(ev.CostCredits)     //nolint:gosec // G115 — same
+	csh.mu.Unlock()
 
 	if ev.SeederID != (ids.IdentityID{}) {
-		sst := consumerShardFor(s.consumerShards, ev.SeederID).getOrInit(ev.SeederID, ev.Timestamp)
+		ssh := consumerShardFor(s.consumerShards, ev.SeederID)
+		sst := ssh.getOrInit(ev.SeederID, ev.Timestamp)
+		ssh.mu.Lock()
 		sst.FlowBuckets[idx] = rotateIfStale(sst.FlowBuckets[idx], ev.Timestamp, rollingWindowDays)
 		sst.FlowBuckets[idx].A += uint32(ev.CostCredits) //nolint:gosec // G115
 		sst.LastBalanceSeen += int64(ev.CostCredits)     //nolint:gosec // G115
+		ssh.mu.Unlock()
 	}
 }
 
 func (s *Subsystem) applyTransfer(id ids.IdentityID, delta int64, now time.Time) {
-	st := consumerShardFor(s.consumerShards, id).getOrInit(id, now)
+	sh := consumerShardFor(s.consumerShards, id)
+	st := sh.getOrInit(id, now)
+	sh.mu.Lock()
 	st.LastBalanceSeen += delta
+	sh.mu.Unlock()
 }
 
 func (s *Subsystem) applyStarterGrant(ev LedgerEvent) {
-	st := consumerShardFor(s.consumerShards, ev.ConsumerID).getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh := consumerShardFor(s.consumerShards, ev.ConsumerID)
+	st := sh.getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh.mu.Lock()
 	if st.FirstSeenAt.IsZero() || st.FirstSeenAt.After(ev.Timestamp) {
 		st.FirstSeenAt = ev.Timestamp
 	}
 	st.LastBalanceSeen = int64(ev.CostCredits) //nolint:gosec // G115
+	sh.mu.Unlock()
 }
 
 func (s *Subsystem) applyDispute(ev LedgerEvent, upheld bool) {
 	idx := dayBucketIndex(ev.Timestamp, rollingWindowDays)
-	st := consumerShardFor(s.consumerShards, ev.ConsumerID).getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh := consumerShardFor(s.consumerShards, ev.ConsumerID)
+	st := sh.getOrInit(ev.ConsumerID, ev.Timestamp)
+	sh.mu.Lock()
 	st.DisputeBuckets[idx] = rotateIfStale(st.DisputeBuckets[idx], ev.Timestamp, rollingWindowDays)
 	if upheld {
 		st.DisputeBuckets[idx].B++
 	} else {
 		st.DisputeBuckets[idx].A++
 	}
+	sh.mu.Unlock()
 }
 
 // signedDelta returns +cost for positive transfers (in) and -cost for
