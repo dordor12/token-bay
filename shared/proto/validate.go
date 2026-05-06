@@ -238,6 +238,75 @@ func ValidateRPCResponse(r *RpcResponse) error {
 	return nil
 }
 
+// ValidateSeederAssignment — non-empty addr, pubkey 32, reservation_token 16.
+func ValidateSeederAssignment(a *SeederAssignment) error {
+	if a == nil {
+		return errors.New("proto: SeederAssignment is nil")
+	}
+	if len(a.SeederAddr) == 0 {
+		return errors.New("proto: SeederAssignment.SeederAddr empty")
+	}
+	if len(a.SeederPubkey) != 32 {
+		return fmt.Errorf("proto: SeederAssignment.SeederPubkey len=%d, want 32", len(a.SeederPubkey))
+	}
+	if len(a.ReservationToken) != 16 {
+		return fmt.Errorf("proto: SeederAssignment.ReservationToken len=%d, want 16", len(a.ReservationToken))
+	}
+	return nil
+}
+
+func ValidateQueued(q *Queued) error {
+	if q == nil {
+		return errors.New("proto: Queued is nil")
+	}
+	if len(q.RequestId) != 16 {
+		return fmt.Errorf("proto: Queued.RequestId len=%d, want 16", len(q.RequestId))
+	}
+	if q.PositionBand == PositionBand_POSITION_BAND_UNSPECIFIED {
+		return errors.New("proto: Queued.PositionBand UNSPECIFIED")
+	}
+	if q.EtaBand == EtaBand_ETA_BAND_UNSPECIFIED {
+		return errors.New("proto: Queued.EtaBand UNSPECIFIED")
+	}
+	return nil
+}
+
+func ValidateRejected(r *Rejected) error {
+	if r == nil {
+		return errors.New("proto: Rejected is nil")
+	}
+	if r.Reason == RejectReason_REJECT_REASON_UNSPECIFIED {
+		return errors.New("proto: Rejected.Reason UNSPECIFIED")
+	}
+	if r.RetryAfterS < 60 || r.RetryAfterS > 600 {
+		return fmt.Errorf("proto: Rejected.RetryAfterS %d outside [60, 600]", r.RetryAfterS)
+	}
+	return nil
+}
+
+func ValidateBrokerRequestResponse(r *BrokerRequestResponse) error {
+	if r == nil {
+		return errors.New("proto: BrokerRequestResponse is nil")
+	}
+	switch o := r.Outcome.(type) {
+	case *BrokerRequestResponse_SeederAssignment:
+		return ValidateSeederAssignment(o.SeederAssignment)
+	case *BrokerRequestResponse_NoCapacity:
+		if o.NoCapacity == nil {
+			return errors.New("proto: BrokerRequestResponse.NoCapacity is nil")
+		}
+		return nil
+	case *BrokerRequestResponse_Queued:
+		return ValidateQueued(o.Queued)
+	case *BrokerRequestResponse_Rejected:
+		return ValidateRejected(o.Rejected)
+	case nil:
+		return errors.New("proto: BrokerRequestResponse.Outcome unset")
+	default:
+		return fmt.Errorf("proto: BrokerRequestResponse unknown Outcome %T", o)
+	}
+}
+
 // ValidateOfferPush — non-empty consumer_id (32) + envelope_hash (32) + model.
 func ValidateOfferPush(o *OfferPush) error {
 	if o == nil {

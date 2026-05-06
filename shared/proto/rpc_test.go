@@ -82,3 +82,40 @@ func readGoldenHex(t *testing.T, path string) []byte {
 	require.NoError(t, err)
 	return out
 }
+
+func TestBrokerRequestResponse_RoundTrip(t *testing.T) {
+	cases := []*BrokerRequestResponse{
+		{Outcome: &BrokerRequestResponse_SeederAssignment{SeederAssignment: &SeederAssignment{
+			SeederAddr:       []byte("127.0.0.1:1234"),
+			SeederPubkey:     bytesAll(32, 0xAA),
+			ReservationToken: bytesAll(16, 0x55),
+		}}},
+		{Outcome: &BrokerRequestResponse_NoCapacity{NoCapacity: &NoCapacity{Reason: "no_eligible_seeder"}}},
+		{Outcome: &BrokerRequestResponse_Queued{Queued: &Queued{
+			RequestId:    bytesAll(16, 0x01),
+			PositionBand: PositionBand_POSITION_BAND_11_TO_50,
+			EtaBand:      EtaBand_ETA_BAND_30S_TO_2M,
+		}}},
+		{Outcome: &BrokerRequestResponse_Rejected{Rejected: &Rejected{
+			Reason: RejectReason_REJECT_REASON_QUEUE_TIMEOUT, RetryAfterS: 300,
+		}}},
+	}
+	for _, c := range cases {
+		t.Run("", func(t *testing.T) {
+			b, err := proto.Marshal(c)
+			require.NoError(t, err)
+			var got BrokerRequestResponse
+			require.NoError(t, proto.Unmarshal(b, &got))
+			require.True(t, proto.Equal(c, &got))
+			require.NoError(t, ValidateBrokerRequestResponse(c))
+		})
+	}
+}
+
+func bytesAll(n int, v byte) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = v
+	}
+	return b
+}
