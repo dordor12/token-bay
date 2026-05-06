@@ -15,6 +15,7 @@ require (
 	github.com/token-bay/token-bay/shared v0.0.0-00010101000000-000000000000
 	golang.org/x/sync v0.20.0
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -28,7 +29,6 @@ require (
 	golang.org/x/crypto v0.41.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 // Resolves the `shared` require to the in-repo sibling module for go.work-based
