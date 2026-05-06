@@ -131,8 +131,8 @@ func (v *validator) checkSeeder(c *Config) {
 }
 
 var validIdleModes = map[string]struct{}{
-	"scheduled":  {},
-	"always_on":  {},
+	"scheduled": {},
+	"always_on": {},
 }
 
 // HH:MM-HH:MM with 24-hour clock; both endpoints required.
