@@ -1,0 +1,21 @@
+role: both
+tracker: https://eu-central-1.bootstrap.token-bay.dev
+identity_key_path: /home/alice/.token-bay/identity.key
+audit_log_path: /home/alice/.token-bay/audit.log
+cc_bridge:
+  claude_bin: /usr/local/bin/claude
+  extra_flags:
+    - --debug
+  sandbox:
+    enabled: true
+    driver: bubblewrap
+consumer:
+  network_mode_ttl: 30m
+seeder:
+  headroom_window: 20m
+idle_policy:
+  mode: scheduled
+  window: "02:00-06:00"
+  activity_grace: 5m
+privacy_tier: tee_preferred
+max_spend_per_hour: 1000
