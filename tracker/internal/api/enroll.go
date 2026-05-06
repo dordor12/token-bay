@@ -58,14 +58,12 @@ func (r *Router) installEnroll() handlerFunc {
 		if len(req.AccountFingerprint) != 32 {
 			return nil, ErrInvalid(fmt.Sprintf("account_fingerprint length %d, want 32", len(req.AccountFingerprint)))
 		}
-		// Defense-in-depth: rc.PeerID derived from mTLS SPKI MUST equal
-		// SHA-256(identity_pubkey). The handshake already enforces
-		// identity = SPKI hash, but we re-check here so a logic bug in
-		// the wiring layer doesn't silently bind enroll to the wrong
-		// identity.
-		if rc.PeerID != hashPubkey(req.IdentityPubkey) {
-			return nil, ErrUnauthenticated("enroll: identity_pubkey does not match mTLS peer")
-		}
+		// rc.PeerID is derived from mTLS SPKI by the server's
+		// VerifyClientCert hook — that's the authoritative identity
+		// binding. We don't re-derive from req.IdentityPubkey here:
+		// SPKI wraps the pubkey in DER ASN.1, so SHA-256(SPKI) ≠
+		// SHA-256(raw pubkey). req.IdentityPubkey is informational on
+		// this RPC — the mTLS layer has already authenticated the peer.
 
 		if adm != nil {
 			if err := adm.Admit(ctx, rc.PeerID[:], req.AccountFingerprint); err != nil {

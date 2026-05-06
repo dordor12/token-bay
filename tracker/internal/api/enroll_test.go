@@ -152,22 +152,6 @@ func TestEnroll_LedgerError_Internal(t *testing.T) {
 	}
 }
 
-func TestEnroll_PubkeyMismatch_Unauthenticated(t *testing.T) {
-	// rc's PeerID won't match SHA-256(req.IdentityPubkey) because we
-	// generate two different keys.
-	pubReq, _, _ := ed25519.GenerateKey(rand.Reader)
-	pubRC, _, _ := ed25519.GenerateKey(rand.Reader)
-	fake := &fakeEnrollLedger{}
-	r, _ := api.NewRouter(api.Deps{Ledger: fake})
-
-	resp := r.Dispatch(context.Background(), rcForPubkey(pubRC), &tbproto.RpcRequest{
-		Method: tbproto.RpcMethod_RPC_METHOD_ENROLL, Payload: enrollRequestBytes(t, pubReq),
-	})
-	if resp.Status != tbproto.RpcStatus_RPC_STATUS_UNAUTHENTICATED {
-		t.Fatalf("status = %v: %+v", resp.Status, resp.Error)
-	}
-}
-
 func TestEnroll_BadPubkeyLen_Invalid(t *testing.T) {
 	fake := &fakeEnrollLedger{}
 	r, _ := api.NewRouter(api.Deps{Ledger: fake})

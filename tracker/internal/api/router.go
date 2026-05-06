@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
 	"net/netip"
 	"time"
 
@@ -155,15 +154,3 @@ func notImpl(rpc string) handlerFunc {
 	}
 }
 
-// hashPubkey computes SHA-256(pub). The tracker's mTLS layer derives the
-// IdentityID from the cert's SubjectPublicKeyInfo SHA-256; for a
-// self-signed Ed25519 cert wrapping pub, this matches when pub is the
-// raw 32-byte Ed25519 public key embedded in the SPKI. The enroll
-// handler uses this to defend in depth: rc.PeerID (mTLS-derived) MUST
-// match SHA-256(req.IdentityPubkey).
-func hashPubkey(pub []byte) idsLike {
-	var h idsLike
-	sum := sha256.Sum256(pub)
-	copy(h[:], sum[:])
-	return h
-}
