@@ -160,6 +160,165 @@ func (RpcStatus) EnumDescriptor() ([]byte, []int) {
 	return file_proto_rpc_proto_rawDescGZIP(), []int{1}
 }
 
+type PositionBand int32
+
+const (
+	PositionBand_POSITION_BAND_UNSPECIFIED PositionBand = 0
+	PositionBand_POSITION_BAND_1_TO_10     PositionBand = 1
+	PositionBand_POSITION_BAND_11_TO_50    PositionBand = 2
+	PositionBand_POSITION_BAND_51_TO_200   PositionBand = 3
+	PositionBand_POSITION_BAND_200_PLUS    PositionBand = 4
+)
+
+// Enum value maps for PositionBand.
+var (
+	PositionBand_name = map[int32]string{
+		0: "POSITION_BAND_UNSPECIFIED",
+		1: "POSITION_BAND_1_TO_10",
+		2: "POSITION_BAND_11_TO_50",
+		3: "POSITION_BAND_51_TO_200",
+		4: "POSITION_BAND_200_PLUS",
+	}
+	PositionBand_value = map[string]int32{
+		"POSITION_BAND_UNSPECIFIED": 0,
+		"POSITION_BAND_1_TO_10":     1,
+		"POSITION_BAND_11_TO_50":    2,
+		"POSITION_BAND_51_TO_200":   3,
+		"POSITION_BAND_200_PLUS":    4,
+	}
+)
+
+func (x PositionBand) Enum() *PositionBand {
+	p := new(PositionBand)
+	*p = x
+	return p
+}
+
+func (x PositionBand) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PositionBand) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_rpc_proto_enumTypes[2].Descriptor()
+}
+
+func (PositionBand) Type() protoreflect.EnumType {
+	return &file_proto_rpc_proto_enumTypes[2]
+}
+
+func (x PositionBand) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PositionBand.Descriptor instead.
+func (PositionBand) EnumDescriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{2}
+}
+
+type EtaBand int32
+
+const (
+	EtaBand_ETA_BAND_UNSPECIFIED EtaBand = 0
+	EtaBand_ETA_BAND_LT_30S      EtaBand = 1
+	EtaBand_ETA_BAND_30S_TO_2M   EtaBand = 2
+	EtaBand_ETA_BAND_2M_TO_5M    EtaBand = 3
+	EtaBand_ETA_BAND_5M_PLUS     EtaBand = 4
+)
+
+// Enum value maps for EtaBand.
+var (
+	EtaBand_name = map[int32]string{
+		0: "ETA_BAND_UNSPECIFIED",
+		1: "ETA_BAND_LT_30S",
+		2: "ETA_BAND_30S_TO_2M",
+		3: "ETA_BAND_2M_TO_5M",
+		4: "ETA_BAND_5M_PLUS",
+	}
+	EtaBand_value = map[string]int32{
+		"ETA_BAND_UNSPECIFIED": 0,
+		"ETA_BAND_LT_30S":      1,
+		"ETA_BAND_30S_TO_2M":   2,
+		"ETA_BAND_2M_TO_5M":    3,
+		"ETA_BAND_5M_PLUS":     4,
+	}
+)
+
+func (x EtaBand) Enum() *EtaBand {
+	p := new(EtaBand)
+	*p = x
+	return p
+}
+
+func (x EtaBand) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EtaBand) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_rpc_proto_enumTypes[3].Descriptor()
+}
+
+func (EtaBand) Type() protoreflect.EnumType {
+	return &file_proto_rpc_proto_enumTypes[3]
+}
+
+func (x EtaBand) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EtaBand.Descriptor instead.
+func (EtaBand) EnumDescriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{3}
+}
+
+type RejectReason int32
+
+const (
+	RejectReason_REJECT_REASON_UNSPECIFIED       RejectReason = 0
+	RejectReason_REJECT_REASON_REGION_OVERLOADED RejectReason = 1
+	RejectReason_REJECT_REASON_QUEUE_TIMEOUT     RejectReason = 2
+)
+
+// Enum value maps for RejectReason.
+var (
+	RejectReason_name = map[int32]string{
+		0: "REJECT_REASON_UNSPECIFIED",
+		1: "REJECT_REASON_REGION_OVERLOADED",
+		2: "REJECT_REASON_QUEUE_TIMEOUT",
+	}
+	RejectReason_value = map[string]int32{
+		"REJECT_REASON_UNSPECIFIED":       0,
+		"REJECT_REASON_REGION_OVERLOADED": 1,
+		"REJECT_REASON_QUEUE_TIMEOUT":     2,
+	}
+)
+
+func (x RejectReason) Enum() *RejectReason {
+	p := new(RejectReason)
+	*p = x
+	return p
+}
+
+func (x RejectReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RejectReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_rpc_proto_enumTypes[4].Descriptor()
+}
+
+func (RejectReason) Type() protoreflect.EnumType {
+	return &file_proto_rpc_proto_enumTypes[4]
+}
+
+func (x RejectReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RejectReason.Descriptor instead.
+func (RejectReason) EnumDescriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{4}
+}
+
 type RpcError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
@@ -564,6 +723,232 @@ func (x *NoCapacity) GetReason() string {
 	return ""
 }
 
+type Queued struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     []byte                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 16
+	PositionBand  PositionBand           `protobuf:"varint,2,opt,name=position_band,json=positionBand,proto3,enum=tokenbay.proto.v1.PositionBand" json:"position_band,omitempty"`
+	EtaBand       EtaBand                `protobuf:"varint,3,opt,name=eta_band,json=etaBand,proto3,enum=tokenbay.proto.v1.EtaBand" json:"eta_band,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Queued) Reset() {
+	*x = Queued{}
+	mi := &file_proto_rpc_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Queued) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Queued) ProtoMessage() {}
+
+func (x *Queued) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_rpc_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Queued.ProtoReflect.Descriptor instead.
+func (*Queued) Descriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Queued) GetRequestId() []byte {
+	if x != nil {
+		return x.RequestId
+	}
+	return nil
+}
+
+func (x *Queued) GetPositionBand() PositionBand {
+	if x != nil {
+		return x.PositionBand
+	}
+	return PositionBand_POSITION_BAND_UNSPECIFIED
+}
+
+func (x *Queued) GetEtaBand() EtaBand {
+	if x != nil {
+		return x.EtaBand
+	}
+	return EtaBand_ETA_BAND_UNSPECIFIED
+}
+
+type Rejected struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        RejectReason           `protobuf:"varint,1,opt,name=reason,proto3,enum=tokenbay.proto.v1.RejectReason" json:"reason,omitempty"`
+	RetryAfterS   uint32                 `protobuf:"varint,2,opt,name=retry_after_s,json=retryAfterS,proto3" json:"retry_after_s,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Rejected) Reset() {
+	*x = Rejected{}
+	mi := &file_proto_rpc_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Rejected) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Rejected) ProtoMessage() {}
+
+func (x *Rejected) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_rpc_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Rejected.ProtoReflect.Descriptor instead.
+func (*Rejected) Descriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Rejected) GetReason() RejectReason {
+	if x != nil {
+		return x.Reason
+	}
+	return RejectReason_REJECT_REASON_UNSPECIFIED
+}
+
+func (x *Rejected) GetRetryAfterS() uint32 {
+	if x != nil {
+		return x.RetryAfterS
+	}
+	return 0
+}
+
+type BrokerRequestResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Outcome:
+	//
+	//	*BrokerRequestResponse_SeederAssignment
+	//	*BrokerRequestResponse_NoCapacity
+	//	*BrokerRequestResponse_Queued
+	//	*BrokerRequestResponse_Rejected
+	Outcome       isBrokerRequestResponse_Outcome `protobuf_oneof:"outcome"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BrokerRequestResponse) Reset() {
+	*x = BrokerRequestResponse{}
+	mi := &file_proto_rpc_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BrokerRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BrokerRequestResponse) ProtoMessage() {}
+
+func (x *BrokerRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_rpc_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BrokerRequestResponse.ProtoReflect.Descriptor instead.
+func (*BrokerRequestResponse) Descriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *BrokerRequestResponse) GetOutcome() isBrokerRequestResponse_Outcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return nil
+}
+
+func (x *BrokerRequestResponse) GetSeederAssignment() *SeederAssignment {
+	if x != nil {
+		if x, ok := x.Outcome.(*BrokerRequestResponse_SeederAssignment); ok {
+			return x.SeederAssignment
+		}
+	}
+	return nil
+}
+
+func (x *BrokerRequestResponse) GetNoCapacity() *NoCapacity {
+	if x != nil {
+		if x, ok := x.Outcome.(*BrokerRequestResponse_NoCapacity); ok {
+			return x.NoCapacity
+		}
+	}
+	return nil
+}
+
+func (x *BrokerRequestResponse) GetQueued() *Queued {
+	if x != nil {
+		if x, ok := x.Outcome.(*BrokerRequestResponse_Queued); ok {
+			return x.Queued
+		}
+	}
+	return nil
+}
+
+func (x *BrokerRequestResponse) GetRejected() *Rejected {
+	if x != nil {
+		if x, ok := x.Outcome.(*BrokerRequestResponse_Rejected); ok {
+			return x.Rejected
+		}
+	}
+	return nil
+}
+
+type isBrokerRequestResponse_Outcome interface {
+	isBrokerRequestResponse_Outcome()
+}
+
+type BrokerRequestResponse_SeederAssignment struct {
+	SeederAssignment *SeederAssignment `protobuf:"bytes,1,opt,name=seeder_assignment,json=seederAssignment,proto3,oneof"`
+}
+
+type BrokerRequestResponse_NoCapacity struct {
+	NoCapacity *NoCapacity `protobuf:"bytes,2,opt,name=no_capacity,json=noCapacity,proto3,oneof"`
+}
+
+type BrokerRequestResponse_Queued struct {
+	Queued *Queued `protobuf:"bytes,3,opt,name=queued,proto3,oneof"`
+}
+
+type BrokerRequestResponse_Rejected struct {
+	Rejected *Rejected `protobuf:"bytes,4,opt,name=rejected,proto3,oneof"`
+}
+
+func (*BrokerRequestResponse_SeederAssignment) isBrokerRequestResponse_Outcome() {}
+
+func (*BrokerRequestResponse_NoCapacity) isBrokerRequestResponse_Outcome() {}
+
+func (*BrokerRequestResponse_Queued) isBrokerRequestResponse_Outcome() {}
+
+func (*BrokerRequestResponse_Rejected) isBrokerRequestResponse_Outcome() {}
+
 type BalanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	IdentityId    []byte                 `protobuf:"bytes,1,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"` // 32
@@ -573,7 +958,7 @@ type BalanceRequest struct {
 
 func (x *BalanceRequest) Reset() {
 	*x = BalanceRequest{}
-	mi := &file_proto_rpc_proto_msgTypes[7]
+	mi := &file_proto_rpc_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -585,7 +970,7 @@ func (x *BalanceRequest) String() string {
 func (*BalanceRequest) ProtoMessage() {}
 
 func (x *BalanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[7]
+	mi := &file_proto_rpc_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -598,7 +983,7 @@ func (x *BalanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BalanceRequest.ProtoReflect.Descriptor instead.
 func (*BalanceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{7}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *BalanceRequest) GetIdentityId() []byte {
@@ -618,7 +1003,7 @@ type SettleRequest struct {
 
 func (x *SettleRequest) Reset() {
 	*x = SettleRequest{}
-	mi := &file_proto_rpc_proto_msgTypes[8]
+	mi := &file_proto_rpc_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +1015,7 @@ func (x *SettleRequest) String() string {
 func (*SettleRequest) ProtoMessage() {}
 
 func (x *SettleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[8]
+	mi := &file_proto_rpc_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +1028,7 @@ func (x *SettleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleRequest.ProtoReflect.Descriptor instead.
 func (*SettleRequest) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{8}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SettleRequest) GetPreimageHash() []byte {
@@ -668,7 +1053,7 @@ type SettleAck struct {
 
 func (x *SettleAck) Reset() {
 	*x = SettleAck{}
-	mi := &file_proto_rpc_proto_msgTypes[9]
+	mi := &file_proto_rpc_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -680,7 +1065,7 @@ func (x *SettleAck) String() string {
 func (*SettleAck) ProtoMessage() {}
 
 func (x *SettleAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[9]
+	mi := &file_proto_rpc_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -693,7 +1078,7 @@ func (x *SettleAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAck.ProtoReflect.Descriptor instead.
 func (*SettleAck) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{9}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{12}
 }
 
 type UsageReport struct {
@@ -709,7 +1094,7 @@ type UsageReport struct {
 
 func (x *UsageReport) Reset() {
 	*x = UsageReport{}
-	mi := &file_proto_rpc_proto_msgTypes[10]
+	mi := &file_proto_rpc_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -721,7 +1106,7 @@ func (x *UsageReport) String() string {
 func (*UsageReport) ProtoMessage() {}
 
 func (x *UsageReport) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[10]
+	mi := &file_proto_rpc_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -734,7 +1119,7 @@ func (x *UsageReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageReport.ProtoReflect.Descriptor instead.
 func (*UsageReport) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{10}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UsageReport) GetRequestId() []byte {
@@ -780,7 +1165,7 @@ type UsageAck struct {
 
 func (x *UsageAck) Reset() {
 	*x = UsageAck{}
-	mi := &file_proto_rpc_proto_msgTypes[11]
+	mi := &file_proto_rpc_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -792,7 +1177,7 @@ func (x *UsageAck) String() string {
 func (*UsageAck) ProtoMessage() {}
 
 func (x *UsageAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[11]
+	mi := &file_proto_rpc_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -805,7 +1190,7 @@ func (x *UsageAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageAck.ProtoReflect.Descriptor instead.
 func (*UsageAck) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{11}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{14}
 }
 
 type Advertisement struct {
@@ -821,7 +1206,7 @@ type Advertisement struct {
 
 func (x *Advertisement) Reset() {
 	*x = Advertisement{}
-	mi := &file_proto_rpc_proto_msgTypes[12]
+	mi := &file_proto_rpc_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -833,7 +1218,7 @@ func (x *Advertisement) String() string {
 func (*Advertisement) ProtoMessage() {}
 
 func (x *Advertisement) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[12]
+	mi := &file_proto_rpc_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -846,7 +1231,7 @@ func (x *Advertisement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Advertisement.ProtoReflect.Descriptor instead.
 func (*Advertisement) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{12}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Advertisement) GetModels() []string {
@@ -892,7 +1277,7 @@ type AdvertiseAck struct {
 
 func (x *AdvertiseAck) Reset() {
 	*x = AdvertiseAck{}
-	mi := &file_proto_rpc_proto_msgTypes[13]
+	mi := &file_proto_rpc_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +1289,7 @@ func (x *AdvertiseAck) String() string {
 func (*AdvertiseAck) ProtoMessage() {}
 
 func (x *AdvertiseAck) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[13]
+	mi := &file_proto_rpc_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +1302,7 @@ func (x *AdvertiseAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdvertiseAck.ProtoReflect.Descriptor instead.
 func (*AdvertiseAck) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{13}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{16}
 }
 
 type TransferRequest struct {
@@ -932,7 +1317,7 @@ type TransferRequest struct {
 
 func (x *TransferRequest) Reset() {
 	*x = TransferRequest{}
-	mi := &file_proto_rpc_proto_msgTypes[14]
+	mi := &file_proto_rpc_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -944,7 +1329,7 @@ func (x *TransferRequest) String() string {
 func (*TransferRequest) ProtoMessage() {}
 
 func (x *TransferRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[14]
+	mi := &file_proto_rpc_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -957,7 +1342,7 @@ func (x *TransferRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferRequest.ProtoReflect.Descriptor instead.
 func (*TransferRequest) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{14}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TransferRequest) GetIdentityId() []byte {
@@ -999,7 +1384,7 @@ type TransferProof struct {
 
 func (x *TransferProof) Reset() {
 	*x = TransferProof{}
-	mi := &file_proto_rpc_proto_msgTypes[15]
+	mi := &file_proto_rpc_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1011,7 +1396,7 @@ func (x *TransferProof) String() string {
 func (*TransferProof) ProtoMessage() {}
 
 func (x *TransferProof) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[15]
+	mi := &file_proto_rpc_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1024,7 +1409,7 @@ func (x *TransferProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferProof.ProtoReflect.Descriptor instead.
 func (*TransferProof) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{15}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *TransferProof) GetSourceChainTipHash() []byte {
@@ -1056,7 +1441,7 @@ type StunAllocateRequest struct {
 
 func (x *StunAllocateRequest) Reset() {
 	*x = StunAllocateRequest{}
-	mi := &file_proto_rpc_proto_msgTypes[16]
+	mi := &file_proto_rpc_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1068,7 +1453,7 @@ func (x *StunAllocateRequest) String() string {
 func (*StunAllocateRequest) ProtoMessage() {}
 
 func (x *StunAllocateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[16]
+	mi := &file_proto_rpc_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1081,7 +1466,7 @@ func (x *StunAllocateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StunAllocateRequest.ProtoReflect.Descriptor instead.
 func (*StunAllocateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{16}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{19}
 }
 
 type StunAllocateResponse struct {
@@ -1093,7 +1478,7 @@ type StunAllocateResponse struct {
 
 func (x *StunAllocateResponse) Reset() {
 	*x = StunAllocateResponse{}
-	mi := &file_proto_rpc_proto_msgTypes[17]
+	mi := &file_proto_rpc_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1105,7 +1490,7 @@ func (x *StunAllocateResponse) String() string {
 func (*StunAllocateResponse) ProtoMessage() {}
 
 func (x *StunAllocateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[17]
+	mi := &file_proto_rpc_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1118,7 +1503,7 @@ func (x *StunAllocateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StunAllocateResponse.ProtoReflect.Descriptor instead.
 func (*StunAllocateResponse) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{17}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *StunAllocateResponse) GetExternalAddr() string {
@@ -1137,7 +1522,7 @@ type TurnRelayOpenRequest struct {
 
 func (x *TurnRelayOpenRequest) Reset() {
 	*x = TurnRelayOpenRequest{}
-	mi := &file_proto_rpc_proto_msgTypes[18]
+	mi := &file_proto_rpc_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1149,7 +1534,7 @@ func (x *TurnRelayOpenRequest) String() string {
 func (*TurnRelayOpenRequest) ProtoMessage() {}
 
 func (x *TurnRelayOpenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[18]
+	mi := &file_proto_rpc_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1162,7 +1547,7 @@ func (x *TurnRelayOpenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnRelayOpenRequest.ProtoReflect.Descriptor instead.
 func (*TurnRelayOpenRequest) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{18}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *TurnRelayOpenRequest) GetSessionId() []byte {
@@ -1182,7 +1567,7 @@ type TurnRelayOpenResponse struct {
 
 func (x *TurnRelayOpenResponse) Reset() {
 	*x = TurnRelayOpenResponse{}
-	mi := &file_proto_rpc_proto_msgTypes[19]
+	mi := &file_proto_rpc_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1194,7 +1579,7 @@ func (x *TurnRelayOpenResponse) String() string {
 func (*TurnRelayOpenResponse) ProtoMessage() {}
 
 func (x *TurnRelayOpenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[19]
+	mi := &file_proto_rpc_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1207,7 +1592,7 @@ func (x *TurnRelayOpenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnRelayOpenResponse.ProtoReflect.Descriptor instead.
 func (*TurnRelayOpenResponse) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{19}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TurnRelayOpenResponse) GetRelayEndpoint() string {
@@ -1234,7 +1619,7 @@ type HeartbeatPing struct {
 
 func (x *HeartbeatPing) Reset() {
 	*x = HeartbeatPing{}
-	mi := &file_proto_rpc_proto_msgTypes[20]
+	mi := &file_proto_rpc_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1246,7 +1631,7 @@ func (x *HeartbeatPing) String() string {
 func (*HeartbeatPing) ProtoMessage() {}
 
 func (x *HeartbeatPing) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[20]
+	mi := &file_proto_rpc_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1259,7 +1644,7 @@ func (x *HeartbeatPing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPing.ProtoReflect.Descriptor instead.
 func (*HeartbeatPing) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{20}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *HeartbeatPing) GetSeq() uint64 {
@@ -1285,7 +1670,7 @@ type HeartbeatPong struct {
 
 func (x *HeartbeatPong) Reset() {
 	*x = HeartbeatPong{}
-	mi := &file_proto_rpc_proto_msgTypes[21]
+	mi := &file_proto_rpc_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1297,7 +1682,7 @@ func (x *HeartbeatPong) String() string {
 func (*HeartbeatPong) ProtoMessage() {}
 
 func (x *HeartbeatPong) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[21]
+	mi := &file_proto_rpc_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1310,7 +1695,7 @@ func (x *HeartbeatPong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPong.ProtoReflect.Descriptor instead.
 func (*HeartbeatPong) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{21}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *HeartbeatPong) GetSeq() uint64 {
@@ -1333,7 +1718,7 @@ type OfferPush struct {
 
 func (x *OfferPush) Reset() {
 	*x = OfferPush{}
-	mi := &file_proto_rpc_proto_msgTypes[22]
+	mi := &file_proto_rpc_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1345,7 +1730,7 @@ func (x *OfferPush) String() string {
 func (*OfferPush) ProtoMessage() {}
 
 func (x *OfferPush) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[22]
+	mi := &file_proto_rpc_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1358,7 +1743,7 @@ func (x *OfferPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OfferPush.ProtoReflect.Descriptor instead.
 func (*OfferPush) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{22}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *OfferPush) GetConsumerId() []byte {
@@ -1407,7 +1792,7 @@ type OfferDecision struct {
 
 func (x *OfferDecision) Reset() {
 	*x = OfferDecision{}
-	mi := &file_proto_rpc_proto_msgTypes[23]
+	mi := &file_proto_rpc_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1419,7 +1804,7 @@ func (x *OfferDecision) String() string {
 func (*OfferDecision) ProtoMessage() {}
 
 func (x *OfferDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[23]
+	mi := &file_proto_rpc_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1432,7 +1817,7 @@ func (x *OfferDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OfferDecision.ProtoReflect.Descriptor instead.
 func (*OfferDecision) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{23}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *OfferDecision) GetAccept() bool {
@@ -1466,7 +1851,7 @@ type SettlementPush struct {
 
 func (x *SettlementPush) Reset() {
 	*x = SettlementPush{}
-	mi := &file_proto_rpc_proto_msgTypes[24]
+	mi := &file_proto_rpc_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1478,7 +1863,7 @@ func (x *SettlementPush) String() string {
 func (*SettlementPush) ProtoMessage() {}
 
 func (x *SettlementPush) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[24]
+	mi := &file_proto_rpc_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1491,7 +1876,7 @@ func (x *SettlementPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlementPush.ProtoReflect.Descriptor instead.
 func (*SettlementPush) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{24}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SettlementPush) GetPreimageHash() []byte {
@@ -1542,7 +1927,22 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\x11reservation_token\x18\x03 \x01(\fR\x10reservationToken\"$\n" +
 	"\n" +
 	"NoCapacity\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"1\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xa4\x01\n" +
+	"\x06Queued\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\fR\trequestId\x12D\n" +
+	"\rposition_band\x18\x02 \x01(\x0e2\x1f.tokenbay.proto.v1.PositionBandR\fpositionBand\x125\n" +
+	"\beta_band\x18\x03 \x01(\x0e2\x1a.tokenbay.proto.v1.EtaBandR\aetaBand\"g\n" +
+	"\bRejected\x127\n" +
+	"\x06reason\x18\x01 \x01(\x0e2\x1f.tokenbay.proto.v1.RejectReasonR\x06reason\x12\"\n" +
+	"\rretry_after_s\x18\x02 \x01(\rR\vretryAfterS\"\xa8\x02\n" +
+	"\x15BrokerRequestResponse\x12R\n" +
+	"\x11seeder_assignment\x18\x01 \x01(\v2#.tokenbay.proto.v1.SeederAssignmentH\x00R\x10seederAssignment\x12@\n" +
+	"\vno_capacity\x18\x02 \x01(\v2\x1d.tokenbay.proto.v1.NoCapacityH\x00R\n" +
+	"noCapacity\x123\n" +
+	"\x06queued\x18\x03 \x01(\v2\x19.tokenbay.proto.v1.QueuedH\x00R\x06queued\x129\n" +
+	"\brejected\x18\x04 \x01(\v2\x1b.tokenbay.proto.v1.RejectedH\x00R\brejectedB\t\n" +
+	"\aoutcome\"1\n" +
 	"\x0eBalanceRequest\x12\x1f\n" +
 	"\videntity_id\x18\x01 \x01(\fR\n" +
 	"identityId\"W\n" +
@@ -1628,7 +2028,23 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\x11RPC_STATUS_FROZEN\x10\x04\x12\x17\n" +
 	"\x13RPC_STATUS_INTERNAL\x10\x05\x12\x1e\n" +
 	"\x1aRPC_STATUS_UNAUTHENTICATED\x10\x06\x12\x18\n" +
-	"\x14RPC_STATUS_NOT_FOUND\x10\aB-Z+github.com/token-bay/token-bay/shared/protob\x06proto3"
+	"\x14RPC_STATUS_NOT_FOUND\x10\a*\x9d\x01\n" +
+	"\fPositionBand\x12\x1d\n" +
+	"\x19POSITION_BAND_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15POSITION_BAND_1_TO_10\x10\x01\x12\x1a\n" +
+	"\x16POSITION_BAND_11_TO_50\x10\x02\x12\x1b\n" +
+	"\x17POSITION_BAND_51_TO_200\x10\x03\x12\x1a\n" +
+	"\x16POSITION_BAND_200_PLUS\x10\x04*}\n" +
+	"\aEtaBand\x12\x18\n" +
+	"\x14ETA_BAND_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fETA_BAND_LT_30S\x10\x01\x12\x16\n" +
+	"\x12ETA_BAND_30S_TO_2M\x10\x02\x12\x15\n" +
+	"\x11ETA_BAND_2M_TO_5M\x10\x03\x12\x14\n" +
+	"\x10ETA_BAND_5M_PLUS\x10\x04*s\n" +
+	"\fRejectReason\x12\x1d\n" +
+	"\x19REJECT_REASON_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fREJECT_REASON_REGION_OVERLOADED\x10\x01\x12\x1f\n" +
+	"\x1bREJECT_REASON_QUEUE_TIMEOUT\x10\x02B-Z+github.com/token-bay/token-bay/shared/protob\x06proto3"
 
 var (
 	file_proto_rpc_proto_rawDescOnce sync.Once
@@ -1642,46 +2058,59 @@ func file_proto_rpc_proto_rawDescGZIP() []byte {
 	return file_proto_rpc_proto_rawDescData
 }
 
-var file_proto_rpc_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_proto_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_proto_rpc_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_proto_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_proto_rpc_proto_goTypes = []any{
 	(RpcMethod)(0),                // 0: tokenbay.proto.v1.RpcMethod
 	(RpcStatus)(0),                // 1: tokenbay.proto.v1.RpcStatus
-	(*RpcError)(nil),              // 2: tokenbay.proto.v1.RpcError
-	(*RpcRequest)(nil),            // 3: tokenbay.proto.v1.RpcRequest
-	(*RpcResponse)(nil),           // 4: tokenbay.proto.v1.RpcResponse
-	(*EnrollRequest)(nil),         // 5: tokenbay.proto.v1.EnrollRequest
-	(*EnrollResponse)(nil),        // 6: tokenbay.proto.v1.EnrollResponse
-	(*SeederAssignment)(nil),      // 7: tokenbay.proto.v1.SeederAssignment
-	(*NoCapacity)(nil),            // 8: tokenbay.proto.v1.NoCapacity
-	(*BalanceRequest)(nil),        // 9: tokenbay.proto.v1.BalanceRequest
-	(*SettleRequest)(nil),         // 10: tokenbay.proto.v1.SettleRequest
-	(*SettleAck)(nil),             // 11: tokenbay.proto.v1.SettleAck
-	(*UsageReport)(nil),           // 12: tokenbay.proto.v1.UsageReport
-	(*UsageAck)(nil),              // 13: tokenbay.proto.v1.UsageAck
-	(*Advertisement)(nil),         // 14: tokenbay.proto.v1.Advertisement
-	(*AdvertiseAck)(nil),          // 15: tokenbay.proto.v1.AdvertiseAck
-	(*TransferRequest)(nil),       // 16: tokenbay.proto.v1.TransferRequest
-	(*TransferProof)(nil),         // 17: tokenbay.proto.v1.TransferProof
-	(*StunAllocateRequest)(nil),   // 18: tokenbay.proto.v1.StunAllocateRequest
-	(*StunAllocateResponse)(nil),  // 19: tokenbay.proto.v1.StunAllocateResponse
-	(*TurnRelayOpenRequest)(nil),  // 20: tokenbay.proto.v1.TurnRelayOpenRequest
-	(*TurnRelayOpenResponse)(nil), // 21: tokenbay.proto.v1.TurnRelayOpenResponse
-	(*HeartbeatPing)(nil),         // 22: tokenbay.proto.v1.HeartbeatPing
-	(*HeartbeatPong)(nil),         // 23: tokenbay.proto.v1.HeartbeatPong
-	(*OfferPush)(nil),             // 24: tokenbay.proto.v1.OfferPush
-	(*OfferDecision)(nil),         // 25: tokenbay.proto.v1.OfferDecision
-	(*SettlementPush)(nil),        // 26: tokenbay.proto.v1.SettlementPush
+	(PositionBand)(0),             // 2: tokenbay.proto.v1.PositionBand
+	(EtaBand)(0),                  // 3: tokenbay.proto.v1.EtaBand
+	(RejectReason)(0),             // 4: tokenbay.proto.v1.RejectReason
+	(*RpcError)(nil),              // 5: tokenbay.proto.v1.RpcError
+	(*RpcRequest)(nil),            // 6: tokenbay.proto.v1.RpcRequest
+	(*RpcResponse)(nil),           // 7: tokenbay.proto.v1.RpcResponse
+	(*EnrollRequest)(nil),         // 8: tokenbay.proto.v1.EnrollRequest
+	(*EnrollResponse)(nil),        // 9: tokenbay.proto.v1.EnrollResponse
+	(*SeederAssignment)(nil),      // 10: tokenbay.proto.v1.SeederAssignment
+	(*NoCapacity)(nil),            // 11: tokenbay.proto.v1.NoCapacity
+	(*Queued)(nil),                // 12: tokenbay.proto.v1.Queued
+	(*Rejected)(nil),              // 13: tokenbay.proto.v1.Rejected
+	(*BrokerRequestResponse)(nil), // 14: tokenbay.proto.v1.BrokerRequestResponse
+	(*BalanceRequest)(nil),        // 15: tokenbay.proto.v1.BalanceRequest
+	(*SettleRequest)(nil),         // 16: tokenbay.proto.v1.SettleRequest
+	(*SettleAck)(nil),             // 17: tokenbay.proto.v1.SettleAck
+	(*UsageReport)(nil),           // 18: tokenbay.proto.v1.UsageReport
+	(*UsageAck)(nil),              // 19: tokenbay.proto.v1.UsageAck
+	(*Advertisement)(nil),         // 20: tokenbay.proto.v1.Advertisement
+	(*AdvertiseAck)(nil),          // 21: tokenbay.proto.v1.AdvertiseAck
+	(*TransferRequest)(nil),       // 22: tokenbay.proto.v1.TransferRequest
+	(*TransferProof)(nil),         // 23: tokenbay.proto.v1.TransferProof
+	(*StunAllocateRequest)(nil),   // 24: tokenbay.proto.v1.StunAllocateRequest
+	(*StunAllocateResponse)(nil),  // 25: tokenbay.proto.v1.StunAllocateResponse
+	(*TurnRelayOpenRequest)(nil),  // 26: tokenbay.proto.v1.TurnRelayOpenRequest
+	(*TurnRelayOpenResponse)(nil), // 27: tokenbay.proto.v1.TurnRelayOpenResponse
+	(*HeartbeatPing)(nil),         // 28: tokenbay.proto.v1.HeartbeatPing
+	(*HeartbeatPong)(nil),         // 29: tokenbay.proto.v1.HeartbeatPong
+	(*OfferPush)(nil),             // 30: tokenbay.proto.v1.OfferPush
+	(*OfferDecision)(nil),         // 31: tokenbay.proto.v1.OfferDecision
+	(*SettlementPush)(nil),        // 32: tokenbay.proto.v1.SettlementPush
 }
 var file_proto_rpc_proto_depIdxs = []int32{
-	0, // 0: tokenbay.proto.v1.RpcRequest.method:type_name -> tokenbay.proto.v1.RpcMethod
-	1, // 1: tokenbay.proto.v1.RpcResponse.status:type_name -> tokenbay.proto.v1.RpcStatus
-	2, // 2: tokenbay.proto.v1.RpcResponse.error:type_name -> tokenbay.proto.v1.RpcError
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	0,  // 0: tokenbay.proto.v1.RpcRequest.method:type_name -> tokenbay.proto.v1.RpcMethod
+	1,  // 1: tokenbay.proto.v1.RpcResponse.status:type_name -> tokenbay.proto.v1.RpcStatus
+	5,  // 2: tokenbay.proto.v1.RpcResponse.error:type_name -> tokenbay.proto.v1.RpcError
+	2,  // 3: tokenbay.proto.v1.Queued.position_band:type_name -> tokenbay.proto.v1.PositionBand
+	3,  // 4: tokenbay.proto.v1.Queued.eta_band:type_name -> tokenbay.proto.v1.EtaBand
+	4,  // 5: tokenbay.proto.v1.Rejected.reason:type_name -> tokenbay.proto.v1.RejectReason
+	10, // 6: tokenbay.proto.v1.BrokerRequestResponse.seeder_assignment:type_name -> tokenbay.proto.v1.SeederAssignment
+	11, // 7: tokenbay.proto.v1.BrokerRequestResponse.no_capacity:type_name -> tokenbay.proto.v1.NoCapacity
+	12, // 8: tokenbay.proto.v1.BrokerRequestResponse.queued:type_name -> tokenbay.proto.v1.Queued
+	13, // 9: tokenbay.proto.v1.BrokerRequestResponse.rejected:type_name -> tokenbay.proto.v1.Rejected
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_proto_rpc_proto_init() }
@@ -1689,13 +2118,19 @@ func file_proto_rpc_proto_init() {
 	if File_proto_rpc_proto != nil {
 		return
 	}
+	file_proto_rpc_proto_msgTypes[9].OneofWrappers = []any{
+		(*BrokerRequestResponse_SeederAssignment)(nil),
+		(*BrokerRequestResponse_NoCapacity)(nil),
+		(*BrokerRequestResponse_Queued)(nil),
+		(*BrokerRequestResponse_Rejected)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_rpc_proto_rawDesc), len(file_proto_rpc_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   25,
+			NumEnums:      5,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
