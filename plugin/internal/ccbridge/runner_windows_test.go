@@ -14,6 +14,9 @@ import (
 func TestExecRunner_Windows_Unsupported(t *testing.T) {
 	runner := &ExecRunner{BinaryPath: "claude.exe"}
 	var sink bytes.Buffer
-	err := runner.Run(context.Background(), Request{Prompt: "hi", Model: "x"}, &sink)
+	err := runner.Run(context.Background(), Request{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Model:    "x",
+	}, &sink)
 	assert.True(t, errors.Is(err, ErrUnsupportedPlatform))
 }

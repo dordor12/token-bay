@@ -18,8 +18,12 @@ type scriptedRunner struct {
 }
 
 func (s *scriptedRunner) Run(_ context.Context, req Request, sink io.Writer) error {
+	prompt := ""
+	if n := len(req.Messages); n > 0 {
+		prompt = req.Messages[n-1].Content
+	}
 	for prefix, body := range s.Responses {
-		if strings.HasPrefix(req.Prompt, prefix) {
+		if strings.HasPrefix(prompt, prefix) {
 			_, _ = io.WriteString(sink, body)
 			return s.RunErr
 		}

@@ -34,25 +34,71 @@ func TestBridgeServe_HappyPath_StreamsAndExtractsUsage(t *testing.T) {
 	b := &Bridge{Runner: stub}
 
 	var sink bytes.Buffer
-	usage, err := b.Serve(context.Background(), Request{Prompt: "hi", Model: "claude-sonnet-4-6"}, &sink)
+	usage, err := b.Serve(context.Background(), Request{
+		Messages: userOnly("hi"),
+		Model:    "claude-sonnet-4-6",
+	}, &sink)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(11), usage.InputTokens)
 	assert.Equal(t, uint64(22), usage.OutputTokens)
-	assert.Equal(t, "hi", stub.Got.Prompt)
+	require.Len(t, stub.Got.Messages, 1)
+	assert.Equal(t, "hi", stub.Got.Messages[0].Content)
 	assert.Equal(t, "claude-sonnet-4-6", stub.Got.Model)
 	assert.Contains(t, sink.String(), `"type":"result"`)
 }
 
-func TestBridgeServe_RejectsEmptyPrompt(t *testing.T) {
+func TestBridgeServe_LastResultUsageWins_OnMultiTurn(t *testing.T) {
+	// Multi-turn: claude emits a result per user turn. ParseStreamJSON
+	// keeps the LAST one — that's the response to the final user turn,
+	// which is what the seeder cares about.
+	stub := &stubRunner{Stdout: []byte(
+		`{"type":"system","subtype":"init"}` + "\n" +
+			`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":1}}` + "\n" +
+			`{"type":"system","subtype":"init"}` + "\n" +
+			`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":42,"output_tokens":99}}` + "\n",
+	)}
+	b := &Bridge{Runner: stub}
+
+	usage, err := b.Serve(context.Background(), Request{
+		Messages: []Message{
+			{Role: RoleUser, Content: "first"},
+			{Role: RoleAssistant, Content: "ack"},
+			{Role: RoleUser, Content: "second"},
+		},
+		Model: "claude-sonnet-4-6",
+	}, io.Discard)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), usage.InputTokens)
+	assert.Equal(t, uint64(99), usage.OutputTokens)
+}
+
+func TestBridgeServe_RejectsEmptyMessages(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
-	_, err := b.Serve(context.Background(), Request{Prompt: "", Model: "claude-sonnet-4-6"}, io.Discard)
+	_, err := b.Serve(context.Background(), Request{Messages: nil, Model: "claude-sonnet-4-6"}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
+	assert.True(t, errors.Is(err, ErrEmptyMessages))
+}
+
+func TestBridgeServe_RejectsLastMessageNotUser(t *testing.T) {
+	b := &Bridge{Runner: &stubRunner{}}
+	_, err := b.Serve(context.Background(), Request{
+		Messages: []Message{
+			{Role: RoleUser, Content: "hi"},
+			{Role: RoleAssistant, Content: "hello"},
+		},
+		Model: "claude-sonnet-4-6",
+	}, io.Discard)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrLastMessageNotUser))
 }
 
 func TestBridgeServe_RejectsEmptyModel(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
-	_, err := b.Serve(context.Background(), Request{Prompt: "hi", Model: ""}, io.Discard)
+	_, err := b.Serve(context.Background(), Request{
+		Messages: userOnly("hi"),
+		Model:    "",
+	}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
 }
@@ -63,7 +109,10 @@ func TestBridgeServe_RunnerError_Propagates(t *testing.T) {
 	b := &Bridge{Runner: stub}
 
 	var sink bytes.Buffer
-	_, err := b.Serve(context.Background(), Request{Prompt: "hi", Model: "claude-sonnet-4-6"}, &sink)
+	_, err := b.Serve(context.Background(), Request{
+		Messages: userOnly("hi"),
+		Model:    "claude-sonnet-4-6",
+	}, &sink)
 	require.Error(t, err)
 	var exit *ExitError
 	require.True(t, errors.As(err, &exit))

@@ -14,6 +14,12 @@ import (
 )
 
 // Run implements Runner on Unix platforms.
+//
+// The conversation in req.Messages is encoded as line-delimited
+// stream-json events and written to the subprocess's stdin in a
+// goroutine; stdin is closed once the encoding completes (or fails),
+// signalling end-of-input to claude. Stdout streams to sink as bytes
+// arrive. On context cancel the entire process group is SIGKILLed.
 func (r *ExecRunner) Run(ctx context.Context, req Request, sink io.Writer) error {
 	cwd, err := os.MkdirTemp("", "ccbridge-cwd-")
 	if err != nil {
@@ -23,9 +29,6 @@ func (r *ExecRunner) Run(ctx context.Context, req Request, sink io.Writer) error
 
 	cmd := exec.CommandContext(ctx, r.resolveBinary(), BuildArgv(req)...)
 	cmd.Dir = cwd
-	// Detach into a new process group so we can SIGKILL the entire
-	// tree on context cancel — a hung claude can spawn helpers we
-	// don't want to leak.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
@@ -39,8 +42,36 @@ func (r *ExecRunner) Run(ctx context.Context, req Request, sink io.Writer) error
 	cmd.Stderr = stderr
 	cmd.Stdout = sink
 
-	runErr := cmd.Run()
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("ccbridge: stdin pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		return fmt.Errorf("ccbridge: start claude: %w", err)
+	}
+
+	// Encode messages → stdin in a goroutine so encoding and stdout
+	// streaming can interleave. Close stdin when done so claude knows
+	// no more input is coming.
+	encDone := make(chan error, 1)
+	go func() {
+		err := EncodeMessages(stdin, req.Messages)
+		closeErr := stdin.Close()
+		if err == nil {
+			err = closeErr
+		}
+		encDone <- err
+	}()
+
+	runErr := cmd.Wait()
+	encErr := <-encDone
+
 	if runErr == nil {
+		if encErr != nil {
+			return fmt.Errorf("ccbridge: encode stdin: %w", encErr)
+		}
 		return nil
 	}
 	var exitErr *exec.ExitError

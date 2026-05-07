@@ -52,7 +52,10 @@ func RunStartupConformance(ctx context.Context, runner Runner) error {
 	const probeModel = "claude-haiku-4-5-20251001"
 	for i, prompt := range AdversarialCorpus {
 		var sink bytes.Buffer
-		req := Request{Prompt: prompt, Model: probeModel}
+		req := Request{
+			Messages: []Message{{Role: RoleUser, Content: prompt}},
+			Model:    probeModel,
+		}
 		if err := runner.Run(ctx, req, &sink); err != nil {
 			return fmt.Errorf("%w: prompt %d: runner: %v", ErrConformanceFailed, i, err)
 		}

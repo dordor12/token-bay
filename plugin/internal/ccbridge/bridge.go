@@ -37,9 +37,15 @@ func NewBridge(r Runner) *Bridge {
 // event. On Runner failure (non-zero exit, infra error, ctx cancel),
 // returns the Runner's error after still flushing whatever the
 // subprocess emitted.
+//
+// The conversation in req.Messages is encoded as stream-json events
+// and fed to the claude subprocess via stdin. claude responds to each
+// user-role event in order; the last `result` event reflects the
+// response to the final user turn, which is what the seeder relays
+// back to the consumer.
 func (b *Bridge) Serve(ctx context.Context, req Request, sink io.Writer) (Usage, error) {
-	if req.Prompt == "" {
-		return Usage{}, fmt.Errorf("%w: empty Prompt", ErrInvalidRequest)
+	if err := ValidateMessages(req.Messages); err != nil {
+		return Usage{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	if req.Model == "" {
 		return Usage{}, fmt.Errorf("%w: empty Model", ErrInvalidRequest)
