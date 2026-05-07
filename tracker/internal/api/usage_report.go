@@ -9,6 +9,7 @@ import (
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/tracker/internal/broker"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // usageReportHandler is the narrow interface the usage_report handler needs.
@@ -49,7 +50,7 @@ func (r *Router) installUsageReport() handlerFunc {
 // mapSettlementError translates broker package sentinels to RPC status codes.
 func mapSettlementError(err error) error {
 	switch {
-	case errors.Is(err, broker.ErrUnknownRequest):
+	case errors.Is(err, session.ErrUnknownRequest):
 		return ErrNotFound("unknown request_id")
 	case errors.Is(err, broker.ErrSeederMismatch):
 		return ErrInvalid("SEEDER_MISMATCH")
@@ -59,7 +60,7 @@ func mapSettlementError(err error) error {
 		return ErrInvalid("COST_OVERSPEND")
 	case errors.Is(err, broker.ErrSeederSigInvalid):
 		return ErrInvalid("SEEDER_SIG_INVALID")
-	case errors.Is(err, broker.ErrIllegalTransition):
+	case errors.Is(err, session.ErrIllegalTransition):
 		return ErrInvalid("INVALID_STATE")
 	case errors.Is(err, broker.ErrUnknownPreimage):
 		return ErrNotFound("unknown preimage_hash")

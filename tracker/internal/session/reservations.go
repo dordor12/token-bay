@@ -1,4 +1,4 @@
-package broker
+package session
 
 import (
 	"sync"
@@ -18,7 +18,7 @@ type Reservation struct {
 }
 
 // Reservations is the in-memory credit reservation ledger described in
-// broker-design §4.1. Safe for concurrent use.
+// tracker-broker-design §4.1. Safe for concurrent use.
 type Reservations struct {
 	mu    sync.Mutex
 	byID  map[ids.IdentityID]uint64
@@ -75,9 +75,29 @@ func (r *Reservations) Reserved(consumer ids.IdentityID) uint64 {
 	return r.byID[consumer]
 }
 
-// Sweep removes any slot whose ExpiresAt is at or before `now`. Returns the
-// dropped slots so the caller can metric/log.
-func (r *Reservations) Sweep(now time.Time) []Reservation {
+// Get returns the reservation slot for reqID if present.
+func (r *Reservations) Get(reqID [16]byte) (Reservation, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	slot, ok := r.byReq[reqID]
+	return slot, ok
+}
+
+// Snapshot returns a stable copy of every reservation slot at call time.
+// Used by admin handlers; not on the hot path.
+func (r *Reservations) Snapshot() []Reservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Reservation, 0, len(r.byReq))
+	for _, slot := range r.byReq {
+		out = append(out, slot)
+	}
+	return out
+}
+
+// SweepExpired removes any slot whose ExpiresAt is at or before `now`. Returns
+// the dropped slots so the caller can metric/log.
+func (r *Reservations) SweepExpired(now time.Time) []Reservation {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var expired []Reservation

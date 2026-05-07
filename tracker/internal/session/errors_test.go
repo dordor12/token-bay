@@ -1,0 +1,25 @@
+package session
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+)
+
+func TestErrorsAreSentinels(t *testing.T) {
+	cases := []error{
+		ErrInsufficientCredits,
+		ErrDuplicateReservation,
+		ErrIllegalTransition,
+		ErrUnknownRequest,
+	}
+	for _, e := range cases {
+		if e == nil {
+			t.Fatal("nil sentinel")
+		}
+		wrapped := fmt.Errorf("ctx: %w", e)
+		if !errors.Is(wrapped, e) {
+			t.Fatalf("errors.Is broken for %v", e)
+		}
+	}
+}

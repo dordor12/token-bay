@@ -1,4 +1,4 @@
-package broker
+package session
 
 import (
 	"sync"
@@ -49,14 +49,32 @@ func TestRelease_Idempotent(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestSweep_TTL(t *testing.T) {
+func TestSweepExpired_TTL(t *testing.T) {
 	r := NewReservations()
 	now := time.Now()
 	require.NoError(t, r.Reserve([16]byte{1}, ids.IdentityID{1}, 10, 100, now.Add(-time.Second)))
 	require.NoError(t, r.Reserve([16]byte{2}, ids.IdentityID{2}, 5, 100, now.Add(time.Hour)))
-	expired := r.Sweep(now)
+	expired := r.SweepExpired(now)
 	require.Len(t, expired, 1)
 	require.Equal(t, [16]byte{1}, expired[0].ReqID)
+}
+
+func TestReservations_GetAndSnapshot(t *testing.T) {
+	r := NewReservations()
+	consumer := ids.IdentityID{0xAA}
+	require.NoError(t, r.Reserve([16]byte{1}, consumer, 50, 100, time.Now().Add(time.Hour)))
+	require.NoError(t, r.Reserve([16]byte{2}, consumer, 25, 100, time.Now().Add(time.Hour)))
+
+	got, ok := r.Get([16]byte{1})
+	require.True(t, ok)
+	require.Equal(t, consumer, got.ConsumerID)
+	require.Equal(t, uint64(50), got.Amount)
+
+	_, ok = r.Get([16]byte{99})
+	require.False(t, ok)
+
+	snap := r.Snapshot()
+	require.Len(t, snap, 2)
 }
 
 func TestReservations_Concurrent_RaceClean(t *testing.T) {
