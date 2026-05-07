@@ -159,7 +159,7 @@ func testSettlementCfg() config.SettlementConfig {
 // ---------------------------------------------------------------------------
 
 func TestBroker_OpenClose_Idempotent(t *testing.T) {
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), testDeps(t), nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), testDeps(t), nil)
 	require.NoError(t, err)
 	require.NoError(t, b.Close())
 	require.NoError(t, b.Close()) // idempotent
@@ -168,7 +168,7 @@ func TestBroker_OpenClose_Idempotent(t *testing.T) {
 func TestBroker_OpenRequiresDeps(t *testing.T) {
 	deps := testDeps(t)
 	deps.Registry = nil
-	_, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	_, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.Error(t, err)
 }
 
@@ -224,7 +224,7 @@ func TestSubmit_AdmitFirstCandidate(t *testing.T) {
 	p := withFakePusher(t, &deps)
 	queueDecision(p, true, bytesAllB(32, 0xCC))
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -245,7 +245,7 @@ func TestSubmit_InsufficientCredits(t *testing.T) {
 	deps.Registry = fr
 	withFakePusher(t, &deps)
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -262,7 +262,7 @@ func TestSubmit_NoEligibleSeeder(t *testing.T) {
 	deps.Registry = newFakeRegistry() // empty
 	withFakePusher(t, &deps)
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -286,7 +286,7 @@ func TestSubmit_AllRejected(t *testing.T) {
 		queueDecision(p, false, nil)
 	}
 
-	b, err := OpenBroker(cfg, testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(cfg, testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -302,7 +302,7 @@ func TestSubmit_ReservationReleasedOnNoCapacity(t *testing.T) {
 	deps.Registry = newFakeRegistry()
 	withFakePusher(t, &deps)
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -311,7 +311,7 @@ func TestSubmit_ReservationReleasedOnNoCapacity(t *testing.T) {
 	copy(consumer[:], env.Body.ConsumerId)
 	_, err = b.Submit(context.Background(), env)
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), b.resv.Reserved(consumer))
+	require.Equal(t, uint64(0), b.mgr.Reservations.Reserved(consumer))
 }
 
 func TestSubmit_UnknownModel(t *testing.T) {
@@ -319,7 +319,7 @@ func TestSubmit_UnknownModel(t *testing.T) {
 	deps.Registry = newFakeRegistry()
 	withFakePusher(t, &deps)
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 

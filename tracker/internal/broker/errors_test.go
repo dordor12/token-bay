@@ -7,8 +7,8 @@ import (
 
 func TestErrorsAreSentinel(t *testing.T) {
 	sentinels := []error{
-		ErrInsufficientCredits, ErrDuplicateReservation, ErrUnknownReservation,
-		ErrUnknownModel, ErrIllegalTransition, ErrUnknownRequest,
+		ErrUnknownReservation,
+		ErrUnknownModel,
 		ErrSeederMismatch, ErrModelMismatch, ErrCostOverspend,
 		ErrSeederSigInvalid, ErrDuplicateSettle, ErrUnknownPreimage,
 	}

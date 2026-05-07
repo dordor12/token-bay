@@ -10,6 +10,7 @@ import (
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/broker"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // fakeSettlementService satisfies api.SettlementService (usageReportHandler
@@ -74,7 +75,7 @@ func TestUsageReport_OK_ReturnsAck(t *testing.T) {
 }
 
 func TestUsageReport_UnknownRequest_NotFound(t *testing.T) {
-	svc := &fakeSettlementService{usageErr: broker.ErrUnknownRequest}
+	svc := &fakeSettlementService{usageErr: session.ErrUnknownRequest}
 	r, _ := api.NewRouter(api.Deps{Settlement: svc})
 
 	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{

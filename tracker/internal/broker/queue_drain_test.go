@@ -47,7 +47,7 @@ func TestRegisterQueued_DeliversOnDrain(t *testing.T) {
 		pressure: 0,
 	}
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -71,7 +71,7 @@ func TestQueueDrain_StopsOnClose(t *testing.T) {
 	withFakePusher(t, &deps)
 	deps.Admission = &fakeAdmissionWithEntries{}
 
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	require.NoError(t, b.Close())
 }
@@ -86,7 +86,7 @@ func TestQueueDrain_StaleEntry_NoPanic(t *testing.T) {
 	deps.Admission = &fakeAdmissionWithEntries{
 		entries: []admission.QueueEntry{{RequestID: [16]byte{0x99}, CreditScore: 0.9, EnqueuedAt: time.Now()}},
 	}
-	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil, nil)
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer b.Close()
 	b.drainOnce(context.Background()) // should not panic

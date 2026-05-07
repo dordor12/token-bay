@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // startReaper launches the reservation TTL reaper goroutine. It fires every
@@ -27,23 +28,14 @@ func (s *Settlement) startReaper() {
 }
 
 // runReap sweeps all expired reservation slots and transitions their
-// associated inflight requests to StateFailed. For ASSIGNED requests,
-// it also decrements the assigned seeder's load counter.
+// associated inflight requests to StateFailed. The state CAS lives in
+// session.Manager.SweepExpiredAndFail; broker drives the registry-side
+// compensation here (DecLoad on AssignedSeeder for Assigned-state expirations).
 func (s *Settlement) runReap(now time.Time) {
-	expired := s.resv.Sweep(now)
-	for _, slot := range expired {
-		req, ok := s.inflt.Get(slot.ReqID)
-		if !ok {
-			continue
-		}
-		switch req.State {
-		case StateSelecting:
-			_ = s.inflt.Transition(slot.ReqID, StateSelecting, StateFailed)
-		case StateAssigned:
-			if req.AssignedSeeder != (ids.IdentityID{}) {
-				_, _ = s.deps.Registry.DecLoad(req.AssignedSeeder)
-			}
-			_ = s.inflt.Transition(slot.ReqID, StateAssigned, StateFailed)
+	expired := s.mgr.SweepExpiredAndFail(now)
+	for _, e := range expired {
+		if e.PriorState == session.StateAssigned && e.AssignedSeeder != (ids.IdentityID{}) {
+			_, _ = s.deps.Registry.DecLoad(e.AssignedSeeder)
 		}
 	}
 }

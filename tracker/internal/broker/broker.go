@@ -13,6 +13,7 @@ import (
 	"github.com/token-bay/token-bay/shared/signing"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // Broker is the central coordination subsystem for a regional tracker. It
@@ -26,8 +27,7 @@ type Broker struct {
 	scfg config.SettlementConfig
 	deps Deps
 
-	inflt *Inflight
-	resv  *Reservations
+	mgr *session.Manager
 
 	pendingMu     sync.Mutex
 	pendingQueued map[[16]byte]pendingEnv
@@ -45,10 +45,11 @@ type pendingEnv struct {
 }
 
 // OpenBroker constructs a ready Broker from the provided configuration, deps,
-// and (optional) pre-allocated Inflight / Reservations tables. Required deps:
-// Registry, Ledger, Admission, Pusher, Pricing. Optional: Now (defaults to
-// time.Now), Reputation (defaults to fallbackReputation{}).
-func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps, inflt *Inflight, resv *Reservations) (*Broker, error) {
+// and (optional) pre-allocated session.Manager. Required deps: Registry,
+// Ledger, Admission, Pusher, Pricing. Optional: Now (defaults to time.Now),
+// Reputation (defaults to fallbackReputation{}). When mgr is nil a fresh
+// session.Manager is allocated.
+func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps, mgr *session.Manager) (*Broker, error) {
 	if deps.Registry == nil {
 		return nil, errors.New("broker: Registry required")
 	}
@@ -70,18 +71,14 @@ func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps
 	if deps.Reputation == nil {
 		deps.Reputation = fallbackReputation{}
 	}
-	if inflt == nil {
-		inflt = NewInflight()
-	}
-	if resv == nil {
-		resv = NewReservations()
+	if mgr == nil {
+		mgr = session.New()
 	}
 	b := &Broker{
 		cfg:           cfg,
 		scfg:          scfg,
 		deps:          deps,
-		inflt:         inflt,
-		resv:          resv,
+		mgr:           mgr,
 		pendingQueued: make(map[[16]byte]pendingEnv),
 		queueDrainCh:  make(chan struct{}, 1),
 		stop:          make(chan struct{}),
@@ -139,8 +136,8 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		}
 	}
 
-	if rerr := b.resv.Reserve(requestID, consumer, cost, creds, expiresAt); rerr != nil {
-		if errors.Is(rerr, ErrInsufficientCredits) {
+	if rerr := b.mgr.Reservations.Reserve(requestID, consumer, cost, creds, expiresAt); rerr != nil {
+		if errors.Is(rerr, session.ErrInsufficientCredits) {
 			return &Result{
 				Outcome: OutcomeNoCapacity,
 				NoCap:   &NoCapacityDetails{Reason: "insufficient_credits"},
@@ -149,16 +146,16 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		return nil, rerr
 	}
 
-	req := &Request{
+	req := &session.Request{
 		RequestID:       requestID,
 		ConsumerID:      consumer,
 		EnvelopeBody:    body,
 		EnvelopeHash:    envHash,
 		MaxCostReserved: cost,
 		StartedAt:       now,
-		State:           StateSelecting,
+		State:           session.StateSelecting,
 	}
-	b.inflt.Insert(req)
+	b.mgr.Inflight.Insert(req)
 
 	var tried []ids.IdentityID
 	triedAny := false
@@ -205,8 +202,8 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		}
 
 		// Accepted — load stays incremented; settlement releases on terminal.
-		_ = b.inflt.MarkSeeder(req.RequestID, seeder.IdentityID, ephPub)
-		if terr := b.inflt.Transition(req.RequestID, StateSelecting, StateAssigned); terr != nil {
+		_ = b.mgr.Inflight.MarkSeeder(req.RequestID, seeder.IdentityID, ephPub)
+		if terr := b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateAssigned); terr != nil {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)
 			b.failAndRelease(req)
 			return nil, terr
@@ -235,7 +232,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 }
 
 // failAndRelease releases the reservation and marks the request as failed.
-func (b *Broker) failAndRelease(req *Request) {
-	_, _, _ = b.resv.Release(req.RequestID)
-	_ = b.inflt.Transition(req.RequestID, StateSelecting, StateFailed)
+func (b *Broker) failAndRelease(req *session.Request) {
+	_, _, _ = b.mgr.Reservations.Release(req.RequestID)
+	_ = b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateFailed)
 }
