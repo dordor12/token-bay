@@ -96,6 +96,18 @@ func (s *Server) PeerCount() int {
 	return len(s.connsByPeer)
 }
 
+// PeerPubkey returns the mTLS-derived Ed25519 pubkey for the peer with the
+// given identity, or (nil, false) if the peer is not currently connected.
+// Satisfies broker.IdentityResolver.
+func (s *Server) PeerPubkey(id ids.IdentityID) (ed25519.PublicKey, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c, ok := s.connsByPeer[id]; ok {
+		return c.peerPub, true
+	}
+	return nil, false
+}
+
 // Run blocks until ctx is cancelled or a fatal listener error occurs.
 // It is the long-lived entry point for the QUIC server.
 //
@@ -164,14 +176,19 @@ func (s *Server) serveConn(qc *quicgo.Conn) {
 		_ = qc.CloseWithError(0, "bad SPKI")
 		return
 	}
-	udp, ok := qc.RemoteAddr().(*net.UDPAddr)
+	peerPub, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
 	if !ok {
+		_ = qc.CloseWithError(0, "non-ed25519 peer pubkey")
+		return
+	}
+	udp, ok2 := qc.RemoteAddr().(*net.UDPAddr)
+	if !ok2 {
 		_ = qc.CloseWithError(0, "non-UDP remote")
 		return
 	}
 	addr := udp.AddrPort()
 
-	c := newConnection(s.serverCtx, qc, peerID, addr)
+	c := newConnection(s.serverCtx, qc, peerID, peerPub, addr)
 	s.mu.Lock()
 	s.connsByPeer[peerID] = c
 	s.mu.Unlock()

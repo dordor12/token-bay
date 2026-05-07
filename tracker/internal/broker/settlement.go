@@ -200,20 +200,31 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 
 // awaitSettle waits for a consumer counter-sig or the settlement timeout.
 //
-// v1: consumer pubkey resolution is deferred (T17.5); in both the sig-received
-// and the timer-expired branches we fall through to appendUsageEntry with
-// ConsumerSigMissing=true.
+// v1 semantic: settlement ALWAYS appends with ConsumerSigMissing=true.
 //
-// TODO(broker-followup): T17.5 — when a sig arrives on req.SettleSig, resolve
-// the consumer pubkey, verify the sig, and pass ConsumerSigMissing=false.
+// The deps.Identity resolver (broker.IdentityResolver → *server.Server.PeerPubkey)
+// is wired and the consumer sig is now available here, BUT we cannot yet verify
+// it and flip ConsumerSigMissing=false. The reason is a wire-format constraint:
+// the seeder signs the entry body with ConsumerSigMissing=true pre-set (see
+// HandleUsageReport and buildSeederSignedReport in settlement_test.go). If we
+// rebuild the body with ConsumerSigMissing=false we invalidate the seeder sig
+// already stored, and the seeder is no longer present to re-sign.
+//
+// TODO(broker-followup): T17.5 wire-format amendment — remove ConsumerSigMissing
+// from the seeder-signed preimage (or use a two-phase sign) so the broker can
+// independently decide the flag value at settlement time. Once that lands,
+// resolve the consumer pubkey here, verify the sig, and call appendUsageEntry
+// with consumerSigMissing=false when verification succeeds.
 func (s *Settlement) awaitSettle(ctx context.Context, req *Request, body *tbproto.EntryBody, seederSig []byte) {
 	timeout := time.Duration(s.cfg.SettlementTimeoutS) * time.Second
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-req.SettleSig:
-		// v1: ignore the sig (no pubkey resolver yet); fall through to missing-sig append.
-		// TODO(broker-followup): wire consumer pubkey resolver to verify sig + pass through.
+		// Sig arrived. deps.Identity is wired (see T17.5 plumbing) but
+		// sig verification is deferred pending a wire-format amendment
+		// (see TODO above). Fall through to missing-sig append.
+		_ = s.deps.Identity // suppress "field never used" if linter complains; wired for future use.
 	case <-timer.C:
 	case <-s.stop:
 		return

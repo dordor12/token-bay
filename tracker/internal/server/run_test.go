@@ -33,18 +33,11 @@ func writeKey(t *testing.T, priv ed25519.PrivateKey) string {
 	return path
 }
 
-// dialClient runs the client side of the wire protocol just far enough
-// to verify Run accepts the connection.
-func dialClient(t *testing.T, addr string, serverPin [32]byte) *quicgo.Conn {
+// dialClientWithCert runs the client side of the wire protocol using a
+// provided TLS certificate. Used when the test needs to know the client's
+// pubkey in advance (e.g. TestServer_PeerPubkey).
+func dialClientWithCert(t *testing.T, addr string, serverPin [32]byte, cliCert tls.Certificate) *quicgo.Conn {
 	t.Helper()
-	_, cliPriv, err := ed25519.GenerateKey(crand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cliCert, err := server.CertFromIdentity(cliPriv)
-	if err != nil {
-		t.Fatal(err)
-	}
 	tlsCfg := &tls.Config{
 		Certificates:       []tls.Certificate{cliCert},
 		InsecureSkipVerify: true, //nolint:gosec // pin via VerifyPeerCertificate
@@ -73,6 +66,21 @@ func dialClient(t *testing.T, addr string, serverPin [32]byte) *quicgo.Conn {
 		t.Fatal(err)
 	}
 	return conn
+}
+
+// dialClient runs the client side of the wire protocol just far enough
+// to verify Run accepts the connection.
+func dialClient(t *testing.T, addr string, serverPin [32]byte) *quicgo.Conn {
+	t.Helper()
+	_, cliPriv, err := ed25519.GenerateKey(crand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliCert, err := server.CertFromIdentity(cliPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dialClientWithCert(t, addr, serverPin, cliCert)
 }
 
 func waitForPeers(srv *server.Server, want int, timeout time.Duration) bool {

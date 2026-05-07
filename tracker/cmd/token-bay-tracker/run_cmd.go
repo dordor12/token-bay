@@ -89,6 +89,11 @@ func newRunCmd() *cobra.Command {
 				prices = broker.DefaultPriceTable()
 			}
 
+			// identityProxy satisfies broker.IdentityResolver before the
+			// server is constructed. Wire it to the live server via
+			// setSrv after server.New returns (same pattern as pushProxy).
+			ip := &identityProxy{}
+
 			brokerSubs, err := broker.Open(cfg.Broker, cfg.Settlement, broker.Deps{
 				Logger:     logger,
 				Now:        time.Now,
@@ -98,6 +103,7 @@ func newRunCmd() *cobra.Command {
 				Pusher:     pp,
 				Pricing:    prices,
 				TrackerKey: trackerKey,
+				Identity:   ip,
 			})
 			if err != nil {
 				return fmt.Errorf("broker: %w", err)
@@ -148,8 +154,10 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Wire the push proxy to the live server now that it exists.
+			// Wire the push proxy and identity proxy to the live server
+			// now that it exists.
 			pp.setSrv(srv)
+			ip.setSrv(srv)
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
@@ -198,6 +206,25 @@ type admissionAdapter struct {
 }
 
 func (admissionAdapter) Admit(_ context.Context, _, _ []byte) error { return nil }
+
+// identityProxy satisfies broker.IdentityResolver. Constructed before the
+// server and wired via setSrv after server.New returns, using the same
+// chicken-and-egg resolution pattern as pushProxy.
+type identityProxy struct {
+	srv atomic.Pointer[server.Server]
+}
+
+func (p *identityProxy) setSrv(s *server.Server) {
+	p.srv.Store(s)
+}
+
+func (p *identityProxy) PeerPubkey(id ids.IdentityID) (ed25519.PublicKey, bool) {
+	s := p.srv.Load()
+	if s == nil {
+		return nil, false
+	}
+	return s.PeerPubkey(id)
+}
 
 // pushProxy satisfies broker.PushService. It is constructed before the server
 // and wired to it via setSrv after server.New returns, resolving the

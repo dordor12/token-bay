@@ -52,6 +52,19 @@ type PushService interface {
 	PushSettlementTo(ids.IdentityID, *tbproto.SettlementPush) (<-chan *tbproto.SettleAck, bool)
 }
 
+// IdentityResolver maps an IdentityID to its Ed25519 public key.
+// Settlement uses it to verify the consumer's counter-signature before
+// appending a USAGE entry to the ledger. Returns ok=false when the peer
+// is not currently connected; the broker falls through to
+// ConsumerSigMissing=true in that case.
+//
+// v1: settlement does not yet perform sig verification (T17.5 deferred;
+// see the TODO in awaitSettle). The interface is wired now so the
+// infrastructure is in place for a future wire-format amendment.
+type IdentityResolver interface {
+	PeerPubkey(id ids.IdentityID) (ed25519.PublicKey, bool)
+}
+
 // Deps lists every collaborator broker.Open requires.
 type Deps struct {
 	Logger     zerolog.Logger
@@ -63,6 +76,10 @@ type Deps struct {
 	Pusher     PushService
 	Pricing    *PriceTable
 	TrackerKey ed25519.PrivateKey
+	// Identity resolves consumer IdentityID → Ed25519 pubkey from the live
+	// mTLS connection table. Optional in v1: nil falls through to
+	// ConsumerSigMissing=true on every settlement.
+	Identity IdentityResolver
 }
 
 // fallbackReputation is the v1 default when no reputation subsystem is wired.
