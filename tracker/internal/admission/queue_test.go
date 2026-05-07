@@ -82,3 +82,42 @@ func TestQueueHeap_PeekDoesNotMutate(t *testing.T) {
 	assert.Equal(t, makeID(0xBB), first.ConsumerID)
 	assert.Equal(t, 2, h.Len(), "Peek must not mutate")
 }
+
+func TestPopReadyForBroker_EmptyQueue(t *testing.T) {
+	s, _ := openTempSubsystem(t)
+	defer s.Close()
+	_, ok := s.PopReadyForBroker(time.Now(), 0.0)
+	require.False(t, ok)
+}
+
+func TestPopReadyForBroker_BelowMinPriority(t *testing.T) {
+	s, _ := openTempSubsystem(t)
+	defer s.Close()
+	s.queueMu.Lock()
+	s.queue.Push(QueueEntry{
+		RequestID:   [16]byte{1},
+		ConsumerID:  makeID(0xAA),
+		CreditScore: 0.3,
+		EnqueuedAt:  time.Now(),
+	})
+	s.queueMu.Unlock()
+	_, ok := s.PopReadyForBroker(time.Now(), 0.5)
+	require.False(t, ok)
+}
+
+func TestPopReadyForBroker_AbovePriority_Pops(t *testing.T) {
+	s, _ := openTempSubsystem(t)
+	defer s.Close()
+	s.queueMu.Lock()
+	s.queue.Push(QueueEntry{RequestID: [16]byte{1}, CreditScore: 0.8, EnqueuedAt: time.Now()})
+	s.queueMu.Unlock()
+	e, ok := s.PopReadyForBroker(time.Now(), 0.5)
+	require.True(t, ok)
+	require.Equal(t, [16]byte{1}, e.RequestID)
+}
+
+func TestPressureGauge_BootTime_ZeroComputedAt(t *testing.T) {
+	s, _ := openTempSubsystem(t)
+	defer s.Close()
+	require.Zero(t, s.PressureGauge())
+}

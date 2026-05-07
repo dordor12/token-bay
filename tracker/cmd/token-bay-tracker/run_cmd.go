@@ -8,13 +8,17 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/api"
+	"github.com/token-bay/token-bay/tracker/internal/broker"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
@@ -64,6 +68,48 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
+			// Build push proxy before server so broker can be wired
+			// before server is constructed (chicken-and-egg resolution).
+			pp := &pushProxy{}
+
+			adm, err := admission.Open(
+				cfg.Admission, reg, trackerKey,
+				admission.WithTLogPath(cfg.Admission.TLogPath),
+				admission.WithSnapshotPrefix(cfg.Admission.SnapshotPathPrefix),
+			)
+			if err != nil {
+				return fmt.Errorf("admission: %w", err)
+			}
+			defer adm.Close() //nolint:errcheck
+
+			var prices *broker.PriceTable
+			if cfg.Pricing.Models != nil {
+				prices = broker.NewPriceTableFromConfig(cfg.Pricing)
+			} else {
+				prices = broker.DefaultPriceTable()
+			}
+
+			// identityProxy satisfies broker.IdentityResolver before the
+			// server is constructed. Wire it to the live server via
+			// setSrv after server.New returns (same pattern as pushProxy).
+			ip := &identityProxy{}
+
+			brokerSubs, err := broker.Open(cfg.Broker, cfg.Settlement, broker.Deps{
+				Logger:     logger,
+				Now:        time.Now,
+				Registry:   reg,
+				Ledger:     led,
+				Admission:  adm,
+				Pusher:     pp,
+				Pricing:    prices,
+				TrackerKey: trackerKey,
+				Identity:   ip,
+			})
+			if err != nil {
+				return fmt.Errorf("broker: %w", err)
+			}
+			defer brokerSubs.Close() //nolint:errcheck
+
 			alloc, err := stunturn.NewAllocator(stunturn.AllocatorConfig{
 				MaxKbpsPerSeeder: cfg.STUNTURN.TURNRelayMaxKbps,
 				SessionTTL:       time.Duration(cfg.STUNTURN.SessionTTLSeconds) * time.Second,
@@ -82,12 +128,14 @@ func newRunCmd() *cobra.Command {
 			reflectFn := func(remote netip.AddrPort) netip.AddrPort { return remote }
 
 			router, err := api.NewRouter(api.Deps{
-				Logger:   logger,
-				Now:      time.Now,
-				Ledger:   led,
-				Registry: reg,
-				StunTurn: stunTurnAdapter{alloc: alloc, reflect: reflectFn},
-				// Broker / Admission / Federation left nil → ErrNotImplemented stubs.
+				Logger:     logger,
+				Now:        time.Now,
+				Ledger:     led,
+				Registry:   reg,
+				StunTurn:   stunTurnAdapter{alloc: alloc, reflect: reflectFn},
+				Broker:     brokerSubs.Broker,
+				Settlement: brokerSubs.Settlement,
+				Admission:  admissionAdapter{adm},
 			})
 			if err != nil {
 				return err
@@ -106,6 +154,10 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Wire the push proxy and identity proxy to the live server
+			// now that it exists.
+			pp.setSrv(srv)
+			ip.setSrv(srv)
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
@@ -142,4 +194,62 @@ func (a stunTurnAdapter) ReflectAddr(remote netip.AddrPort) netip.AddrPort {
 
 func (a stunTurnAdapter) Allocate(consumer, seeder ids.IdentityID, requestID [16]byte, now time.Time) (stunturn.Session, error) {
 	return a.alloc.Allocate(consumer, seeder, requestID, now)
+}
+
+// admissionAdapter wraps *admission.Subsystem and adds the Admit method
+// required by api.AdmissionService (enrollAdmission gate). The gate is
+// optional by spec (§ enroll, Scope-2); returning nil here auto-passes all
+// enroll requests. When enrollment admission is implemented in a later plan,
+// this adapter is replaced by a full implementation on *admission.Subsystem.
+type admissionAdapter struct {
+	*admission.Subsystem
+}
+
+func (admissionAdapter) Admit(_ context.Context, _, _ []byte) error { return nil }
+
+// identityProxy satisfies broker.IdentityResolver. Constructed before the
+// server and wired via setSrv after server.New returns, using the same
+// chicken-and-egg resolution pattern as pushProxy.
+type identityProxy struct {
+	srv atomic.Pointer[server.Server]
+}
+
+func (p *identityProxy) setSrv(s *server.Server) {
+	p.srv.Store(s)
+}
+
+func (p *identityProxy) PeerPubkey(id ids.IdentityID) (ed25519.PublicKey, bool) {
+	s := p.srv.Load()
+	if s == nil {
+		return nil, false
+	}
+	return s.PeerPubkey(id)
+}
+
+// pushProxy satisfies broker.PushService. It is constructed before the server
+// and wired to it via setSrv after server.New returns, resolving the
+// chicken-and-egg dependency between broker (needs a pusher) and server (needs
+// a router built from broker).
+type pushProxy struct {
+	srv atomic.Pointer[server.Server]
+}
+
+func (p *pushProxy) setSrv(s *server.Server) {
+	p.srv.Store(s)
+}
+
+func (p *pushProxy) PushOfferTo(id ids.IdentityID, push *tbproto.OfferPush) (<-chan *tbproto.OfferDecision, bool) {
+	s := p.srv.Load()
+	if s == nil {
+		return nil, false
+	}
+	return s.PushOfferTo(id, push)
+}
+
+func (p *pushProxy) PushSettlementTo(id ids.IdentityID, push *tbproto.SettlementPush) (<-chan *tbproto.SettleAck, bool) {
+	s := p.srv.Load()
+	if s == nil {
+		return nil, false
+	}
+	return s.PushSettlementTo(id, push)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/broker"
 )
 
 // idsLike is a single-source-of-truth alias so per-handler files don't
@@ -39,14 +40,25 @@ type StunTurnService interface {
 	turnAllocator
 }
 
-// BrokerService is reserved for the broker subsystem (Scope-2 stub).
+// BrokerService is the slice of broker used by the broker_request handler.
+// *broker.Broker satisfies it structurally.
 type BrokerService interface {
-	brokerSubmitter
+	Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*broker.Result, error)
+	RegisterQueued(env *tbproto.EnvelopeSigned, requestID [16]byte, deliver func(*broker.Result))
 }
 
-// AdmissionService is the slice of admission used by the enroll handler.
+// SettlementService is the union of every settlement method any handler needs.
+// *broker.Settlement satisfies it structurally.
+type SettlementService interface {
+	usageReportHandler
+	settleHandler
+}
+
+// AdmissionService is the slice of admission used by the enroll handler and
+// broker_request handler.
 type AdmissionService interface {
 	enrollAdmission
+	brokerAdmission
 }
 
 // FederationService is reserved for the federation subsystem
@@ -66,6 +78,7 @@ type Deps struct {
 	Registry   RegistryService
 	StunTurn   StunTurnService
 	Broker     BrokerService
+	Settlement SettlementService
 	Admission  AdmissionService
 	Federation FederationService
 }

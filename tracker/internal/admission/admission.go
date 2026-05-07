@@ -176,6 +176,17 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	return s, nil
 }
 
+// PressureGauge returns the most recent supply-aggregator pressure (demand_rate /
+// supply_estimate). Returns 0.0 when the aggregator hasn't published yet
+// (boot-time), which the broker treats as "no pressure".
+func (s *Subsystem) PressureGauge() float64 {
+	snap := s.Supply()
+	if snap.ComputedAt.IsZero() {
+		return 0.0
+	}
+	return snap.Pressure
+}
+
 // Close signals all background goroutines to stop and waits for them.
 // Safe to call multiple times; subsequent calls are no-ops.
 func (s *Subsystem) Close() error {

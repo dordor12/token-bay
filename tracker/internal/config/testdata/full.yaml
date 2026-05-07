@@ -29,12 +29,15 @@ broker:
   offer_timeout_ms: 1500
   max_offer_attempts: 4
   broker_request_rate_per_sec: 2.0
+  queue_drain_interval_ms: 1000
+  inflight_terminal_ttl_s: 600
 
 settlement:
   tunnel_setup_ms: 10000
   stream_idle_s: 60
   settlement_timeout_s: 900
   reservation_ttl_s: 1200
+  stale_tip_retries: 3
 
 federation:
   peer_count_min: 8
@@ -93,3 +96,15 @@ stun_turn:
 
 metrics:
   listen_addr: ":9100"
+
+pricing:
+  models:
+    claude-opus-4-7:
+      in_credits_per_token: 15
+      out_credits_per_token: 75
+    claude-sonnet-4-6:
+      in_credits_per_token: 3
+      out_credits_per_token: 15
+    claude-haiku-4-5-20251001:
+      in_credits_per_token: 1
+      out_credits_per_token: 5

@@ -14,8 +14,10 @@ import (
 	"github.com/rs/zerolog"
 	"google.golang.org/protobuf/proto"
 
+	sharedadmission "github.com/token-bay/token-bay/shared/admission"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 )
 
@@ -47,6 +49,12 @@ type fakeAdmission struct {
 func (f *fakeAdmission) Admit(_ context.Context, _, _ []byte) error {
 	f.called = true
 	return f.retErr
+}
+
+// Decide is a no-op stub so *fakeAdmission satisfies api.AdmissionService
+// (which now requires brokerAdmission in addition to enrollAdmission).
+func (f *fakeAdmission) Decide(_ ids.IdentityID, _ *sharedadmission.SignedCreditAttestation, _ time.Time) admission.Result {
+	return admission.Result{Outcome: admission.OutcomeAdmit}
 }
 
 // rcForPubkey returns a RequestCtx whose PeerID equals SHA-256(pub) so

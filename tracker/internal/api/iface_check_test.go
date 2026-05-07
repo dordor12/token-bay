@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"github.com/token-bay/token-bay/tracker/internal/api"
+	"github.com/token-bay/token-bay/tracker/internal/broker"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
 )
@@ -10,8 +11,10 @@ import (
 // the unions declared by api. Catches signature drift between
 // internal/api's narrow interfaces and the real subsystem code.
 var (
-	_ api.LedgerService   = (*ledger.Ledger)(nil)
-	_ api.RegistryService = (*registry.Registry)(nil)
+	_ api.LedgerService     = (*ledger.Ledger)(nil)
+	_ api.RegistryService   = (*registry.Registry)(nil)
+	_ api.BrokerService     = (*broker.Broker)(nil)
+	_ api.SettlementService = (*broker.Settlement)(nil)
 )
 
 // Note: api.StunTurnService is only satisfied by the cmd-side adapter,

@@ -1,0 +1,63 @@
+package broker
+
+import (
+	"testing"
+
+	"github.com/token-bay/token-bay/shared/ids"
+	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/config"
+	"github.com/token-bay/token-bay/tracker/internal/registry"
+)
+
+func defaultBrokerCfg() config.BrokerConfig {
+	return config.BrokerConfig{
+		HeadroomThreshold: 0.2,
+		LoadThreshold:     5,
+		ScoreWeights: config.BrokerScoreWeights{
+			Reputation: 0.4, Headroom: 0.3, RTT: 0.2, Load: 0.1,
+		},
+		OfferTimeoutMs:          1500,
+		MaxOfferAttempts:        4,
+		BrokerRequestRatePerSec: 2.0,
+		QueueDrainIntervalMs:    1000,
+		InflightTerminalTTLS:    600,
+	}
+}
+
+func defaultWeights() config.BrokerScoreWeights {
+	return defaultBrokerCfg().ScoreWeights
+}
+
+// seederRecord builds a SeederRecord for tests with sane defaults.
+func seederRecord(t *testing.T, id ids.IdentityID, headroom float64, model string) registry.SeederRecord {
+	t.Helper()
+	return registry.SeederRecord{
+		IdentityID:       id,
+		Available:        true,
+		HeadroomEstimate: headroom,
+		Capabilities: registry.Capabilities{
+			Models: []string{model},
+			Tiers:  []tbproto.PrivacyTier{tbproto.PrivacyTier_PRIVACY_TIER_STANDARD},
+		},
+	}
+}
+
+// stubReputation lets tests control Score / IsFrozen per id.
+type stubReputation struct {
+	scores map[ids.IdentityID]float64
+	frozen map[ids.IdentityID]bool
+}
+
+func newStubReputation() *stubReputation {
+	return &stubReputation{
+		scores: map[ids.IdentityID]float64{},
+		frozen: map[ids.IdentityID]bool{},
+	}
+}
+
+func (s *stubReputation) Score(id ids.IdentityID) (float64, bool) {
+	v, ok := s.scores[id]
+	return v, ok
+}
+func (s *stubReputation) IsFrozen(id ids.IdentityID) bool           { return s.frozen[id] }
+func (s *stubReputation) RecordOfferOutcome(ids.IdentityID, string) {}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ type quicConn interface {
 // Connection is the per-peer server-side state.
 type Connection struct {
 	peerID     ids.IdentityID
+	peerPub    ed25519.PublicKey // mTLS-derived Ed25519 pubkey; stable for the connection's lifetime.
 	remoteAddr netip.AddrPort
 	conn       quicConn
 
@@ -36,10 +38,11 @@ type Connection struct {
 	closeOnce sync.Once
 }
 
-func newConnection(parent context.Context, qc quicConn, peerID ids.IdentityID, addr netip.AddrPort) *Connection {
+func newConnection(parent context.Context, qc quicConn, peerID ids.IdentityID, peerPub ed25519.PublicKey, addr netip.AddrPort) *Connection {
 	ctx, cancel := context.WithCancel(parent)
 	return &Connection{
 		peerID:     peerID,
+		peerPub:    peerPub,
 		remoteAddr: addr,
 		conn:       qc,
 		ctx:        ctx,
@@ -50,6 +53,10 @@ func newConnection(parent context.Context, qc quicConn, peerID ids.IdentityID, a
 // PeerID returns the mTLS-derived identity. Stable for the connection's
 // lifetime.
 func (c *Connection) PeerID() ids.IdentityID { return c.peerID }
+
+// PeerPubkey returns the mTLS-derived raw Ed25519 pubkey. Stable for the
+// connection's lifetime.
+func (c *Connection) PeerPubkey() ed25519.PublicKey { return c.peerPub }
 
 // RemoteAddr returns the peer's UDP address as observed by quic-go.
 func (c *Connection) RemoteAddr() netip.AddrPort { return c.remoteAddr }

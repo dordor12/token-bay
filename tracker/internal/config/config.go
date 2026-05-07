@@ -19,6 +19,7 @@ type Config struct {
 	Admission  AdmissionConfig  `yaml:"admission"`
 	STUNTURN   STUNTURNConfig   `yaml:"stun_turn"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
+	Pricing    PricingConfig    `yaml:"pricing"`
 }
 
 type ServerConfig struct {
@@ -58,6 +59,8 @@ type BrokerConfig struct {
 	OfferTimeoutMs          int                `yaml:"offer_timeout_ms"`
 	MaxOfferAttempts        int                `yaml:"max_offer_attempts"`
 	BrokerRequestRatePerSec float64            `yaml:"broker_request_rate_per_sec"`
+	QueueDrainIntervalMs    int                `yaml:"queue_drain_interval_ms"`
+	InflightTerminalTTLS    int                `yaml:"inflight_terminal_ttl_s"`
 }
 
 type BrokerScoreWeights struct {
@@ -72,6 +75,7 @@ type SettlementConfig struct {
 	StreamIdleS        int `yaml:"stream_idle_s"`
 	SettlementTimeoutS int `yaml:"settlement_timeout_s"`
 	ReservationTTLS    int `yaml:"reservation_ttl_s"`
+	StaleTipRetries    int `yaml:"stale_tip_retries"`
 }
 
 type FederationConfig struct {
@@ -151,6 +155,15 @@ type MetricsConfig struct {
 	ListenAddr string `yaml:"listen_addr"`
 }
 
+type PricingConfig struct {
+	Models map[string]ModelPriceConfig `yaml:"models"`
+}
+
+type ModelPriceConfig struct {
+	InCreditsPerToken  uint64 `yaml:"in_credits_per_token"`
+	OutCreditsPerToken uint64 `yaml:"out_credits_per_token"`
+}
+
 // DefaultConfig returns a Config with every defaultable field populated
 // per the design spec §4.1. Required fields (see spec §4.2) are returned
 // zero-valued so Validate flags them when the operator forgets.
@@ -181,12 +194,15 @@ func DefaultConfig() *Config {
 			OfferTimeoutMs:          1500,
 			MaxOfferAttempts:        4,
 			BrokerRequestRatePerSec: 2.0,
+			QueueDrainIntervalMs:    1000,
+			InflightTerminalTTLS:    600,
 		},
 		Settlement: SettlementConfig{
 			TunnelSetupMs:      10000,
 			StreamIdleS:        60,
 			SettlementTimeoutS: 900,
 			ReservationTTLS:    1200,
+			StaleTipRetries:    3,
 		},
 		Federation: FederationConfig{
 			PeerCountMin:          8,
@@ -244,6 +260,13 @@ func DefaultConfig() *Config {
 		},
 		Metrics: MetricsConfig{
 			ListenAddr: ":9100",
+		},
+		Pricing: PricingConfig{
+			Models: map[string]ModelPriceConfig{
+				"claude-opus-4-7":           {InCreditsPerToken: 15, OutCreditsPerToken: 75},
+				"claude-sonnet-4-6":         {InCreditsPerToken: 3, OutCreditsPerToken: 15},
+				"claude-haiku-4-5-20251001": {InCreditsPerToken: 1, OutCreditsPerToken: 5},
+			},
 		},
 	}
 }

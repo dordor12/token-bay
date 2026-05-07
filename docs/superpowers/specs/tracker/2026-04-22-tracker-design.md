@@ -278,3 +278,7 @@ Admin HTTP API on a separate internal port:
 - Ledger settlements always have valid tracker signatures; untimely consumer signatures produce `consumer_sig_missing` entries (never lost entries).
 - STUN hole-punching succeeds on ≥ 80% of consumer-seeder pairs with common home NATs. TURN fallback on the remainder.
 - Graceful shutdown drains in-flight requests without data loss.
+
+## 12. Subsystem implementation index
+
+- **`internal/broker`** — design `docs/superpowers/specs/tracker/2026-05-07-tracker-broker-design.md`; plan `docs/superpowers/plans/2026-05-07-tracker-broker.md`. Implements §5.1 selection, §5.2 settlement, §5.3 timeouts, and the §11.2 admission amendment (`BrokerRequestResponse` oneof).

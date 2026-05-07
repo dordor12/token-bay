@@ -72,20 +72,50 @@ func isConnDead(conn interface{ Done() <-chan struct{} }) bool {
 	}
 }
 
-// BrokerRequest sends an EnvelopeSigned and returns the seeder assignment.
-func (c *Client) BrokerRequest(ctx context.Context, env *tbproto.EnvelopeSigned) (*BrokerResponse, error) {
+// BrokerRequest sends an EnvelopeSigned and returns the broker's response —
+// one of: SeederAssignment, NoCapacity, Queued, Rejected.
+func (c *Client) BrokerRequest(ctx context.Context, env *tbproto.EnvelopeSigned) (*BrokerResult, error) {
 	if env == nil {
 		return nil, fmt.Errorf("%w: nil envelope", ErrInvalidResponse)
 	}
-	var resp tbproto.BrokerResponse
+	var resp tbproto.BrokerRequestResponse
 	if err := c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST, env, &resp); err != nil {
 		return nil, err
 	}
-	return &BrokerResponse{
-		SeederAddr:       string(resp.SeederAddr),
-		SeederPubkey:     resp.SeederPubkey,
-		ReservationToken: resp.ReservationToken,
-	}, nil
+	if err := tbproto.ValidateBrokerRequestResponse(&resp); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
+	}
+	out := &BrokerResult{}
+	switch o := resp.Outcome.(type) {
+	case *tbproto.BrokerRequestResponse_SeederAssignment:
+		out.Outcome = BrokerOutcomeAssignment
+		out.Assignment = &SeederAssignment{
+			SeederAddr:       string(o.SeederAssignment.SeederAddr),
+			SeederPubkey:     o.SeederAssignment.SeederPubkey,
+			ReservationToken: o.SeederAssignment.ReservationToken,
+		}
+	case *tbproto.BrokerRequestResponse_NoCapacity:
+		out.Outcome = BrokerOutcomeNoCapacity
+		out.NoCap = &NoCapacityResult{Reason: o.NoCapacity.Reason}
+	case *tbproto.BrokerRequestResponse_Queued:
+		out.Outcome = BrokerOutcomeQueued
+		var rid [16]byte
+		copy(rid[:], o.Queued.RequestId)
+		out.Queued = &QueuedResult{
+			RequestID:    rid,
+			PositionBand: uint8(o.Queued.PositionBand), //nolint:gosec // validated enum, max value 4
+			EtaBand:      uint8(o.Queued.EtaBand),      //nolint:gosec // validated enum, max value 4
+		}
+	case *tbproto.BrokerRequestResponse_Rejected:
+		out.Outcome = BrokerOutcomeRejected
+		out.Rejected = &RejectedResult{
+			Reason:      uint8(o.Rejected.Reason), //nolint:gosec // validated enum, max value 2
+			RetryAfterS: o.Rejected.RetryAfterS,
+		}
+	default:
+		return nil, fmt.Errorf("%w: unknown outcome", ErrInvalidResponse)
+	}
+	return out, nil
 }
 
 // Settle sends the consumer's signature over a finalized entry preimage.
