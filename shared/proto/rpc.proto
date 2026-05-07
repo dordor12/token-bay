@@ -64,14 +64,56 @@ message EnrollResponse {
   bytes starter_grant_entry   = 3;  // serialized EntrySigned
 }
 
-message BrokerResponse {
+message SeederAssignment {
   bytes  seeder_addr        = 1;  // utf-8 host:port
   bytes  seeder_pubkey      = 2;  // 32
-  bytes  reservation_token  = 3;
+  bytes  reservation_token  = 3;  // 16 bytes — equals request_id
 }
 
 message NoCapacity {
   string reason = 1;
+}
+
+message Queued {
+  bytes        request_id    = 1;  // 16
+  PositionBand position_band = 2;
+  EtaBand      eta_band      = 3;
+}
+
+message Rejected {
+  RejectReason reason        = 1;
+  uint32       retry_after_s = 2;
+}
+
+message BrokerRequestResponse {
+  oneof outcome {
+    SeederAssignment seeder_assignment = 1;
+    NoCapacity       no_capacity       = 2;
+    Queued           queued            = 3;
+    Rejected         rejected          = 4;
+  }
+}
+
+enum PositionBand {
+  POSITION_BAND_UNSPECIFIED = 0;
+  POSITION_BAND_1_TO_10     = 1;
+  POSITION_BAND_11_TO_50    = 2;
+  POSITION_BAND_51_TO_200   = 3;
+  POSITION_BAND_200_PLUS    = 4;
+}
+
+enum EtaBand {
+  ETA_BAND_UNSPECIFIED = 0;
+  ETA_BAND_LT_30S      = 1;
+  ETA_BAND_30S_TO_2M   = 2;
+  ETA_BAND_2M_TO_5M    = 3;
+  ETA_BAND_5M_PLUS     = 4;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED       = 0;
+  REJECT_REASON_REGION_OVERLOADED = 1;
+  REJECT_REASON_QUEUE_TIMEOUT     = 2;
 }
 
 message BalanceRequest {

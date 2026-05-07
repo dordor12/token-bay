@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"net/netip"
 	"testing"
 
@@ -36,11 +38,18 @@ func TestConnection_New_FieldsPopulated(t *testing.T) {
 	defer qc.cancel()
 
 	id := ids.IdentityID{1, 2, 3}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	addr := netip.MustParseAddrPort("127.0.0.1:55001")
-	c := newConnection(context.Background(), qc, id, addr)
+	c := newConnection(context.Background(), qc, id, pub, addr)
 
 	if c.PeerID() != id {
 		t.Errorf("peer id = %x, want %x", c.PeerID(), id)
+	}
+	if !c.PeerPubkey().Equal(pub) {
+		t.Errorf("peer pubkey mismatch")
 	}
 	if c.RemoteAddr() != addr {
 		t.Errorf("remote addr = %v, want %v", c.RemoteAddr(), addr)
@@ -54,7 +63,7 @@ func TestConnection_New_FieldsPopulated(t *testing.T) {
 
 func TestConnection_Close_CancelsCtx(t *testing.T) {
 	qc := newFakeQuic()
-	c := newConnection(context.Background(), qc, ids.IdentityID{}, netip.AddrPort{})
+	c := newConnection(context.Background(), qc, ids.IdentityID{}, ed25519.PublicKey{}, netip.AddrPort{})
 	c.Close()
 
 	select {
@@ -69,7 +78,7 @@ func TestConnection_Close_CancelsCtx(t *testing.T) {
 
 func TestConnection_Close_Idempotent(t *testing.T) {
 	qc := newFakeQuic()
-	c := newConnection(context.Background(), qc, ids.IdentityID{}, netip.AddrPort{})
+	c := newConnection(context.Background(), qc, ids.IdentityID{}, ed25519.PublicKey{}, netip.AddrPort{})
 	c.Close()
 	c.Close()
 	c.Close()
@@ -81,7 +90,7 @@ func TestConnection_Close_Idempotent(t *testing.T) {
 
 func TestConnection_StreamSeq_Atomic(t *testing.T) {
 	qc := newFakeQuic()
-	c := newConnection(context.Background(), qc, ids.IdentityID{}, netip.AddrPort{})
+	c := newConnection(context.Background(), qc, ids.IdentityID{}, ed25519.PublicKey{}, netip.AddrPort{})
 	defer c.Close()
 
 	if got := c.streamSeq.Add(1); got != 1 {

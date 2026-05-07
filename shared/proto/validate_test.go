@@ -263,6 +263,69 @@ func TestValidateRpcResponseRejections(t *testing.T) {
 	}
 }
 
+func TestValidateQueued(t *testing.T) {
+	require.Error(t, ValidateQueued(nil))
+	require.Error(t, ValidateQueued(&Queued{RequestId: make([]byte, 15)}))
+	require.Error(t, ValidateQueued(&Queued{RequestId: make([]byte, 16)})) // unspecified bands
+	require.NoError(t, ValidateQueued(&Queued{
+		RequestId:    make([]byte, 16),
+		PositionBand: PositionBand_POSITION_BAND_1_TO_10,
+		EtaBand:      EtaBand_ETA_BAND_LT_30S,
+	}))
+}
+
+func TestValidateRejected(t *testing.T) {
+	require.Error(t, ValidateRejected(nil))
+	require.Error(t, ValidateRejected(&Rejected{Reason: RejectReason_REJECT_REASON_UNSPECIFIED, RetryAfterS: 60}))
+	require.Error(t, ValidateRejected(&Rejected{Reason: RejectReason_REJECT_REASON_REGION_OVERLOADED, RetryAfterS: 59}))
+	require.Error(t, ValidateRejected(&Rejected{Reason: RejectReason_REJECT_REASON_REGION_OVERLOADED, RetryAfterS: 601}))
+	require.NoError(t, ValidateRejected(&Rejected{Reason: RejectReason_REJECT_REASON_QUEUE_TIMEOUT, RetryAfterS: 120}))
+}
+
+func TestValidateBrokerRequestResponse(t *testing.T) {
+	require.Error(t, ValidateBrokerRequestResponse(nil))
+	require.Error(t, ValidateBrokerRequestResponse(&BrokerRequestResponse{}))
+	require.NoError(t, ValidateBrokerRequestResponse(&BrokerRequestResponse{
+		Outcome: &BrokerRequestResponse_SeederAssignment{SeederAssignment: &SeederAssignment{
+			SeederAddr:       []byte("127.0.0.1:0"),
+			SeederPubkey:     make([]byte, 32),
+			ReservationToken: make([]byte, 16),
+		}},
+	}))
+	require.NoError(t, ValidateBrokerRequestResponse(&BrokerRequestResponse{
+		Outcome: &BrokerRequestResponse_NoCapacity{NoCapacity: &NoCapacity{Reason: "ok"}},
+	}))
+	require.NoError(t, ValidateBrokerRequestResponse(&BrokerRequestResponse{
+		Outcome: &BrokerRequestResponse_Queued{Queued: &Queued{
+			RequestId:    make([]byte, 16),
+			PositionBand: PositionBand_POSITION_BAND_1_TO_10,
+			EtaBand:      EtaBand_ETA_BAND_LT_30S,
+		}},
+	}))
+	require.NoError(t, ValidateBrokerRequestResponse(&BrokerRequestResponse{
+		Outcome: &BrokerRequestResponse_Rejected{Rejected: &Rejected{
+			Reason: RejectReason_REJECT_REASON_REGION_OVERLOADED, RetryAfterS: 60,
+		}},
+	}))
+}
+
+func TestValidateSeederAssignment(t *testing.T) {
+	require.Error(t, ValidateSeederAssignment(nil))
+	require.Error(t, ValidateSeederAssignment(&SeederAssignment{}))
+	require.Error(t, ValidateSeederAssignment(&SeederAssignment{
+		SeederAddr: []byte(""), SeederPubkey: make([]byte, 32), ReservationToken: make([]byte, 16),
+	}))
+	require.Error(t, ValidateSeederAssignment(&SeederAssignment{
+		SeederAddr: []byte("127.0.0.1:0"), SeederPubkey: make([]byte, 31), ReservationToken: make([]byte, 16),
+	}))
+	require.Error(t, ValidateSeederAssignment(&SeederAssignment{
+		SeederAddr: []byte("127.0.0.1:0"), SeederPubkey: make([]byte, 32), ReservationToken: make([]byte, 15),
+	}))
+	require.NoError(t, ValidateSeederAssignment(&SeederAssignment{
+		SeederAddr: []byte("127.0.0.1:0"), SeederPubkey: make([]byte, 32), ReservationToken: make([]byte, 16),
+	}))
+}
+
 func TestValidateOfferAndSettlementPush(t *testing.T) {
 	require.Error(t, ValidateOfferPush(nil))
 	require.Error(t, ValidateOfferPush(&OfferPush{ConsumerId: make([]byte, 31)}))

@@ -79,11 +79,50 @@ type EnrollResponse struct {
 	StarterGrantEntryBlob []byte
 }
 
-// BrokerResponse is the seeder assignment from a successful broker_request.
-type BrokerResponse struct {
+// BrokerOutcome enumerates BrokerRequest's possible result shapes, mirroring
+// the wire-format BrokerRequestResponse oneof.
+type BrokerOutcome int
+
+const (
+	BrokerOutcomeUnspecified BrokerOutcome = iota
+	BrokerOutcomeAssignment
+	BrokerOutcomeNoCapacity
+	BrokerOutcomeQueued
+	BrokerOutcomeRejected
+)
+
+// SeederAssignment is the body of a BrokerOutcomeAssignment result.
+type SeederAssignment struct {
 	SeederAddr       string
-	SeederPubkey     ed25519.PublicKey
+	SeederPubkey     []byte
 	ReservationToken []byte
+}
+
+// NoCapacityResult is the body of a BrokerOutcomeNoCapacity result.
+type NoCapacityResult struct {
+	Reason string
+}
+
+// QueuedResult is the body of a BrokerOutcomeQueued result.
+type QueuedResult struct {
+	RequestID    [16]byte
+	PositionBand uint8
+	EtaBand      uint8
+}
+
+// RejectedResult is the body of a BrokerOutcomeRejected result.
+type RejectedResult struct {
+	Reason      uint8
+	RetryAfterS uint32
+}
+
+// BrokerResult is the sum-typed return value of BrokerRequest.
+type BrokerResult struct {
+	Outcome    BrokerOutcome
+	Assignment *SeederAssignment
+	NoCap      *NoCapacityResult
+	Queued     *QueuedResult
+	Rejected   *RejectedResult
 }
 
 // UsageReport is what the seeder reports after a successful served request.

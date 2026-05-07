@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"s2","model":"claude-sonnet-4-6","tools":[],"mcp_servers":[]}
+{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"Hello"}],"stop_reason":null,"usage":{"input_tokens":12,"output_tokens":1}}}
+{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":" there"}],"stop_reason":null,"usage":{"input_tokens":12,"output_tokens":2}}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":4200,"result":"Hello there","session_id":"s2","total_cost_usd":0.001,"usage":{"input_tokens":42,"output_tokens":17}}

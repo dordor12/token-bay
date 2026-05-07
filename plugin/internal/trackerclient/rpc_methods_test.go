@@ -55,37 +55,110 @@ func newWiredClient(t *testing.T, register func(*fakeserver.Server)) (*Client, f
 	}
 }
 
-func TestBrokerRequestRoundTrip(t *testing.T) {
+func TestBrokerRequest_Assignment(t *testing.T) {
 	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
 		s.Handlers[tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
-			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.BrokerResponse{
-				SeederAddr:       []byte("seeder.example:443"),
-				SeederPubkey:     make([]byte, 32),
-				ReservationToken: []byte("token"),
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.BrokerRequestResponse{
+				Outcome: &tbproto.BrokerRequestResponse_SeederAssignment{
+					SeederAssignment: &tbproto.SeederAssignment{
+						SeederAddr:       []byte("127.0.0.1:5000"),
+						SeederPubkey:     make([]byte, 32),
+						ReservationToken: make([]byte, 16),
+					},
+				},
 			}, nil
 		}
 	})
 	defer cleanup()
 
 	env := &tbproto.EnvelopeSigned{Body: &tbproto.EnvelopeBody{}}
-	resp, err := c.BrokerRequest(context.Background(), env)
+	res, err := c.BrokerRequest(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, "seeder.example:443", resp.SeederAddr)
-	assert.Equal(t, []byte("token"), resp.ReservationToken)
+	assert.Equal(t, BrokerOutcomeAssignment, res.Outcome)
+	require.NotNil(t, res.Assignment)
+	assert.Equal(t, "127.0.0.1:5000", res.Assignment.SeederAddr)
+	assert.Equal(t, make([]byte, 32), res.Assignment.SeederPubkey)
+	assert.Equal(t, make([]byte, 16), res.Assignment.ReservationToken)
 }
 
-func TestBrokerRequestNoCapacity(t *testing.T) {
+func TestBrokerRequest_NoCapacity(t *testing.T) {
 	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
 		s.Handlers[tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
-			return tbproto.RpcStatus_RPC_STATUS_NO_CAPACITY, nil, &tbproto.RpcError{
-				Code: "no_capacity", Message: "all seeders busy",
-			}
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.BrokerRequestResponse{
+				Outcome: &tbproto.BrokerRequestResponse_NoCapacity{
+					NoCapacity: &tbproto.NoCapacity{Reason: "all seeders busy"},
+				},
+			}, nil
 		}
 	})
 	defer cleanup()
 
-	_, err := c.BrokerRequest(context.Background(), &tbproto.EnvelopeSigned{})
-	assert.ErrorIs(t, err, ErrNoCapacity)
+	env := &tbproto.EnvelopeSigned{Body: &tbproto.EnvelopeBody{}}
+	res, err := c.BrokerRequest(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, BrokerOutcomeNoCapacity, res.Outcome)
+	require.NotNil(t, res.NoCap)
+	assert.Equal(t, "all seeders busy", res.NoCap.Reason)
+}
+
+func TestBrokerRequest_Queued(t *testing.T) {
+	rid := make([]byte, 16)
+	rid[0] = 0xAB
+	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.BrokerRequestResponse{
+				Outcome: &tbproto.BrokerRequestResponse_Queued{
+					Queued: &tbproto.Queued{
+						RequestId:    rid,
+						PositionBand: tbproto.PositionBand_POSITION_BAND_1_TO_10,
+						EtaBand:      tbproto.EtaBand_ETA_BAND_LT_30S,
+					},
+				},
+			}, nil
+		}
+	})
+	defer cleanup()
+
+	env := &tbproto.EnvelopeSigned{Body: &tbproto.EnvelopeBody{}}
+	res, err := c.BrokerRequest(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, BrokerOutcomeQueued, res.Outcome)
+	require.NotNil(t, res.Queued)
+	assert.Equal(t, uint8(0xAB), res.Queued.RequestID[0])
+	assert.Equal(t, uint8(tbproto.PositionBand_POSITION_BAND_1_TO_10), res.Queued.PositionBand)
+	assert.Equal(t, uint8(tbproto.EtaBand_ETA_BAND_LT_30S), res.Queued.EtaBand)
+}
+
+func TestBrokerRequest_Rejected(t *testing.T) {
+	c, cleanup := newWiredClient(t, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST] = func(_ context.Context, _ proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.BrokerRequestResponse{
+				Outcome: &tbproto.BrokerRequestResponse_Rejected{
+					Rejected: &tbproto.Rejected{
+						Reason:      tbproto.RejectReason_REJECT_REASON_REGION_OVERLOADED,
+						RetryAfterS: 60,
+					},
+				},
+			}, nil
+		}
+	})
+	defer cleanup()
+
+	env := &tbproto.EnvelopeSigned{Body: &tbproto.EnvelopeBody{}}
+	res, err := c.BrokerRequest(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, BrokerOutcomeRejected, res.Outcome)
+	require.NotNil(t, res.Rejected)
+	assert.Equal(t, uint8(tbproto.RejectReason_REJECT_REASON_REGION_OVERLOADED), res.Rejected.Reason)
+	assert.Equal(t, uint32(60), res.Rejected.RetryAfterS)
+}
+
+func TestBrokerRequest_NilEnvelope(t *testing.T) {
+	c, cleanup := newWiredClient(t, nil)
+	defer cleanup()
+
+	_, err := c.BrokerRequest(context.Background(), nil)
+	require.ErrorIs(t, err, ErrInvalidResponse)
 }
 
 func TestSettleRoundTrip(t *testing.T) {

@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"duration_ms":1500,"result":"hi","session_id":"s1","total_cost_usd":0.0001,"usage":{"input_tokens":12,"output_tokens":4}}
