@@ -90,6 +90,73 @@ func (f *Inflight) LookupByHash(hash [32]byte) (*Request, bool) {
 	return r, ok
 }
 
+// EnsureSettleSig idempotently initializes the request's settlement-sig
+// dispatch channel. Safe to call from HandleUsageReport before IndexByHash;
+// the lock here happens-before any HandleSettle's LookupByHash, so a later
+// HandleSettle observes a non-nil channel without further synchronization.
+func (f *Inflight) EnsureSettleSig(reqID [16]byte) (chan []byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.byID[reqID]
+	if !ok {
+		return nil, ErrUnknownRequest
+	}
+	if r.SettleSig == nil {
+		r.SettleSig = make(chan []byte, 1)
+	}
+	return r.SettleSig, nil
+}
+
+// InflightSummary is a snapshot row for admin listing. Carries enough to
+// render the admin /broker/inflight list without leaking the underlying
+// pointer.
+type InflightSummary struct {
+	RequestID      [16]byte
+	ConsumerID     ids.IdentityID
+	State          State
+	StartedAt      time.Time
+	AssignedSeeder ids.IdentityID
+	PreimageHash   [32]byte
+}
+
+// Snapshot returns a stable copy of every in-flight summary at call time.
+// Used by admin handlers; not on the hot path.
+func (f *Inflight) Snapshot() []InflightSummary {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := make([]InflightSummary, 0, len(f.byID))
+	for _, r := range f.byID {
+		out = append(out, InflightSummary{
+			RequestID:      r.RequestID,
+			ConsumerID:     r.ConsumerID,
+			State:          r.State,
+			StartedAt:      r.StartedAt,
+			AssignedSeeder: r.AssignedSeeder,
+			PreimageHash:   r.PreimageHash,
+		})
+	}
+	return out
+}
+
+// ForceFail unconditionally sets the request to StateFailed regardless of
+// prior state. Returns the prior state and ok=true on success; ok=false if
+// the request doesn't exist. Operator-only — bypasses the IsAllowedTransition
+// check that Transition enforces.
+func (f *Inflight) ForceFail(reqID [16]byte, now time.Time) (State, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.byID[reqID]
+	if !ok {
+		return StateUnspecified, false
+	}
+	prev := r.State
+	r.State = StateFailed
+	if r.TerminatedAt.IsZero() {
+		r.TerminatedAt = now
+	}
+	return prev, true
+}
+
 // SweepTerminal removes terminal-state entries whose TerminatedAt is older
 // than terminalTTL. Returns the dropped requests for diagnostics. Drops the
 // byHash mapping for swept entries.

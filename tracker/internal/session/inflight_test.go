@@ -96,6 +96,54 @@ func TestInflight_SweepTerminal_RemovesByHashIndex(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestInflight_EnsureSettleSig(t *testing.T) {
+	f := NewInflight()
+	f.Insert(&Request{RequestID: [16]byte{1}, State: StateAssigned})
+	ch1, err := f.EnsureSettleSig([16]byte{1})
+	require.NoError(t, err)
+	require.NotNil(t, ch1)
+	ch2, err := f.EnsureSettleSig([16]byte{1})
+	require.NoError(t, err)
+	require.Equal(t, ch1, ch2) // same channel returned on repeat
+
+	_, err = f.EnsureSettleSig([16]byte{99})
+	require.ErrorIs(t, err, ErrUnknownRequest)
+
+	// Channel is observable on the request.
+	got, _ := f.Get([16]byte{1})
+	require.Equal(t, ch1, got.SettleSig)
+}
+
+func TestInflight_Snapshot(t *testing.T) {
+	f := NewInflight()
+	f.Insert(&Request{RequestID: [16]byte{1}, ConsumerID: ids.IdentityID{0xAA}, State: StateSelecting})
+	f.Insert(&Request{RequestID: [16]byte{2}, ConsumerID: ids.IdentityID{0xBB}, State: StateAssigned, AssignedSeeder: ids.IdentityID{0xDD}})
+	snap := f.Snapshot()
+	require.Len(t, snap, 2)
+
+	byID := map[[16]byte]InflightSummary{}
+	for _, s := range snap {
+		byID[s.RequestID] = s
+	}
+	require.Equal(t, StateSelecting, byID[[16]byte{1}].State)
+	require.Equal(t, ids.IdentityID{0xDD}, byID[[16]byte{2}].AssignedSeeder)
+}
+
+func TestInflight_ForceFail(t *testing.T) {
+	f := NewInflight()
+	f.Insert(&Request{RequestID: [16]byte{1}, State: StateAssigned})
+	now := time.Unix(1700000000, 0)
+	prev, ok := f.ForceFail([16]byte{1}, now)
+	require.True(t, ok)
+	require.Equal(t, StateAssigned, prev)
+	got, _ := f.Get([16]byte{1})
+	require.Equal(t, StateFailed, got.State)
+	require.Equal(t, now, got.TerminatedAt)
+
+	_, ok = f.ForceFail([16]byte{99}, now)
+	require.False(t, ok)
+}
+
 func TestInflight_RaceClean_Transition(t *testing.T) {
 	f := NewInflight()
 	f.Insert(&Request{RequestID: [16]byte{1}, State: StateServing})

@@ -75,6 +75,26 @@ func (r *Reservations) Reserved(consumer ids.IdentityID) uint64 {
 	return r.byID[consumer]
 }
 
+// Get returns the reservation slot for reqID if present.
+func (r *Reservations) Get(reqID [16]byte) (Reservation, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	slot, ok := r.byReq[reqID]
+	return slot, ok
+}
+
+// Snapshot returns a stable copy of every reservation slot at call time.
+// Used by admin handlers; not on the hot path.
+func (r *Reservations) Snapshot() []Reservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Reservation, 0, len(r.byReq))
+	for _, slot := range r.byReq {
+		out = append(out, slot)
+	}
+	return out
+}
+
 // SweepExpired removes any slot whose ExpiresAt is at or before `now`. Returns
 // the dropped slots so the caller can metric/log.
 func (r *Reservations) SweepExpired(now time.Time) []Reservation {
