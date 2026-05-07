@@ -59,6 +59,10 @@ func (f *fakeLedgerCapturing) Count() int {
 // buildSeederSignedReport builds a UsageReport whose SeederSig is valid over the
 // entry body the tracker will reconstruct. timestamp must match the value that
 // s.deps.Now() returns at the moment HandleUsageReport processes the report.
+//
+// In v1 the settlement always stores ConsumerSigMissing=true; the body is
+// built with this flag pre-set so the seeder signature covers the same bytes
+// that HandleUsageReport verifies and the ledger re-verifies on append.
 func buildSeederSignedReport(t *testing.T, seederPriv ed25519.PrivateKey, requestID [16]byte, model string, in, out uint32, prevHash []byte, tipSeq uint64, consumerID, seederID ids.IdentityID, timestamp uint64) *tbproto.UsageReport {
 	t.Helper()
 	pt := DefaultPriceTable()
@@ -76,6 +80,10 @@ func buildSeederSignedReport(t *testing.T, seederPriv ed25519.PrivateKey, reques
 		CostCredits:  cost,
 		Timestamp:    timestamp,
 		RequestID:    requestID[:],
+		// v1: HandleUsageReport builds the body with ConsumerSigMissing=true
+		// (T17.5 follow-up pending). The seeder must pre-set the flag so its
+		// signature covers the same bytes that the tracker verifies.
+		ConsumerSigMissing: true,
 	})
 	require.NoError(t, err)
 

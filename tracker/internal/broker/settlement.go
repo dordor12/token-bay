@@ -145,6 +145,12 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 		CostCredits:  actualCost,
 		Timestamp:    uint64(now.Unix()), //nolint:gosec // G115: always positive
 		RequestID:    r.RequestId,
+		// v1: consumer pubkey resolution is not implemented (T17.5); every
+		// settlement appends with ConsumerSigMissing=true. Pre-set the flag
+		// in the body now so the seeder sig is verified over the exact same
+		// bytes that will be stored in the ledger, ensuring ledger re-
+		// verification passes.
+		ConsumerSigMissing: true, // TODO(broker-followup): T17.5 — clear when consumer sig is verified
 	})
 	if berr != nil {
 		return nil, berr
