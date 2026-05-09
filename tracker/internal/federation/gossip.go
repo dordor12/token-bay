@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"errors"
 
 	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
@@ -90,5 +89,3 @@ func (g *Gossip) Forward(ctx context.Context, kind fed.Kind, payload []byte, exc
 type staticPeerSet []SendOnlyPeer
 
 func (s staticPeerSet) ActivePeers() []SendOnlyPeer { return []SendOnlyPeer(s) }
-
-var _ = errors.New
