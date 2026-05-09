@@ -20,6 +20,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Token-Bay plugin sidecar",
 	}
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newRunCmd())
 	return root
 }
 
