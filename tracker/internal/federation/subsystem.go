@@ -103,31 +103,46 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	f.listenCancel = cancel
 	go func() { _ = dep.Transport.Listen(ctx, f.acceptInbound) }()
 
-	// Dial each operator-allowlisted peer in a goroutine. The dialer
-	// runs the dialer-side handshake and, on success, attaches a Peer
-	// recv loop. Dials that fail are logged + counted; redial is the
-	// real-transport slice's concern, but for the in-process transport
-	// the listener is already up by the time we dial (synchronous Listen
-	// registration in the hub).
+	// Dial each operator-allowlisted peer in a Dialer goroutine. The
+	// Dialer redials with exponential backoff after every drop; its
+	// OnConnected callback runs the federation handshake and blocks on
+	// the recvLoop, returning when the peer drops so the dialer
+	// reconnects.
 	for _, p := range cfg.Peers {
-		go f.dialOutbound(ctx, p)
+		d := &Dialer{
+			Transport:   dep.Transport,
+			Peer:        p,
+			MyTrackerID: cfg.MyTrackerID,
+			MyPriv:      cfg.MyPriv,
+			HandshakeTO: cfg.HandshakeTimeout,
+			BackoffBase: cfg.RedialBase,
+			BackoffMax:  cfg.RedialMax,
+			Now:         dep.Now,
+			OnConnected: f.attachAndWait(p),
+			OnFailure: func(reason string, _ error) {
+				dep.Metrics.InvalidFrames(reason)
+			},
+		}
+		go d.Run(ctx)
 	}
 	return f, nil
 }
 
-func (f *Federation) dialOutbound(ctx context.Context, p AllowlistedPeer) {
-	conn, err := f.dep.Transport.Dial(ctx, p.Addr, p.PubKey)
-	if err != nil {
-		f.dep.Metrics.InvalidFrames("dial")
-		return
+// attachAndWait returns an OnConnected callback for the Dialer. The
+// callback runs the dialer-side federation handshake on the supplied
+// PeerConn and, on success, attaches the peer to the registry and waits
+// for its recvLoop to exit. Returning unblocks the Dialer's redial loop.
+func (f *Federation) attachAndWait(p AllowlistedPeer) func(PeerConn) {
+	return func(c PeerConn) {
+		res, err := RunHandshakeDialer(f.listenCtx, c, f.cfg.MyTrackerID, f.cfg.MyPriv, p.TrackerID, p.PubKey, f.cfg.HandshakeTimeout)
+		if err != nil {
+			f.dep.Metrics.InvalidFrames("handshake")
+			_ = c.Close()
+			return
+		}
+		pe := f.attachPeerLocked(res, c)
+		pe.Wait()
 	}
-	res, err := RunHandshakeDialer(ctx, conn, f.cfg.MyTrackerID, f.cfg.MyPriv, p.TrackerID, p.PubKey, f.cfg.HandshakeTimeout)
-	if err != nil {
-		f.dep.Metrics.InvalidFrames("handshake")
-		_ = conn.Close()
-		return
-	}
-	f.attachPeer(res, conn)
 }
 
 // Peers is the operator-facing snapshot of all known peers.
@@ -147,6 +162,17 @@ func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
 // PublishHour drives a single publisher tick.
 func (f *Federation) PublishHour(ctx context.Context, hour uint64) error {
 	return f.pub.PublishHour(ctx, hour)
+}
+
+// ListenAddr returns the bound network address of the underlying
+// transport, or "" if the transport is not network-bound (e.g. the
+// in-process transport). Used by tests dialing 127.0.0.1:0 binds and
+// by operator admin endpoints reporting the active peering port.
+func (f *Federation) ListenAddr() string {
+	if l, ok := f.dep.Transport.(interface{ ListenAddr() string }); ok {
+		return l.ListenAddr()
+	}
+	return ""
 }
 
 // Close shuts down the subsystem, stopping all peer goroutines and closing
@@ -186,6 +212,13 @@ func (f *Federation) acceptInbound(c PeerConn) {
 }
 
 func (f *Federation) attachPeer(res HandshakeResult, c PeerConn) {
+	f.attachPeerLocked(res, c)
+}
+
+// attachPeerLocked is the shared body of attachPeer + the Dialer's
+// OnConnected hook. Returns the *Peer so callers can Wait() on its
+// recvLoop. Lock order: f.mu > reg.mu (see Registry).
+func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	dispatch := f.makeDispatcher(c, res.PeerTrackerID)
 	pe := NewPeerForTest(c, dispatch)
 	f.mu.Lock()
@@ -193,6 +226,7 @@ func (f *Federation) attachPeer(res HandshakeResult, c PeerConn) {
 	_ = f.reg.Update(PeerInfo{TrackerID: res.PeerTrackerID, PubKey: res.PeerPubKey, Addr: c.RemoteAddr(), State: PeerStateSteady, Conn: c})
 	f.mu.Unlock()
 	pe.Start(context.Background())
+	return pe
 }
 
 // makeDispatcher returns the recvLoop callback for one peer. The
