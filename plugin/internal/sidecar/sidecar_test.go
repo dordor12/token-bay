@@ -94,7 +94,10 @@ func TestRun_RejectsAfterClose(t *testing.T) {
 
 func TestRun_CCProxyBindErrorPropagates(t *testing.T) {
 	deps := validDeps(t)
-	deps.CCProxyAddr = "127.0.0.1:1" // privileged port — bind fails for non-root
+	// Port 99999 is out of the 0-65535 range, so net.Listen rejects it
+	// synchronously with a parse error on every platform — portable
+	// alternative to the unix-only "privileged port" trick.
+	deps.CCProxyAddr = "127.0.0.1:99999"
 	app, err := New(deps)
 	require.NoError(t, err)
 
