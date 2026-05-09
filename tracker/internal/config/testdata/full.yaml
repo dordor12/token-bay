@@ -49,6 +49,10 @@ federation:
   gossip_rate_qps: 100
   send_queue_depth: 256
   publish_cadence_s: 3600
+  listen_addr: ":7443"
+  idle_timeout_s: 60
+  redial_base_s: 1
+  redial_max_s: 30
   peers:
     - tracker_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       pubkey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

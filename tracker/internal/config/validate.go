@@ -261,6 +261,24 @@ func (v *validator) checkFederation(c *Config) {
 		v.add("federation.publish_cadence_s",
 			"must be 60..86400, got "+strconv.Itoa(c.Federation.PublishCadenceS))
 	}
+	if c.Federation.IdleTimeoutS < 1 || c.Federation.IdleTimeoutS > 600 {
+		v.add("federation.idle_timeout_s",
+			"must be 1..600, got "+strconv.Itoa(c.Federation.IdleTimeoutS))
+	}
+	if c.Federation.RedialBaseS < 1 || c.Federation.RedialBaseS > 60 {
+		v.add("federation.redial_base_s",
+			"must be 1..60, got "+strconv.Itoa(c.Federation.RedialBaseS))
+	}
+	if c.Federation.RedialMaxS < c.Federation.RedialBaseS || c.Federation.RedialMaxS > 600 {
+		v.add("federation.redial_max_s",
+			"must be >= redial_base_s and <= 600, got "+strconv.Itoa(c.Federation.RedialMaxS))
+	}
+	if c.Federation.ListenAddr != "" {
+		if _, _, err := net.SplitHostPort(c.Federation.ListenAddr); err != nil {
+			v.add("federation.listen_addr",
+				"invalid host:port ("+err.Error()+")")
+		}
+	}
 	seen := make(map[string]struct{}, len(c.Federation.Peers))
 	for i, p := range c.Federation.Peers {
 		if len(p.TrackerID) != 64 {

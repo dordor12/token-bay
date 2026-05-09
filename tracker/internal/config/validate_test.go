@@ -659,6 +659,47 @@ func TestValidate_Federation_PublishCadenceBounds(t *testing.T) {
 	require.ErrorContains(t, Validate(cfg), "publish_cadence_s")
 }
 
+func TestValidate_Federation_IdleTimeoutBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.IdleTimeoutS = 0
+	require.ErrorContains(t, Validate(cfg), "idle_timeout_s")
+	cfg = validConfig(t)
+	cfg.Federation.IdleTimeoutS = 601
+	require.ErrorContains(t, Validate(cfg), "idle_timeout_s")
+}
+
+func TestValidate_Federation_RedialMaxLowerBound(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.RedialBaseS = 5
+	cfg.Federation.RedialMaxS = 4
+	require.ErrorContains(t, Validate(cfg), "redial_max_s")
+}
+
+func TestValidate_Federation_RedialBaseBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.RedialBaseS = 0
+	require.ErrorContains(t, Validate(cfg), "redial_base_s")
+	cfg = validConfig(t)
+	cfg.Federation.RedialBaseS = 61
+	require.ErrorContains(t, Validate(cfg), "redial_base_s")
+}
+
+func TestValidate_Federation_ListenAddr_Hostport(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.ListenAddr = "not-a-hostport"
+	require.ErrorContains(t, Validate(cfg), "listen_addr")
+	cfg = validConfig(t)
+	cfg.Federation.ListenAddr = ":7443"
+	require.NoError(t, Validate(cfg))
+	cfg = validConfig(t)
+	cfg.Federation.ListenAddr = ""
+	require.NoError(t, Validate(cfg))
+}
+
 func TestValidate_Federation_PeerHexLength(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)

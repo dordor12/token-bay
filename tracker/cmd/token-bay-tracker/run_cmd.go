@@ -121,12 +121,30 @@ func newRunCmd() *cobra.Command {
 			}
 			defer brokerSubs.Close() //nolint:errcheck
 
-			// federation: in-process transport in v1; real-QUIC peer
-			// transport ships in a follow-up subsystem. Effectively dormant
-			// when cfg.Federation.Peers is empty.
-			fedHub := federation.NewInprocHub()
+			// federation: select QUICTransport when ListenAddr is set, else
+			// fall back to the in-process transport (which keeps the
+			// subsystem dormant — no real network presence — when peers
+			// are not configured).
 			trackerPub := trackerKey.Public().(ed25519.PublicKey)
-			fedTransport := federation.NewInprocTransport(fedHub, "self", trackerPub, trackerKey)
+			var fedTransport federation.Transport
+			if cfg.Federation.ListenAddr != "" {
+				fedCert, err := federation.CertFromIdentity(trackerKey)
+				if err != nil {
+					return fmt.Errorf("federation cert: %w", err)
+				}
+				fedTransport, err = federation.NewQUICTransport(federation.QUICConfig{
+					ListenAddr:  cfg.Federation.ListenAddr,
+					IdleTimeout: time.Duration(cfg.Federation.IdleTimeoutS) * time.Second,
+					Cert:        fedCert,
+					HandshakeTO: time.Duration(cfg.Federation.HandshakeTimeoutS) * time.Second,
+				})
+				if err != nil {
+					return fmt.Errorf("federation transport: %w", err)
+				}
+			} else {
+				fedHub := federation.NewInprocHub()
+				fedTransport = federation.NewInprocTransport(fedHub, "self", trackerPub, trackerKey)
+			}
 			fedPeers := make([]federation.AllowlistedPeer, 0, len(cfg.Federation.Peers))
 			for _, p := range cfg.Federation.Peers {
 				tid, err := hexToTrackerID(p.TrackerID)
@@ -149,6 +167,9 @@ func newRunCmd() *cobra.Command {
 				SendQueueDepth:   cfg.Federation.SendQueueDepth,
 				GossipRateQPS:    cfg.Federation.GossipRateQPS,
 				PublishCadence:   time.Duration(cfg.Federation.PublishCadenceS) * time.Second,
+				IdleTimeout:      time.Duration(cfg.Federation.IdleTimeoutS) * time.Second,
+				RedialBase:       time.Duration(cfg.Federation.RedialBaseS) * time.Second,
+				RedialMax:        time.Duration(cfg.Federation.RedialMaxS) * time.Second,
 				Peers:            fedPeers,
 			}, federation.Deps{
 				Transport: fedTransport,

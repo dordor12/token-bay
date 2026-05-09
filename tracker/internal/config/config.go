@@ -89,6 +89,10 @@ type FederationConfig struct {
 	GossipRateQPS     int              `yaml:"gossip_rate_qps"`
 	SendQueueDepth    int              `yaml:"send_queue_depth"`
 	PublishCadenceS   int              `yaml:"publish_cadence_s"`
+	ListenAddr        string           `yaml:"listen_addr"`
+	IdleTimeoutS      int              `yaml:"idle_timeout_s"`
+	RedialBaseS       int              `yaml:"redial_base_s"`
+	RedialMaxS        int              `yaml:"redial_max_s"`
 	Peers             []FederationPeer `yaml:"peers"`
 }
 
@@ -228,6 +232,10 @@ func DefaultConfig() *Config {
 			GossipRateQPS:         100,
 			SendQueueDepth:        256,
 			PublishCadenceS:       3600,
+			ListenAddr:            "", // empty disables QUIC peering; in-process transport falls back
+			IdleTimeoutS:          60,
+			RedialBaseS:           1,
+			RedialMaxS:            30,
 			// Peers defaults to nil — operator-managed.
 		},
 		Reputation: ReputationConfig{

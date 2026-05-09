@@ -30,6 +30,9 @@ type Config struct {
 	GossipRateQPS    int           // default 100 (informational; Forward is best-effort)
 	SendQueueDepth   int           // default 256
 	PublishCadence   time.Duration // default 1h
+	IdleTimeout      time.Duration // default 60s; passed to QUIC MaxIdleTimeout
+	RedialBase       time.Duration // default 1s; per-peer redial initial backoff
+	RedialMax        time.Duration // default 30s; per-peer redial backoff cap
 	Peers            []AllowlistedPeer
 }
 
@@ -62,6 +65,18 @@ func (c Config) withDefaults() Config {
 	}
 	if c.PublishCadence == 0 {
 		c.PublishCadence = time.Hour
+	}
+	if c.IdleTimeout == 0 {
+		c.IdleTimeout = 60 * time.Second
+	}
+	if c.RedialBase == 0 {
+		c.RedialBase = time.Second
+	}
+	if c.RedialMax == 0 {
+		c.RedialMax = 30 * time.Second
+	}
+	if c.RedialMax < c.RedialBase {
+		c.RedialMax = c.RedialBase
 	}
 	return c
 }

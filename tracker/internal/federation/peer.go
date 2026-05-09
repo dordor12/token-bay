@@ -88,3 +88,8 @@ func (p *Peer) Stop() {
 		p.wg.Wait()
 	})
 }
+
+// Wait blocks until the recvLoop exits (Stop has been called or the
+// transport's Recv returned a terminal error). Used by the Dialer to
+// observe connection drops and re-enter the redial loop. Idempotent.
+func (p *Peer) Wait() { p.wg.Wait() }

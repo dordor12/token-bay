@@ -113,6 +113,17 @@ func ApplyDefaults(c *Config) {
 	if c.Federation.PublishCadenceS == 0 {
 		c.Federation.PublishCadenceS = d.Federation.PublishCadenceS
 	}
+	if c.Federation.IdleTimeoutS == 0 {
+		c.Federation.IdleTimeoutS = d.Federation.IdleTimeoutS
+	}
+	if c.Federation.RedialBaseS == 0 {
+		c.Federation.RedialBaseS = d.Federation.RedialBaseS
+	}
+	if c.Federation.RedialMaxS == 0 {
+		c.Federation.RedialMaxS = d.Federation.RedialMaxS
+	}
+	// ListenAddr: empty is a valid value (federation network-disabled),
+	// so ApplyDefaults does NOT fill it in.
 	// Peers: no default — operator-managed; leave nil if not set.
 
 	// Reputation
