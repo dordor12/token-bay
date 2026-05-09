@@ -74,6 +74,9 @@ func TestParseSessionEnd_AllFields_Succeeds(t *testing.T) {
 		"session_id": "s-9",
 		"transcript_path": "/tmp/t.jsonl",
 		"cwd": "/work",
+		"permission_mode": "default",
+		"agent_id": "a-7",
+		"agent_type": "code-reviewer",
 		"hook_event_name": "SessionEnd",
 		"reason": "logout"
 	}`)
@@ -82,6 +85,10 @@ func TestParseSessionEnd_AllFields_Succeeds(t *testing.T) {
 	assert.Equal(t, "s-9", p.SessionID)
 	assert.Equal(t, EventNameSessionEnd, p.HookEventName)
 	assert.Equal(t, "logout", p.Reason)
+	require.NotNil(t, p.AgentID)
+	assert.Equal(t, "a-7", *p.AgentID)
+	require.NotNil(t, p.AgentType)
+	assert.Equal(t, "code-reviewer", *p.AgentType)
 }
 
 func TestParseSessionEnd_WrongEvent_ReturnsError(t *testing.T) {
@@ -102,6 +109,9 @@ func TestParseUserPromptSubmit_AllFields_Succeeds(t *testing.T) {
 		"session_id": "s-7",
 		"transcript_path": "/tmp/t.jsonl",
 		"cwd": "/work",
+		"permission_mode": "default",
+		"agent_id": "a-3",
+		"agent_type": "general-purpose",
 		"hook_event_name": "UserPromptSubmit",
 		"prompt": "hello world"
 	}`)
@@ -110,6 +120,10 @@ func TestParseUserPromptSubmit_AllFields_Succeeds(t *testing.T) {
 	assert.Equal(t, "s-7", p.SessionID)
 	assert.Equal(t, EventNameUserPromptSubmit, p.HookEventName)
 	assert.Equal(t, "hello world", p.Prompt)
+	require.NotNil(t, p.AgentID)
+	assert.Equal(t, "a-3", *p.AgentID)
+	require.NotNil(t, p.AgentType)
+	assert.Equal(t, "general-purpose", *p.AgentType)
 }
 
 func TestParseUserPromptSubmit_WrongEvent_ReturnsError(t *testing.T) {

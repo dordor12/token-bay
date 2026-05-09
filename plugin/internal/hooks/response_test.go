@@ -51,6 +51,28 @@ func TestResponse_Encode_PopulatedFields(t *testing.T) {
 	assert.Equal(t, "tracker-down", got["reason"])
 }
 
+func TestResponse_Encode_HookSpecificOutputRoundTrips(t *testing.T) {
+	// SessionStartHookSpecificOutputSchema (coreSchemas.ts:823):
+	//   { hookEventName: 'SessionStart', additionalContext?: string, ... }
+	r := Response{
+		HookSpecificOutput: []byte(`{"hookEventName":"SessionStart","additionalContext":"token-bay active"}`),
+	}
+	var buf bytes.Buffer
+	require.NoError(t, r.Encode(&buf))
+	got := decodeResponseMap(t, buf.Bytes())
+	hso, ok := got["hookSpecificOutput"].(map[string]any)
+	require.True(t, ok, "hookSpecificOutput should be an object")
+	assert.Equal(t, "SessionStart", hso["hookEventName"])
+	assert.Equal(t, "token-bay active", hso["additionalContext"])
+}
+
+func decodeResponseMap(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	require.NoError(t, json.Unmarshal(raw, &out))
+	return out
+}
+
 func TestDecision_Constants_PinnedToSchema(t *testing.T) {
 	// SyncHookJSONOutputSchema constrains decision to enum(['approve', 'block'])
 	// at coreSchemas.ts:914. Constants must match those literals exactly.

@@ -25,25 +25,27 @@ type SessionStartPayload struct {
 // SessionEndPayload mirrors SessionEndHookInputSchema (coreSchemas.ts:758).
 // Reason is one of EXIT_REASONS ("clear", "resume", "logout",
 // "prompt_input_exit", "other", "bypass_permissions_disabled"); kept as
-// string for forward-compat.
+// string for forward-compat. AgentType comes from BaseHookInputSchema.
 type SessionEndPayload struct {
 	SessionID      string  `json:"session_id"`
 	TranscriptPath string  `json:"transcript_path"`
 	CWD            string  `json:"cwd"`
 	PermissionMode *string `json:"permission_mode,omitempty"`
 	AgentID        *string `json:"agent_id,omitempty"`
+	AgentType      *string `json:"agent_type,omitempty"`
 	HookEventName  string  `json:"hook_event_name"`
 	Reason         string  `json:"reason"`
 }
 
 // UserPromptSubmitPayload mirrors UserPromptSubmitHookInputSchema
-// (coreSchemas.ts:484).
+// (coreSchemas.ts:484). AgentType comes from BaseHookInputSchema.
 type UserPromptSubmitPayload struct {
 	SessionID      string  `json:"session_id"`
 	TranscriptPath string  `json:"transcript_path"`
 	CWD            string  `json:"cwd"`
 	PermissionMode *string `json:"permission_mode,omitempty"`
 	AgentID        *string `json:"agent_id,omitempty"`
+	AgentType      *string `json:"agent_type,omitempty"`
 	HookEventName  string  `json:"hook_event_name"`
 	Prompt         string  `json:"prompt"`
 }

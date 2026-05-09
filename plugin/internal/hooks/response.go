@@ -5,6 +5,15 @@ import (
 	"io"
 )
 
+// HookSpecificOutput is the per-event output union from
+// SyncHookJSONOutputSchema (coreSchemas.ts:915). Each member carries
+// `hookEventName` plus event-specific fields (e.g. `additionalContext` on
+// UserPromptSubmit/SessionStart). Kept as opaque json.RawMessage because the
+// plugin's v0 hook contract emits an empty Response — when a future flow
+// wants to add a Setup-time additionalContext or similar, it can construct
+// the union member directly and assign here.
+type HookSpecificOutput = json.RawMessage
+
 // Decision is the synchronous-output decision enum from
 // SyncHookJSONOutputSchema (coreSchemas.ts:914) — "approve" or "block".
 // Other values are not valid wire output and the host Claude Code will
@@ -22,12 +31,13 @@ const (
 // every plugin hook should emit unless it explicitly wants to influence the
 // host's behavior. Field tags match the camelCase wire form.
 type Response struct {
-	Continue       *bool     `json:"continue,omitempty"`
-	SuppressOutput *bool     `json:"suppressOutput,omitempty"`
-	StopReason     *string   `json:"stopReason,omitempty"`
-	Decision       *Decision `json:"decision,omitempty"`
-	SystemMessage  *string   `json:"systemMessage,omitempty"`
-	Reason         *string   `json:"reason,omitempty"`
+	Continue           *bool              `json:"continue,omitempty"`
+	SuppressOutput     *bool              `json:"suppressOutput,omitempty"`
+	StopReason         *string            `json:"stopReason,omitempty"`
+	Decision           *Decision          `json:"decision,omitempty"`
+	SystemMessage      *string            `json:"systemMessage,omitempty"`
+	Reason             *string            `json:"reason,omitempty"`
+	HookSpecificOutput HookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 }
 
 // EmptyResponse returns a zero-value Response. Useful as the default
