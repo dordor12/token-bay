@@ -65,14 +65,15 @@ func runFullClaudeContinuation(t *testing.T, system string, convo []ccbridge.Mes
 // model's final assistant text — the seeder's answer.
 func runBridgeContinuation(t *testing.T, system string, convo []ccbridge.Message, model string) string {
 	t.Helper()
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: claudeBin(t)})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: claudeBin(t), SeederRoot: t.TempDir()})
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	var sink bytes.Buffer
 	_, err := bridge.Serve(ctx, ccbridge.Request{
-		System:   system,
-		Messages: convo,
-		Model:    model,
+		System:       system,
+		Messages:     convo,
+		Model:        model,
+		ClientPubkey: testClientPubkey(t.Name()),
 	}, &sink)
 	require.NoError(t, err, "bridge.Serve failed; sink: %s", sink.String())
 	return finalAssistantText(sink.String())

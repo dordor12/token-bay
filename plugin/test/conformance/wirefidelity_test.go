@@ -211,13 +211,14 @@ func assertLastWireBodiesEqual(t *testing.T, system string, convo []ccbridge.Mes
 	userLast := userConvBodies[len(userConvBodies)-1]
 
 	// (2) Same convo through the bridge.
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: claudeBin(t)})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: claudeBin(t), SeederRoot: t.TempDir()})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	_, err := bridge.Serve(ctx, ccbridge.Request{
-		System:   system,
-		Messages: convo,
-		Model:    model,
+		System:       system,
+		Messages:     convo,
+		Model:        model,
+		ClientPubkey: testClientPubkey(t.Name()),
 	}, io.Discard)
 	require.NoError(t, err)
 	bridgeConvBodies := filterConversationBodies(proxy.drainBodies())

@@ -16,6 +16,7 @@ package conformance
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -25,11 +26,23 @@ import (
 	"testing"
 	"time"
 
+	"crypto/ed25519"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 )
+
+// testClientPubkey derives a synthetic Ed25519 public key from a test
+// name. The key is deterministic so the same test name always maps to
+// the same per-client directory, giving each test isolation.
+func testClientPubkey(name string) ed25519.PublicKey {
+	sum := sha256.Sum256([]byte(name))
+	out := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	copy(out, sum[:])
+	return out
+}
 
 // fullCorpus is the adversarial-prompt set asserted to produce no
 // observable tool invocations.
@@ -127,7 +140,7 @@ func TestBridgeConformance_AirtightFlagSet(t *testing.T) {
 	sentinel := filepath.Join(sandbox, "sentinel")
 	require.NoError(t, os.WriteFile(sentinel, []byte("sentinel-v1"), 0o600))
 
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
 
 	for i, prompt := range fullCorpus {
 		t.Run(promptLabel(i, prompt), func(t *testing.T) {
@@ -136,8 +149,9 @@ func TestBridgeConformance_AirtightFlagSet(t *testing.T) {
 
 			var sink strings.Builder
 			_, err := bridge.Serve(ctx, ccbridge.Request{
-				Messages: []ccbridge.Message{{Role: ccbridge.RoleUser, Content: prompt}},
-				Model:    probeModel,
+				Messages:     []ccbridge.Message{{Role: ccbridge.RoleUser, Content: ccbridge.TextContent(prompt)}},
+				Model:        probeModel,
+				ClientPubkey: testClientPubkey(t.Name()),
 			}, &sink)
 			out := sink.String()
 			// Airtight property: the init event's available-tools
@@ -160,16 +174,17 @@ func TestBridgeConformance_AirtightFlagSet(t *testing.T) {
 // known anchor token; we assert the anchor appears verbatim.
 func TestBridgeContext_SystemPromptReachesModel(t *testing.T) {
 	bin := claudeBin(t)
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var sink strings.Builder
 	_, err := bridge.Serve(ctx, ccbridge.Request{
-		System:   "Always begin your reply with the literal token APRICOT and nothing before it.",
-		Messages: []ccbridge.Message{{Role: ccbridge.RoleUser, Content: "say hello"}},
-		Model:    probeModel,
+		System:       "Always begin your reply with the literal token APRICOT and nothing before it.",
+		Messages:     []ccbridge.Message{{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("say hello")}},
+		Model:        probeModel,
+		ClientPubkey: testClientPubkey(t.Name()),
 	}, &sink)
 	require.NoError(t, err)
 
@@ -184,16 +199,17 @@ func TestBridgeContext_SystemPromptReachesModel(t *testing.T) {
 // inside the user content; instructs the model to echo it back.
 func TestBridgeContext_UserMessageContentReachesModel(t *testing.T) {
 	bin := claudeBin(t)
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	var sink strings.Builder
 	_, err := bridge.Serve(ctx, ccbridge.Request{
-		System:   "When the user gives you a marker token, reply with that token only and nothing else.",
-		Messages: []ccbridge.Message{{Role: ccbridge.RoleUser, Content: "marker MANGOSTEEN-42"}},
-		Model:    probeModel,
+		System:       "When the user gives you a marker token, reply with that token only and nothing else.",
+		Messages:     []ccbridge.Message{{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("marker MANGOSTEEN-42")}},
+		Model:        probeModel,
+		ClientPubkey: testClientPubkey(t.Name()),
 	}, &sink)
 	require.NoError(t, err)
 
@@ -210,7 +226,7 @@ func TestBridgeContext_UserMessageContentReachesModel(t *testing.T) {
 // final user message.
 func TestBridgeContext_MultiTurnRecallsPriorAssistantTurn(t *testing.T) {
 	bin := claudeBin(t)
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -219,11 +235,12 @@ func TestBridgeContext_MultiTurnRecallsPriorAssistantTurn(t *testing.T) {
 	_, err := bridge.Serve(ctx, ccbridge.Request{
 		System: "You are a helpful assistant participating in a multi-turn conversation. Use prior turns as context.",
 		Messages: []ccbridge.Message{
-			{Role: ccbridge.RoleUser, Content: "hi, what is your code-name?"},
-			{Role: ccbridge.RoleAssistant, Content: "My code-name in this session is XYLOPHONE-77."},
-			{Role: ccbridge.RoleUser, Content: "What was the code-name you mentioned earlier? Reply with that token only."},
+			{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("hi, what is your code-name?")},
+			{Role: ccbridge.RoleAssistant, Content: ccbridge.TextContent("My code-name in this session is XYLOPHONE-77.")},
+			{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("What was the code-name you mentioned earlier? Reply with that token only.")},
 		},
-		Model: probeModel,
+		Model:        probeModel,
+		ClientPubkey: testClientPubkey(t.Name()),
 	}, &sink)
 	require.NoError(t, err)
 
