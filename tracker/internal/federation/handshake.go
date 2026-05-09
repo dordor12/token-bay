@@ -87,7 +87,10 @@ func sendPeerAuth(ctx context.Context, conn PeerConn, priv ed25519.PrivateKey, m
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
-	return conn.Send(ctx, frame)
+	if err := conn.Send(ctx, frame); err != nil {
+		return fmt.Errorf("%w: send peer_auth: %v", ErrHandshakeFailed, err)
+	}
+	return nil
 }
 
 // validatePeerHello unmarshals + validates a peer's Hello envelope, looks
@@ -152,7 +155,10 @@ func sendAccept(ctx context.Context, conn PeerConn, priv ed25519.PrivateKey, myI
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
-	return conn.Send(ctx, frame)
+	if err := conn.Send(ctx, frame); err != nil {
+		return fmt.Errorf("%w: send accept: %v", ErrHandshakeFailed, err)
+	}
+	return nil
 }
 
 // RunHandshakeDialer is called by the side that initiated the connection.
