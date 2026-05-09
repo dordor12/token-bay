@@ -62,8 +62,11 @@ func ValidateRootAttestation(m *RootAttestation) error {
 	if m == nil {
 		return errors.New("federation: nil RootAttestation")
 	}
-	if len(m.TrackerId) != trackerIDLen || allZero(m.TrackerId) {
-		return fmt.Errorf("federation: root_attestation.tracker_id invalid")
+	if len(m.TrackerId) != trackerIDLen {
+		return fmt.Errorf("federation: root_attestation.tracker_id len %d != %d", len(m.TrackerId), trackerIDLen)
+	}
+	if allZero(m.TrackerId) {
+		return errors.New("federation: root_attestation.tracker_id is all zero")
 	}
 	if m.Hour == 0 {
 		return errors.New("federation: root_attestation.hour must be > 0")
@@ -84,11 +87,17 @@ func ValidateEquivocationEvidence(m *EquivocationEvidence) error {
 	if len(m.TrackerId) != trackerIDLen {
 		return fmt.Errorf("federation: evidence.tracker_id len %d != %d", len(m.TrackerId), trackerIDLen)
 	}
-	if len(m.RootA) != rootLen || len(m.RootB) != rootLen {
-		return errors.New("federation: evidence.root_a/b must be 32 bytes")
+	if len(m.RootA) != rootLen {
+		return fmt.Errorf("federation: evidence.root_a len %d != %d", len(m.RootA), rootLen)
 	}
-	if len(m.SigA) != sigLen || len(m.SigB) != sigLen {
-		return errors.New("federation: evidence.sig_a/b must be 64 bytes")
+	if len(m.RootB) != rootLen {
+		return fmt.Errorf("federation: evidence.root_b len %d != %d", len(m.RootB), rootLen)
+	}
+	if len(m.SigA) != sigLen {
+		return fmt.Errorf("federation: evidence.sig_a len %d != %d", len(m.SigA), sigLen)
+	}
+	if len(m.SigB) != sigLen {
+		return fmt.Errorf("federation: evidence.sig_b len %d != %d", len(m.SigB), sigLen)
 	}
 	if bytes.Equal(m.RootA, m.RootB) {
 		return errors.New("federation: evidence.root_a == root_b (no equivocation)")

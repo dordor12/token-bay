@@ -61,12 +61,13 @@ func TestValidateRootAttestation_Valid(t *testing.T) {
 func TestValidateRootAttestation_Errors(t *testing.T) {
 	t.Parallel()
 	cases := map[string]*fed.RootAttestation{
-		"nil":             nil,
-		"tracker_id_len":  {TrackerId: b(31, 1), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
-		"tracker_id_zero": {TrackerId: make([]byte, 32), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
-		"hour_zero":       {TrackerId: b(32, 1), Hour: 0, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
-		"root_len":        {TrackerId: b(32, 1), Hour: 1, MerkleRoot: b(31, 3), TrackerSig: b(64, 4)},
-		"sig_len":         {TrackerId: b(32, 1), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(63, 4)},
+		"nil":                 nil,
+		"tracker_id_len":      {TrackerId: b(31, 1), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
+		"tracker_id_len_only": {TrackerId: b(31, 1), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
+		"tracker_id_zero":     {TrackerId: make([]byte, 32), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
+		"hour_zero":           {TrackerId: b(32, 1), Hour: 0, MerkleRoot: b(32, 3), TrackerSig: b(64, 4)},
+		"root_len":            {TrackerId: b(32, 1), Hour: 1, MerkleRoot: b(31, 3), TrackerSig: b(64, 4)},
+		"sig_len":             {TrackerId: b(32, 1), Hour: 1, MerkleRoot: b(32, 3), TrackerSig: b(63, 4)},
 	}
 	for name, m := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -93,6 +94,8 @@ func TestValidateEquivocationEvidence_Errors(t *testing.T) {
 	cases := map[string]*fed.EquivocationEvidence{
 		"nil":         nil,
 		"roots_equal": {TrackerId: b(32, 1), Hour: 1, RootA: b(32, 9), SigA: b(64, 9), RootB: b(32, 9), SigB: b(64, 9)},
+		"root_a_len":  {TrackerId: b(32, 1), Hour: 1, RootA: b(31, 9), SigA: b(64, 9), RootB: b(32, 8), SigB: b(64, 8)},
+		"root_b_len":  {TrackerId: b(32, 1), Hour: 1, RootA: b(32, 9), SigA: b(64, 9), RootB: b(31, 8), SigB: b(64, 8)},
 		"sig_a_len":   {TrackerId: b(32, 1), Hour: 1, RootA: b(32, 9), SigA: b(63, 9), RootB: b(32, 8), SigB: b(64, 8)},
 		"sig_b_len":   {TrackerId: b(32, 1), Hour: 1, RootA: b(32, 9), SigA: b(64, 9), RootB: b(32, 8), SigB: b(63, 8)},
 	}
