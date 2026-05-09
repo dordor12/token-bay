@@ -16,6 +16,7 @@ func TestErrSentinelsAreDistinct(t *testing.T) {
 		federation.ErrFrameTooLarge,
 		federation.ErrHandshakeFailed,
 		federation.ErrEquivocation,
+		federation.ErrPeerExists,
 	}
 	for i, a := range cases {
 		for j, b := range cases {

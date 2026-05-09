@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -95,7 +96,7 @@ func (r *Registry) Add(p PeerInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.peers[p.TrackerID]; ok {
-		return fmt.Errorf("registry: duplicate tracker_id %x", p.TrackerID.Bytes())
+		return fmt.Errorf("%w: tracker_id %x", ErrPeerExists, p.TrackerID.Bytes())
 	}
 	r.peers[p.TrackerID] = p
 	return nil
@@ -127,13 +128,19 @@ func (r *Registry) IsActive(id ids.TrackerID) bool {
 	return ok && p.State == PeerStateSteady
 }
 
-// All returns a copy slice of all known peers.
+// All returns a value-copy snapshot of all known peers. The returned
+// PeerInfo values have PubKey deep-copied and Conn nilled — callers
+// cannot use the snapshot to mutate registry state or perform I/O on
+// active connections.
 func (r *Registry) All() []PeerInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]PeerInfo, 0, len(r.peers))
 	for _, p := range r.peers {
-		out = append(out, p)
+		cp := p
+		cp.PubKey = bytes.Clone(p.PubKey)
+		cp.Conn = nil // Conn is a live interface; do not leak via snapshots.
+		out = append(out, cp)
 	}
 	return out
 }

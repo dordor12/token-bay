@@ -10,4 +10,5 @@ var (
 	ErrFrameTooLarge   = errors.New("federation: frame exceeds 1 MiB cap")
 	ErrHandshakeFailed = errors.New("federation: handshake failed")
 	ErrEquivocation    = errors.New("federation: equivocation detected")
+	ErrPeerExists      = errors.New("federation: peer already registered")
 )
