@@ -109,15 +109,22 @@ func (t *InprocTransport) Close() error {
 
 // inprocConn is one half of a paired connection. Send on left lands on
 // right.recv, and vice versa.
+//
+// Closure is signalled via a shared pairDone channel (one per pair) that
+// is closed once by the first side that calls Close(). Both sides select
+// on it so either Close() immediately unblocks all pending Send/Recv on
+// both ends — avoiding the race between a concurrent Close() and Send().
 type inprocConn struct {
 	myPub     ed25519.PublicKey
 	remotePub ed25519.PublicKey
 	addr      string
-	send      chan []byte // outbound; the *peer* reads this
-	recv      chan []byte // inbound
+	send      chan []byte   // outbound; the *peer* reads this
+	recv      chan []byte   // inbound
+	pairDone  chan struct{} // shared with peer; closed once by first Close()
 
 	mu     sync.Mutex
 	closed bool
+	once   *sync.Once // shared with peer to close pairDone exactly once
 }
 
 type inprocPair struct {
@@ -127,23 +134,29 @@ type inprocPair struct {
 func newInprocPair(localPub, remotePub ed25519.PublicKey) *inprocPair {
 	a := make(chan []byte, 16)
 	bb := make(chan []byte, 16)
-	left := &inprocConn{myPub: localPub, remotePub: remotePub, addr: "inproc-left", send: a, recv: bb}
-	right := &inprocConn{myPub: remotePub, remotePub: localPub, addr: "inproc-right", send: bb, recv: a}
+	done := make(chan struct{})
+	once := &sync.Once{}
+	left := &inprocConn{myPub: localPub, remotePub: remotePub, addr: "inproc-left", send: a, recv: bb, pairDone: done, once: once}
+	right := &inprocConn{myPub: remotePub, remotePub: localPub, addr: "inproc-right", send: bb, recv: a, pairDone: done, once: once}
 	return &inprocPair{left: left, right: right}
 }
 
-func (c *inprocConn) Send(ctx context.Context, frame []byte) (retErr error) {
+func (c *inprocConn) Send(ctx context.Context, frame []byte) error {
 	if len(frame) > MaxFrameBytes {
 		return ErrFrameTooLarge
 	}
-	defer func() {
-		if recover() != nil {
-			retErr = ErrPeerClosed
-		}
-	}()
+	// Fast-path: if this side is already closed, return immediately.
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ErrPeerClosed
+	}
 	select {
 	case c.send <- frame:
 		return nil
+	case <-c.pairDone:
+		return ErrPeerClosed
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -156,6 +169,8 @@ func (c *inprocConn) Recv(ctx context.Context) ([]byte, error) {
 			return nil, ErrPeerClosed
 		}
 		return f, nil
+	case <-c.pairDone:
+		return nil, ErrPeerClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -166,13 +181,12 @@ func (c *inprocConn) RemotePub() ed25519.PublicKey { return c.remotePub }
 
 func (c *inprocConn) Close() error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed {
-		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
-	c.mu.Unlock()
-	close(c.send)
+	c.once.Do(func() { close(c.pairDone) })
 	return nil
 }
 

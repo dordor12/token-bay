@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 
 // fakeArchive implements federation.PeerRootArchive in-memory.
 type fakeArchive struct {
+	mu             sync.Mutex
 	rows           map[string]storage.PeerRoot // key = trackerID|hour
 	conflictOnNext bool
 }
@@ -28,15 +30,27 @@ func (f *fakeArchive) key(id []byte, h uint64) string {
 }
 
 func (f *fakeArchive) PutPeerRoot(_ context.Context, p storage.PeerRoot) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.conflictOnNext {
 		f.conflictOnNext = false
 		return storage.ErrPeerRootConflict
 	}
-	f.rows[f.key(p.TrackerID, p.Hour)] = p
+	k := f.key(p.TrackerID, p.Hour)
+	if existing, ok := f.rows[k]; ok {
+		// Idempotent on identical rows; conflict on any difference.
+		if string(existing.Root) != string(p.Root) || string(existing.Sig) != string(p.Sig) {
+			return storage.ErrPeerRootConflict
+		}
+		return nil
+	}
+	f.rows[k] = p
 	return nil
 }
 
 func (f *fakeArchive) GetPeerRoot(_ context.Context, id []byte, h uint64) (storage.PeerRoot, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	r, ok := f.rows[f.key(id, h)]
 	return r, ok, nil
 }

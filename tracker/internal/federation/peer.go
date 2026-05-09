@@ -15,6 +15,7 @@ type Peer struct {
 	conn     PeerConn
 	dispatch func(*fed.Envelope)
 
+	mu        sync.Mutex // guards cancel
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	startOnce sync.Once
@@ -34,7 +35,9 @@ func NewPeerForTest(conn PeerConn, dispatch func(*fed.Envelope)) *Peer {
 func (p *Peer) Start(parent context.Context) {
 	p.startOnce.Do(func() {
 		ctx, cancel := context.WithCancel(parent)
+		p.mu.Lock()
 		p.cancel = cancel
+		p.mu.Unlock()
 		p.wg.Add(1)
 		go p.recvLoop(ctx)
 	})
@@ -75,8 +78,11 @@ func (p *Peer) Send(ctx context.Context, frame []byte) error {
 // waits for the goroutine to exit. Safe to call more than once.
 func (p *Peer) Stop() {
 	p.stopOnce.Do(func() {
-		if p.cancel != nil {
-			p.cancel()
+		p.mu.Lock()
+		cancel := p.cancel
+		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
 		}
 		_ = p.conn.Close()
 		p.wg.Wait()
