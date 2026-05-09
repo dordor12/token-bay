@@ -246,6 +246,39 @@ func (v *validator) checkFederation(c *Config) {
 	if c.Federation.EnrollRatePerMinPerIP < 1 {
 		v.add("federation.enroll_rate_per_min_per_ip", "must be >= 1")
 	}
+	if c.Federation.HandshakeTimeoutS <= 0 || c.Federation.HandshakeTimeoutS > 60 {
+		v.add("federation.handshake_timeout_s",
+			"must be 1..60, got "+strconv.Itoa(c.Federation.HandshakeTimeoutS))
+	}
+	if c.Federation.GossipRateQPS <= 0 || c.Federation.GossipRateQPS > 10_000 {
+		v.add("federation.gossip_rate_qps",
+			"must be 1..10000, got "+strconv.Itoa(c.Federation.GossipRateQPS))
+	}
+	if c.Federation.SendQueueDepth <= 0 || c.Federation.SendQueueDepth > 1<<20 {
+		v.add("federation.send_queue_depth", "out of range")
+	}
+	if c.Federation.PublishCadenceS < 60 || c.Federation.PublishCadenceS > 24*3600 {
+		v.add("federation.publish_cadence_s",
+			"must be 60..86400, got "+strconv.Itoa(c.Federation.PublishCadenceS))
+	}
+	seen := make(map[string]struct{}, len(c.Federation.Peers))
+	for i, p := range c.Federation.Peers {
+		if len(p.TrackerID) != 64 {
+			v.add("federation.peers["+strconv.Itoa(i)+"].tracker_id",
+				"must be 64 hex chars")
+		}
+		if len(p.PubKey) != 64 {
+			v.add("federation.peers["+strconv.Itoa(i)+"].pubkey",
+				"must be 64 hex chars")
+		}
+		if p.Addr == "" {
+			v.add("federation.peers["+strconv.Itoa(i)+"].addr", "empty")
+		}
+		if _, dup := seen[p.TrackerID]; dup {
+			v.add("federation.peers["+strconv.Itoa(i)+"].tracker_id", "duplicate")
+		}
+		seen[p.TrackerID] = struct{}{}
+	}
 }
 
 // §6.8
