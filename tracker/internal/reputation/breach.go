@@ -46,10 +46,8 @@ func (b BreachKind) ImmediateAction() State {
 
 // signalRole returns the role bucket the audit-trail row for this
 // breach should be filed under. v1 breaches are all consumer-side
-// (proof + replay) or seeder-side (seeder sig). Used by ingest.go's
-// RecordCategoricalBreach in a later task.
-//
-//nolint:unused // wired in Task 14 (RecordCategoricalBreach)
+// (proof + replay) or seeder-side (seeder sig). Used by
+// RecordCategoricalBreach in ingest.go.
 func (b BreachKind) signalRole() Role {
 	switch b {
 	case BreachInconsistentSeederSig:

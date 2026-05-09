@@ -125,3 +125,42 @@ func TestIngest_AfterCloseReturnsSentinel(t *testing.T) {
 	// OnLedgerEvent silently no-ops after close (no error return).
 	s.OnLedgerEvent(admission.LedgerEvent{Kind: admission.LedgerEventSettlement})
 }
+
+func TestIngest_RecordCategoricalBreach_OKtoAudit(t *testing.T) {
+	s := openForTest(t)
+	id := mkID(0xB1)
+	require.NoError(t,
+		s.RecordCategoricalBreach(id, BreachInvalidProofSignature))
+
+	st := s.Status(id)
+	require.Equal(t, StateAudit, st.State)
+	require.Len(t, st.Reasons, 1)
+	require.Equal(t, "breach", st.Reasons[0].Kind)
+	require.Equal(t, "invalid_proof_signature", st.Reasons[0].BreachKind)
+	require.False(t, s.IsFrozen(id))
+}
+
+func TestIngest_RecordCategoricalBreach_PublishesCacheUpdate(t *testing.T) {
+	s := openForTest(t)
+	id := mkID(0xB2)
+	require.NoError(t,
+		s.RecordCategoricalBreach(id, BreachInconsistentSeederSig))
+	score, ok := s.Score(id)
+	require.True(t, ok, "cache must be updated synchronously after a breach")
+	_ = score
+	require.False(t, s.IsFrozen(id))
+}
+
+func TestIngest_RecordCategoricalBreach_RejectsUnspecified(t *testing.T) {
+	s := openForTest(t)
+	require.Error(t,
+		s.RecordCategoricalBreach(mkID(0xB3), BreachUnspecified))
+}
+
+func TestIngest_RecordCategoricalBreach_AfterClose(t *testing.T) {
+	s := openForTest(t)
+	require.NoError(t, s.Close())
+	require.ErrorIs(t,
+		s.RecordCategoricalBreach(mkID(0xB4), BreachReplayConfirmedNonce),
+		ErrSubsystemClosed)
+}

@@ -2,6 +2,7 @@ package reputation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/token-bay/token-bay/shared/ids"
@@ -98,4 +99,94 @@ func (s *Subsystem) OnLedgerEvent(ev admission.LedgerEvent) {
 		// Transfers, starter grants, etc. are not signals reputation cares
 		// about in MVP. Silent ignore.
 	}
+}
+
+// RecordCategoricalBreach handles spec §6.2 events: it appends a
+// rep_events row and synchronously transitions the identity to the
+// breach's immediate-action state, then refreshes that identity's
+// cache entry.
+func (s *Subsystem) RecordCategoricalBreach(id ids.IdentityID, kind BreachKind) error {
+	if s.closed.Load() {
+		return ErrSubsystemClosed
+	}
+	if kind == BreachUnspecified {
+		return fmt.Errorf("reputation: RecordCategoricalBreach: BreachUnspecified")
+	}
+
+	s.breachMu.Lock()
+	defer s.breachMu.Unlock()
+
+	ctx := context.Background()
+	now := s.now()
+
+	if err := s.store.ensureState(ctx, id, now); err != nil {
+		return err
+	}
+	// SignalUnspecified — categorical breaches don't slot into a primary
+	// signal but still want a rep_events row for the audit trail. The
+	// evaluator filters them out by event_type.
+	if err := s.store.appendEvent(ctx, id, kind.signalRole(),
+		SignalUnspecified, 1.0, now); err != nil {
+		return err
+	}
+
+	target := kind.ImmediateAction()
+	reason := ReasonRecord{
+		Kind:       "breach",
+		BreachKind: kind.String(),
+		At:         now.Unix(),
+	}
+	if err := s.store.transition(ctx, id, target, reason, now); err != nil {
+		// canTransition rejects if already FROZEN; that's fine.
+		if errors.Is(err, errInvalidTransition) {
+			return nil
+		}
+		return err
+	}
+	return s.refreshOne(ctx, id)
+}
+
+// refreshOne updates a single identity's cache entry. Caller must hold
+// breachMu.
+func (s *Subsystem) refreshOne(ctx context.Context, id ids.IdentityID) error {
+	row, ok, err := s.store.readState(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	scores, _ := s.store.loadAllScores(ctx)
+	cur := s.cache.Load()
+	var prevSize int
+	if cur != nil {
+		prevSize = len(cur.states)
+	}
+	next := &scoreCache{states: make(map[idsKey]cachedEntry, prevSize+1)}
+	if cur != nil {
+		for k, v := range cur.states {
+			next.states[k] = v
+		}
+	}
+	sc, hasScore := scores[id]
+	if !hasScore {
+		// Use whatever was previously cached, or DefaultScore.
+		if cur != nil {
+			if prev, hit := cur.states[idsKey(id)]; hit {
+				sc = prev.Score
+			} else {
+				sc = s.cfg.DefaultScore
+			}
+		} else {
+			sc = s.cfg.DefaultScore
+		}
+	}
+	next.states[idsKey(id)] = cachedEntry{
+		State:  row.State,
+		Score:  sc,
+		Since:  row.Since,
+		Frozen: row.State == StateFrozen,
+	}
+	s.cache.Store(next)
+	return nil
 }

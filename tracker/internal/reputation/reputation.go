@@ -22,7 +22,7 @@ type Subsystem struct { //nolint:revive // package name is reputation; Subsystem
 	// breachMu guards categorical-breach transitions. The evaluator
 	// does not take this — it serializes itself by virtue of being a
 	// single goroutine.
-	breachMu sync.Mutex //nolint:unused // wired in Task 14
+	breachMu sync.Mutex
 
 	// cache is atomically swapped by the evaluator each cycle and
 	// snapshot-loaded on Open. Hot-path reads (Score / IsFrozen /
