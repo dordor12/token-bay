@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 )
 
 // Runner runs a single bridge invocation. Implementations stream the
@@ -36,12 +38,29 @@ func (e *ExitError) Error() string {
 var ErrUnsupportedPlatform = errors.New("ccbridge: bridge subprocess management unsupported on this platform")
 
 // ExecRunner is the default Runner. It exec.Commands BinaryPath with
-// argv from BuildArgv, in a fresh temp working directory, captures
+// argv from BuildArgv, in a per-client persistent directory, captures
 // stderr for diagnostic context on non-zero exit, and streams stdout
 // to sink as bytes arrive.
 type ExecRunner struct {
 	BinaryPath     string
 	MaxStderrBytes int
+	cachedVersion  string
+	// SeederRoot is the parent directory under which per-client
+	// session folders are created. Each client folder doubles as
+	// the subprocess HOME so claude finds the synthetic session
+	// file at <SeederRoot>/<ClientHash(pubkey)>/.claude/projects/
+	// <sanitized-cwd>/<sessionID>.jsonl. Defaults to
+	// filepath.Join(os.TempDir(), "ccbridge-seeder") when empty.
+	SeederRoot string
+}
+
+// resolveSeederRoot returns the effective root, applying the
+// default when SeederRoot is unset.
+func (r *ExecRunner) resolveSeederRoot() string {
+	if r.SeederRoot != "" {
+		return r.SeederRoot
+	}
+	return filepath.Join(os.TempDir(), "ccbridge-seeder")
 }
 
 func (r *ExecRunner) resolveBinary() string {

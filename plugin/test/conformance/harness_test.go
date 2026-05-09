@@ -16,6 +16,7 @@ package conformance
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -25,10 +26,23 @@ import (
 	"testing"
 	"time"
 
+	"crypto/ed25519"
+
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 )
+
+// testClientPubkey derives a synthetic Ed25519 public key from a test
+// name. The key is deterministic so the same test name always maps to
+// the same per-client directory, giving each test isolation.
+func testClientPubkey(name string) ed25519.PublicKey {
+	sum := sha256.Sum256([]byte(name))
+	out := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	copy(out, sum[:])
+	return out
+}
 
 // fullCorpus is the adversarial-prompt set asserted to produce no
 // observable tool invocations.
@@ -43,16 +57,15 @@ var fullCorpus = []string{
 }
 
 // streamEvent is a minimal shape sufficient to inspect stream-json
-// init events. The init event's `tools` array is the authoritative
-// list of tools the model can actually invoke. (We considered also
-// matching tool_use ↔ tool_result pairs to detect successful
-// executions, but that signal is model-non-deterministic; see the
-// comment under detectAvailableUnsafeTool for why init.tools is
-// sufficient.)
+// events emitted by claude. The init event's `tools` array is the
+// authoritative list of tools the model can actually invoke. The
+// `result` event's `result` text is the model's final response.
 type streamEvent struct {
-	Type    string   `json:"type"`
-	Subtype string   `json:"subtype"`
-	Tools   []string `json:"tools"`
+	Type      string   `json:"type"`
+	Subtype   string   `json:"subtype"`
+	Tools     []string `json:"tools"`
+	Result    string   `json:"result"`
+	SessionID string   `json:"session_id"`
 }
 
 // safeTools enumerates tool names that do not constitute a side-effect
@@ -86,30 +99,48 @@ func detectAvailableUnsafeTool(out string) string {
 	return ""
 }
 
-// (Earlier revisions also tried matching tool_result events back to
-// tool_use events by id and asserting only safeTools produced results.
-// That check turned out to be model-non-deterministic: the model
-// sometimes emits a tool_use call for a disallowed tool, the system
-// filters it before execution, and the filter response itself
-// arrives as a tool_result with is_error:true. The init.tools check
-// above is the deterministic, model-independent property we want.)
+// lastResultText returns the text from the LAST `result` event in
+// the stream. With multi-turn input claude emits one result per
+// user turn; the final result is the response to the conversation's
+// final user message — that's the answer the seeder relays.
+func lastResultText(out string) string {
+	last := ""
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var ev streamEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.Type == "result" && ev.Result != "" {
+			last = ev.Result
+		}
+	}
+	return last
+}
 
-func TestBridgeConformance_RealClaude(t *testing.T) {
+// claudeBin returns the resolved path to the claude binary, skipping
+// the test if not on PATH.
+func claudeBin(t *testing.T) string {
+	t.Helper()
 	bin, err := exec.LookPath("claude")
 	if err != nil {
-		t.Skipf("claude not on PATH: %v — install Claude Code to run the conformance suite", err)
+		t.Skipf("claude not on PATH: %v — install Claude Code to run the localintegtest suite", err)
 	}
+	return bin
+}
 
-	// Sandbox sentinel: a file in a private dir that no adversarial
-	// prompt should be able to mutate.
+const probeModel = "claude-haiku-4-5-20251001"
+
+func TestBridgeConformance_AirtightFlagSet(t *testing.T) {
+	bin := claudeBin(t)
+
 	sandbox := t.TempDir()
 	sentinel := filepath.Join(sandbox, "sentinel")
 	require.NoError(t, os.WriteFile(sentinel, []byte("sentinel-v1"), 0o600))
 
-	runner := &ccbridge.ExecRunner{BinaryPath: bin}
-	bridge := ccbridge.NewBridge(runner)
-
-	const probeModel = "claude-haiku-4-5-20251001"
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
 
 	for i, prompt := range fullCorpus {
 		t.Run(promptLabel(i, prompt), func(t *testing.T) {
@@ -117,7 +148,11 @@ func TestBridgeConformance_RealClaude(t *testing.T) {
 			defer cancel()
 
 			var sink strings.Builder
-			_, err := bridge.Serve(ctx, ccbridge.Request{Prompt: prompt, Model: probeModel}, &sink)
+			_, err := bridge.Serve(ctx, ccbridge.Request{
+				Messages:     []ccbridge.Message{{Role: ccbridge.RoleUser, Content: ccbridge.TextContent(prompt)}},
+				Model:        probeModel,
+				ClientPubkey: testClientPubkey(t.Name()),
+			}, &sink)
 			out := sink.String()
 			// Airtight property: the init event's available-tools
 			// list contains no side-effecting tool. If a tool isn't
@@ -131,6 +166,87 @@ func TestBridgeConformance_RealClaude(t *testing.T) {
 			require.Equal(t, "sentinel-v1", string(b), "sandbox sentinel mutated")
 		})
 	}
+}
+
+// TestBridgeContext_SystemPromptReachesModel proves the system prompt
+// passed via Request.System actually shapes the model's reply. The
+// system prompt instructs the model to start its response with a
+// known anchor token; we assert the anchor appears verbatim.
+func TestBridgeContext_SystemPromptReachesModel(t *testing.T) {
+	bin := claudeBin(t)
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var sink strings.Builder
+	_, err := bridge.Serve(ctx, ccbridge.Request{
+		System:       "Always begin your reply with the literal token APRICOT and nothing before it.",
+		Messages:     []ccbridge.Message{{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("say hello")}},
+		Model:        probeModel,
+		ClientPubkey: testClientPubkey(t.Name()),
+	}, &sink)
+	require.NoError(t, err)
+
+	final := lastResultText(sink.String())
+	assert.NotEmpty(t, final, "no result event in stream")
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(final), "APRICOT"),
+		"expected reply to begin with APRICOT, got %q", final)
+}
+
+// TestBridgeContext_UserMessageContentReachesModel proves the user
+// message text reaches the model verbatim. Sends a unique marker
+// inside the user content; instructs the model to echo it back.
+func TestBridgeContext_UserMessageContentReachesModel(t *testing.T) {
+	bin := claudeBin(t)
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var sink strings.Builder
+	_, err := bridge.Serve(ctx, ccbridge.Request{
+		System:       "When the user gives you a marker token, reply with that token only and nothing else.",
+		Messages:     []ccbridge.Message{{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("marker MANGOSTEEN-42")}},
+		Model:        probeModel,
+		ClientPubkey: testClientPubkey(t.Name()),
+	}, &sink)
+	require.NoError(t, err)
+
+	final := lastResultText(sink.String())
+	assert.Contains(t, final, "MANGOSTEEN-42",
+		"user-message marker missing from reply: %q", final)
+}
+
+// TestBridgeContext_MultiTurnRecallsPriorAssistantTurn proves prior
+// assistant turns flow through as conversation history. Plants a
+// secret in turn-1's assistant content and asks for it in turn-3's
+// user content. The LAST result event must contain the secret —
+// proves the model saw the prior assistant turn and not just the
+// final user message.
+func TestBridgeContext_MultiTurnRecallsPriorAssistantTurn(t *testing.T) {
+	bin := claudeBin(t)
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	var sink strings.Builder
+	_, err := bridge.Serve(ctx, ccbridge.Request{
+		System: "You are a helpful assistant participating in a multi-turn conversation. Use prior turns as context.",
+		Messages: []ccbridge.Message{
+			{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("hi, what is your code-name?")},
+			{Role: ccbridge.RoleAssistant, Content: ccbridge.TextContent("My code-name in this session is XYLOPHONE-77.")},
+			{Role: ccbridge.RoleUser, Content: ccbridge.TextContent("What was the code-name you mentioned earlier? Reply with that token only.")},
+		},
+		Model:        probeModel,
+		ClientPubkey: testClientPubkey(t.Name()),
+	}, &sink)
+	require.NoError(t, err)
+
+	final := lastResultText(sink.String())
+	assert.Contains(t, final, "XYLOPHONE-77",
+		"prior-assistant-turn secret missing from final reply: %q", final)
 }
 
 func promptLabel(i int, p string) string {

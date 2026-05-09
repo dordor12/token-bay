@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,11 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
+	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/config"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/sidecar"
@@ -25,6 +28,14 @@ import (
 const (
 	defaultCCProxyAddr = "127.0.0.1:0"
 	envTrackerHash     = "TOKEN_BAY_TRACKER_HASH" //nolint:gosec // env var name, not a credential
+
+	// Janitor defaults. Per-client session folders are reaped when
+	// (a) their owning peer is no longer reported active by the
+	// ActiveClientChecker AND (b) the folder hasn't been touched
+	// within janitorGrace. Two-clause check protects briefly-
+	// disconnected peers from losing their state.
+	janitorGrace    = 30 * time.Minute
+	janitorInterval = 5 * time.Minute
 )
 
 func newRunCmd() *cobra.Command {
@@ -58,12 +69,21 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
+			seederRoot := filepath.Join(cfgDir, "seeder-sessions")
+			janitor := &ccbridge.Janitor{
+				Root:     seederRoot,
+				Checker:  alwaysInactiveChecker{},
+				Grace:    janitorGrace,
+				Interval: janitorInterval,
+			}
+
 			deps := sidecar.Deps{
 				Logger:           zerolog.New(cmd.ErrOrStderr()).With().Timestamp().Logger(),
 				Signer:           signer,
 				AuditLog:         al,
 				CCProxyAddr:      defaultCCProxyAddr,
 				TrackerEndpoints: endpoints,
+				Janitor:          janitor,
 			}
 
 			app, err := sidecar.New(deps)
@@ -113,3 +133,16 @@ func resolveTrackerEndpoints(spec string) ([]trackerclient.TrackerEndpoint, erro
 		Region:       "configured",
 	}}, nil
 }
+
+// alwaysInactiveChecker reports every peer as inactive. Used as the
+// initial ccbridge.Janitor checker until a peer-tracker subsystem
+// lands and can supply real liveness state. With this stub, per-
+// client folders are reaped purely on the grace-window mtime check —
+// a folder fresher than janitorGrace survives, anything older gets
+// removed. Conservative: an active peer that goes idle for grace
+// loses its state, but the cost is one re-uploaded history on next
+// request.
+type alwaysInactiveChecker struct{}
+
+func (alwaysInactiveChecker) IsActive(_ ed25519.PublicKey) bool { return false }
+func (alwaysInactiveChecker) IsActiveByHash(_ string) bool      { return false }

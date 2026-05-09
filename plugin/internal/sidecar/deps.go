@@ -6,6 +6,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
+	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 )
@@ -43,6 +44,17 @@ type Deps struct {
 	// TrackerClientOverrides lets the cmd layer tweak trackerclient.Config
 	// fields (timeouts, backoff, etc.) before validation. Optional.
 	TrackerClientOverrides func(*trackerclient.Config)
+
+	// Janitor reaps stale per-client session folders under
+	// ccbridge.ExecRunner.SeederRoot. Constructed by the cmd layer
+	// with a Root, ActiveClientChecker, Grace, and Interval. Run as
+	// a goroutine alongside ccproxy/trackerclient; stops on ctx
+	// cancel. Optional — when nil the supervisor skips it (useful
+	// for tests and for early deployments before a peer-tracker
+	// exists). When the peer-tracker subsystem lands, the cmd
+	// layer constructs it and wires it as the Checker so reaping
+	// follows live connection state.
+	Janitor *ccbridge.Janitor
 }
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps

@@ -86,6 +86,14 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("sidecar: start trackerclient: %w", err)
 	}
 
+	// Janitor is optional. When set, run it in a background goroutine
+	// for the lifetime of ctx; it stops on ctx.Done. The janitor itself
+	// recovers from per-scan errors silently (see ccbridge.Janitor.Scan)
+	// so a stuck folder won't crash the supervisor.
+	if a.deps.Janitor != nil {
+		go a.deps.Janitor.Run(ctx)
+	}
+
 	<-ctx.Done()
 
 	return a.shutdown()
