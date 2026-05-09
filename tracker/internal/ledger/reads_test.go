@@ -39,3 +39,12 @@ func TestEntriesSince_EmptyChain(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+func TestMerkleRoot_NoRootYet(t *testing.T) {
+	l := openTempLedger(t)
+	root, sig, ok, err := l.MerkleRoot(context.Background(), 1)
+	require.NoError(t, err)
+	assert.False(t, ok, "expected ok=false before any root is stored")
+	assert.Nil(t, root)
+	assert.Nil(t, sig)
+}

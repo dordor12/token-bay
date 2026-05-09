@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/broker"
 	"github.com/token-bay/token-bay/tracker/internal/config"
+	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
@@ -117,6 +120,49 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("broker: %w", err)
 			}
 			defer brokerSubs.Close() //nolint:errcheck
+
+			// federation: in-process transport in v1; real-QUIC peer
+			// transport ships in a follow-up subsystem. Effectively dormant
+			// when cfg.Federation.Peers is empty.
+			fedHub := federation.NewInprocHub()
+			trackerPub := trackerKey.Public().(ed25519.PublicKey)
+			fedTransport := federation.NewInprocTransport(fedHub, "self", trackerPub, trackerKey)
+			fedPeers := make([]federation.AllowlistedPeer, 0, len(cfg.Federation.Peers))
+			for _, p := range cfg.Federation.Peers {
+				tid, err := hexToTrackerID(p.TrackerID)
+				if err != nil {
+					return fmt.Errorf("federation peer %q: %w", p.Addr, err)
+				}
+				pk, err := hexToPubKey(p.PubKey)
+				if err != nil {
+					return fmt.Errorf("federation peer %q: %w", p.Addr, err)
+				}
+				fedPeers = append(fedPeers, federation.AllowlistedPeer{
+					TrackerID: tid, PubKey: pk, Addr: p.Addr, Region: p.Region,
+				})
+			}
+			fed, err := federation.Open(federation.Config{
+				MyTrackerID:      ids.TrackerID(sha256.Sum256(trackerPub)),
+				MyPriv:           trackerKey,
+				HandshakeTimeout: time.Duration(cfg.Federation.HandshakeTimeoutS) * time.Second,
+				DedupeTTL:        time.Duration(cfg.Federation.GossipDedupeTTLS) * time.Second,
+				SendQueueDepth:   cfg.Federation.SendQueueDepth,
+				GossipRateQPS:    cfg.Federation.GossipRateQPS,
+				PublishCadence:   time.Duration(cfg.Federation.PublishCadenceS) * time.Second,
+				Peers:            fedPeers,
+			}, federation.Deps{
+				Transport: fedTransport,
+				RootSrc:   ledgerRootSourceAdapter{led: led},
+				Archive:   storeAsArchive{store: store},
+				Metrics:   federation.NewMetrics(prometheus.DefaultRegisterer),
+				Logger:    logger,
+				Now:       time.Now,
+			})
+			if err != nil {
+				return fmt.Errorf("federation: %w", err)
+			}
+			defer fed.Close() //nolint:errcheck
+			_ = fed           // operator endpoints will use this in a follow-up
 
 			alloc, err := stunturn.NewAllocator(stunturn.AllocatorConfig{
 				MaxKbpsPerSeeder: cfg.STUNTURN.TURNRelayMaxKbps,
