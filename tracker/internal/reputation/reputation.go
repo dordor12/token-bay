@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/token-bay/token-bay/shared/ids"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 )
@@ -28,6 +29,8 @@ type Subsystem struct { //nolint:revive // package name is reputation; Subsystem
 	// snapshot-loaded on Open. Hot-path reads (Score / IsFrozen /
 	// Status) do one Load and one map lookup.
 	cache atomic.Pointer[scoreCache]
+
+	metrics *metrics
 
 	closeMu sync.Mutex
 	closed  atomic.Bool
@@ -89,6 +92,8 @@ func Open(ctx context.Context, cfg config.ReputationConfig, opts ...Option) (*Su
 		o(s)
 	}
 
+	s.metrics = newMetrics()
+
 	if err := s.reloadCache(ctx); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -109,6 +114,12 @@ func (s *Subsystem) Close() error {
 	close(s.stop)
 	s.wg.Wait()
 	return s.store.Close()
+}
+
+// Register exposes the package's Prometheus collectors. Call once,
+// typically from the tracker's metrics bootstrap.
+func (s *Subsystem) Register(r prometheus.Registerer) error {
+	return s.metrics.register(r)
 }
 
 // reloadCache loads every rep_state and rep_scores row and atomically
@@ -191,6 +202,7 @@ func (s *Subsystem) runEvaluator() {
 func (s *Subsystem) runOneCycleSafe(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			s.metrics.evaluatorPanics.Inc()
 			err = fmt.Errorf("reputation: evaluator panic: %v", r)
 		}
 	}()

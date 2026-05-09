@@ -54,6 +54,9 @@ func zScore(sample, median, mad float64) float64 {
 // for deterministic tests; the goroutine in runEvaluator calls it on
 // the configured tick.
 func (s *Subsystem) runOneCycle(ctx context.Context) error {
+	start := time.Now()
+	defer func() { s.metrics.cycleSeconds.Observe(time.Since(start).Seconds()) }()
+
 	now := s.now()
 	// upper bound is half-open [from, to); add 1s so events with
 	// observed_at == now are included in the current cycle.
@@ -95,6 +98,7 @@ func (s *Subsystem) runOneCycle(ctx context.Context) error {
 			return err
 		}
 		if popSize < s.cfg.MinPopulationForZScore {
+			s.metrics.skips.WithLabelValues("undersized_population").Inc()
 			continue
 		}
 		samples := make([]float64, len(rows))
@@ -135,6 +139,8 @@ func (s *Subsystem) runOneCycle(ctx context.Context) error {
 				if !errors.Is(err, errInvalidTransition) {
 					return err
 				}
+			} else {
+				s.metrics.transitions.WithLabelValues("OK", "AUDIT", "zscore").Inc()
 			}
 		}
 	}
@@ -169,14 +175,18 @@ func (s *Subsystem) runOneCycle(ctx context.Context) error {
 					Kind: "transition", Signal: "freeze_repeat",
 					At: now.Unix(),
 				}
-				_ = s.store.transition(ctx, id, StateFrozen, reason, now)
+				if err := s.store.transition(ctx, id, StateFrozen, reason, now); err == nil {
+					s.metrics.transitions.WithLabelValues("AUDIT", "FROZEN", "freeze_repeat").Inc()
+				}
 			} else if !lastAudit.IsZero() && lastAudit.Before(fortyEightHoursAgo) &&
 				!flaggedSet[idsKey(id)] {
 				reason := ReasonRecord{
 					Kind: "transition", Signal: "audit_cleared",
 					At: now.Unix(),
 				}
-				_ = s.store.transition(ctx, id, StateOK, reason, now)
+				if err := s.store.transition(ctx, id, StateOK, reason, now); err == nil {
+					s.metrics.transitions.WithLabelValues("AUDIT", "OK", "audit_cleared").Inc()
+				}
 			}
 		case StateOK, StateFrozen:
 			// No evaluator-driven transitions from these states beyond
@@ -236,6 +246,7 @@ func (s *Subsystem) recomputeScoresAndPublish(ctx context.Context, now time.Time
 	}
 	next := &scoreCache{states: make(map[idsKey]cachedEntry, len(states))}
 
+	stateCounts := map[State]float64{}
 	for id, st := range states {
 		in := newDefaultInputs(st.FirstSeenAt, now)
 		in.LastAuditAt = lastAuditTime(st.Reasons)
@@ -244,13 +255,18 @@ func (s *Subsystem) recomputeScoresAndPublish(ctx context.Context, now time.Time
 		if err := s.store.upsertScore(ctx, id, sc, now); err != nil {
 			return err
 		}
+		s.metrics.score.Observe(sc)
 		next.states[idsKey(id)] = cachedEntry{
 			State:  st.State,
 			Score:  sc,
 			Since:  st.Since,
 			Frozen: st.State == StateFrozen,
 		}
+		stateCounts[st.State]++
 	}
+	s.metrics.state.WithLabelValues("OK").Set(stateCounts[StateOK])
+	s.metrics.state.WithLabelValues("AUDIT").Set(stateCounts[StateAudit])
+	s.metrics.state.WithLabelValues("FROZEN").Set(stateCounts[StateFrozen])
 	_ = flagged // reserved for future delta logging
 	s.cache.Store(next)
 	return nil

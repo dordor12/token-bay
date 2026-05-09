@@ -27,7 +27,8 @@ func (s *Subsystem) RecordBrokerRequest(consumer ids.IdentityID, decision string
 		SignalBrokerRequest, 1.0, now); err != nil {
 		return fmt.Errorf("reputation: RecordBrokerRequest: %w", err)
 	}
-	_ = decision // metric label hookup lands in Task 17
+	s.metrics.eventsIngested.WithLabelValues(signalLabel(SignalBrokerRequest)).Inc()
+	_ = decision // decision label reserved for future per-outcome breakdown
 	return nil
 }
 
@@ -53,7 +54,22 @@ func (s *Subsystem) RecordOfferOutcome(seeder ids.IdentityID, outcome string) er
 	if err := s.store.ensureState(ctx, seeder, now); err != nil {
 		return err
 	}
-	return s.store.appendEvent(ctx, seeder, RoleSeeder, kind, 1.0, now)
+	if err := s.store.appendEvent(ctx, seeder, RoleSeeder, kind, 1.0, now); err != nil {
+		return err
+	}
+	var label string
+	switch kind {
+	case SignalOfferAccept:
+		label = "offer_accept"
+	case SignalOfferReject:
+		label = "offer_reject"
+	case SignalOfferUnreachable:
+		label = "offer_unreachable"
+	}
+	if label != "" {
+		s.metrics.eventsIngested.WithLabelValues(label).Inc()
+	}
+	return nil
 }
 
 // OnLedgerEvent implements admission.LedgerEventObserver. Silently
@@ -83,11 +99,17 @@ func (s *Subsystem) OnLedgerEvent(ev admission.LedgerEvent) {
 			_ = s.store.ensureState(ctx, ev.SeederID, now)
 			_ = s.store.appendEvent(ctx, ev.SeederID, RoleSeeder,
 				seederSig, 1.0, now)
+			if sigMissing {
+				s.metrics.eventsIngested.WithLabelValues("settlement_sig_missing").Inc()
+			} else {
+				s.metrics.eventsIngested.WithLabelValues("settlement_clean").Inc()
+			}
 		}
 	case admission.LedgerEventDisputeFiled:
 		_ = s.store.ensureState(ctx, ev.ConsumerID, now)
 		_ = s.store.appendEvent(ctx, ev.ConsumerID, RoleConsumer,
 			SignalDisputeFiled, 1.0, now)
+		s.metrics.eventsIngested.WithLabelValues("dispute_filed").Inc()
 	case admission.LedgerEventDisputeResolved:
 		if !ev.DisputeUpheld {
 			return
@@ -95,6 +117,7 @@ func (s *Subsystem) OnLedgerEvent(ev admission.LedgerEvent) {
 		_ = s.store.ensureState(ctx, ev.ConsumerID, now)
 		_ = s.store.appendEvent(ctx, ev.ConsumerID, RoleConsumer,
 			SignalDisputeUpheld, 1.0, now)
+		s.metrics.eventsIngested.WithLabelValues("dispute_upheld").Inc()
 	default:
 		// Transfers, starter grants, etc. are not signals reputation cares
 		// about in MVP. Silent ignore.
@@ -148,6 +171,8 @@ func (s *Subsystem) RecordCategoricalBreach(id ids.IdentityID, kind BreachKind) 
 		if err := s.store.transition(ctx, id, target, reason, now); err != nil {
 			return err
 		}
+		s.metrics.breaches.WithLabelValues(kind.String()).Inc()
+		s.metrics.transitions.WithLabelValues(StateOK.String(), target.String(), "breach").Inc()
 	case cur.State == StateFrozen:
 		// Terminal state; ignore further breaches.
 		return nil
@@ -157,6 +182,7 @@ func (s *Subsystem) RecordCategoricalBreach(id ids.IdentityID, kind BreachKind) 
 		if err := s.store.appendReason(ctx, id, reason, now); err != nil {
 			return err
 		}
+		s.metrics.breaches.WithLabelValues(kind.String()).Inc()
 	default:
 		if err := s.store.transition(ctx, id, target, reason, now); err != nil {
 			if errors.Is(err, errInvalidTransition) {
@@ -164,6 +190,8 @@ func (s *Subsystem) RecordCategoricalBreach(id ids.IdentityID, kind BreachKind) 
 			}
 			return err
 		}
+		s.metrics.breaches.WithLabelValues(kind.String()).Inc()
+		s.metrics.transitions.WithLabelValues(cur.State.String(), target.String(), "breach").Inc()
 	}
 	return s.refreshOne(ctx, id)
 }
