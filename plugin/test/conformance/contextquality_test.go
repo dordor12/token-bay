@@ -180,9 +180,15 @@ func requireRealAnthropic(t *testing.T) {
 }
 
 // userArgv is a compatibility shim used by judgeOutputSimilarity in
-// outputsimilarity_test.go (Task 13 will migrate that call to
-// userArgvSession). Returns the base argv without a positional
+// outputsimilarity_test.go. Returns the base argv without a positional
 // prompt; callers append the prompt themselves.
+//
+// The tool flags use --tools=<list> / --disallowedTools=<list> /
+// --permission-mode=<mode> equals-separated syntax. claude's --tools
+// is variadic, so writing it as two tokens "--tools" "" would let the
+// CLI consume the next positional argument (the appended prompt) as
+// a tool name, breaking the invocation. Equals-binding makes the value
+// unambiguous and lets the prompt sit unambiguously at the end.
 func userArgv(req ccbridge.Request, allowedTools []string) []string {
 	full := ccbridge.BuildArgv(req, "", "")
 	argv := full[:len(full)-1] // drop the trailing "" positional
@@ -199,10 +205,10 @@ func userArgv(req ccbridge.Request, allowedTools []string) []string {
 		out = append(out, argv[i])
 	}
 	if len(allowedTools) > 0 {
-		out = append(out, ccbridge.FlagTools, strings.Join(allowedTools, ","))
-		out = append(out, "--permission-mode", "bypassPermissions")
+		out = append(out, ccbridge.FlagTools+"="+strings.Join(allowedTools, ","))
+		out = append(out, "--permission-mode=bypassPermissions")
 	} else {
-		out = append(out, ccbridge.FlagTools, "")
+		out = append(out, ccbridge.FlagTools+"=")
 	}
 	return out
 }
@@ -210,6 +216,10 @@ func userArgv(req ccbridge.Request, allowedTools []string) []string {
 // userArgvSession is BuildArgv with `--tools` swapped for the
 // scenario's allow-list and bypassPermissions added so the named
 // tool can actually execute under -p mode.
+//
+// Tool flags use equals-binding so the variadic --tools doesn't
+// consume the trailing positional prompt as a tool name. See the
+// comment on userArgv for the reasoning.
 func userArgvSession(req ccbridge.Request, sessionID, prompt string, allowedTools []string) []string {
 	argv := ccbridge.BuildArgv(req, sessionID, prompt)
 	out := make([]string, 0, len(argv)+4)
@@ -225,10 +235,10 @@ func userArgvSession(req ccbridge.Request, sessionID, prompt string, allowedTool
 		out = append(out, argv[i])
 	}
 	if len(allowedTools) > 0 {
-		out = append(out, ccbridge.FlagTools, strings.Join(allowedTools, ","))
-		out = append(out, "--permission-mode", "bypassPermissions")
+		out = append(out, ccbridge.FlagTools+"="+strings.Join(allowedTools, ","))
+		out = append(out, "--permission-mode=bypassPermissions")
 	} else {
-		out = append(out, ccbridge.FlagTools, "")
+		out = append(out, ccbridge.FlagTools+"=")
 	}
 	return out
 }
@@ -571,13 +581,14 @@ func runContextQualityScenario(t *testing.T, sc scenario) {
 	userContFirst := pickConversationBody(t, userContBodies, p.continuation)
 
 	// Phase 3: bridge takeover — same convo through bridge.Serve.
-	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: claudeBin(t)})
+	bridge := ccbridge.NewBridge(&ccbridge.ExecRunner{BinaryPath: claudeBin(t), SeederRoot: t.TempDir()})
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	_, err := bridge.Serve(ctx, ccbridge.Request{
-		System:   p.system,
-		Messages: extendedConvo,
-		Model:    model,
+		System:       p.system,
+		Messages:     extendedConvo,
+		Model:        model,
+		ClientPubkey: testClientPubkey(t.Name()),
 	}, io.Discard)
 	require.NoError(t, err)
 	bridgeBodies := proxy.drainBodies()
