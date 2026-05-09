@@ -155,11 +155,19 @@ func extractTextContent(raw json.RawMessage) (string, error) {
 // resolveVersion returns the claude CLI version string. The result is
 // cached on r.cachedVersion so subsequent calls are free. Falls back
 // to "2.1.138" on any error.
+//
+// The probe uses its own short timeout independent of ctx. The
+// session-file Version field is informational (claude-code does not
+// validate it on load), so a missing or malformed `claude --version`
+// must not block or fail the request — a fake/test binary that
+// ignores --version and hangs would otherwise stall the entire Run.
 func (r *ExecRunner) resolveVersion(ctx context.Context) (string, error) {
 	if r.cachedVersion != "" {
 		return r.cachedVersion, nil
 	}
-	out, err := exec.CommandContext(ctx, r.resolveBinary(), "--version").Output()
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, r.resolveBinary(), "--version").Output()
 	if err != nil {
 		r.cachedVersion = "2.1.138"
 		return r.cachedVersion, nil
