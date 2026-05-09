@@ -55,6 +55,8 @@ reputation:
   z_score_threshold: 2.5
   default_score: 0.5
   freeze_list_cache_ttl_s: 600
+  min_population_for_z_score: 100
+  storage_path: "/var/lib/token-bay/reputation.sqlite"
 
 admission:
   pressure_admit_threshold: 0.85

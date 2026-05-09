@@ -410,4 +410,11 @@ func (v *validator) checkReputation(c *Config) {
 	if c.Reputation.FreezeListCacheTTLS <= 0 {
 		v.add("reputation.freeze_list_cache_ttl_s", "must be > 0")
 	}
+	if c.Reputation.MinPopulationForZScore <= 0 {
+		v.add("reputation.min_population_for_z_score", "must be > 0")
+	}
+	if c.Reputation.StoragePath == "" {
+		v.add("reputation.storage_path",
+			"must be set (typically derived from data_dir)")
+	}
 }
