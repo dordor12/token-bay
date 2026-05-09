@@ -110,7 +110,7 @@ type Subsystems struct {
 func Open(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps, opts ...Option) (*Subsystems, error)
 ```
 
-`Open` constructs the shared `*Inflight` and `*Reservations` once, threads them into both, starts the queue-drain goroutine (owned by `Broker`) and the reservation-TTL reaper goroutine (owned by `Settlement`). `cmd/run_cmd` calls `Open` once and passes the two subsystems into `api.Deps`.
+`Open` constructs a `*session.Manager` (which owns `*Inflight` and `*Reservations`) once, threads it into both `*Broker` and `*Settlement`, starts the queue-drain goroutine (owned by `Broker`) and the reservation-TTL reaper goroutine (owned by `Settlement`). `cmd/run_cmd` calls `Open` once and passes the two subsystems into `api.Deps`. **Amended 2026-05-07:** lifecycle state lives in `tracker/internal/session` per `docs/superpowers/specs/tracker/2026-05-07-tracker-session-design.md`; `OpenBroker` and `OpenSettlement` take a single `*session.Manager` argument rather than separate `*Inflight` / `*Reservations`.
 
 ### 3.3 Wire amendment — `BrokerRequestResponse` oneof
 
@@ -270,69 +270,13 @@ which the broker reads via a new advisory `admission.PressureGauge() float64` ac
 
 ### 4.1 `Reservations` — in-memory credit reservation ledger
 
-```go
-type Reservations struct {
-    mu    sync.Mutex
-    byID  map[ids.IdentityID]uint64        // consumer → total reserved
-    byReq map[[16]byte]reservationSlot
-}
-
-type reservationSlot struct {
-    ConsumerID ids.IdentityID
-    Amount     uint64
-    ExpiresAt  time.Time
-}
-```
-
-API:
-
-| Method | Behavior |
-|---|---|
-| `Reserve(reqID, consumer, amount, snapshotCredits, expiresAt)` | Checks `snapshotCredits − byID[consumer] ≥ amount`. On success: debits, inserts slot. Returns `ErrInsufficientCredits` on shortfall, `ErrDuplicateReservation` if `reqID` already present. |
-| `Release(reqID) (consumer, amount, ok)` | Removes the slot, decrements `byID`. Idempotent — repeat returns `ok=false`. |
-| `Reserved(consumer) uint64` | Read-only total. |
-| `Sweep(now) []reservationSlot` | Removes slots with `ExpiresAt ≤ now`; returns the dropped slots so the caller can log/metric. |
+**Amended 2026-05-07:** the type now lives in `tracker/internal/session.Reservations`. Public surface mirrored in the session design spec §3. Method renames in flight: `Sweep(now)` → `SweepExpired(now)` to disambiguate from the inflight terminal sweep. `Get(reqID)` and `Snapshot()` were added to support admin handlers without leaking unexported fields.
 
 The reservation amount is *not* persisted across tracker restart. A tracker crash midway through an in-flight request will, on restart, see the consumer's ledger balance unchanged (no entry was ever appended) and accept new requests from them; in-flight reservations are lost, which is the correct semantic — the request itself is also lost, so there's nothing to settle.
 
 ### 4.2 `Inflight` — in-flight request state machine
 
-```go
-type State uint8
-
-const (
-    StateUnspecified State = iota
-    StateSelecting
-    StateAssigned
-    StateServing
-    StateCompleted
-    StateFailed
-)
-
-type Request struct {
-    RequestID       [16]byte
-    ConsumerID      ids.IdentityID
-    EnvelopeBody    *tbproto.EnvelopeBody
-    EnvelopeHash    [32]byte                // sha256(DeterministicMarshal(body))
-    MaxCostReserved uint64
-    AssignedSeeder  ids.IdentityID          // zero until StateAssigned
-    SeederPubkey    ed25519.PublicKey
-    OfferAttempts   []ids.IdentityID
-    StartedAt       time.Time
-    State           State
-
-    // Settlement coordination — populated on usage_report:
-    PreimageHash    [32]byte
-    SettleSig       chan []byte             // consumer's sig, dispatched by HandleSettle
-    TerminatedAt    time.Time               // when entered Completed/Failed
-}
-
-type Inflight struct {
-    mu     sync.RWMutex
-    byID   map[[16]byte]*Request
-    byHash map[[32]byte]*Request           // for HandleSettle's preimage_hash dispatch
-}
-```
+**Amended 2026-05-07:** `Inflight`, `Request`, and `State` now live in `tracker/internal/session`. Public surface mirrored in the session design spec §3. Renames: `Sweep(now, terminalTTL)` → `SweepTerminal(now, terminalTTL)` to disambiguate from the reservation sweep. Additions: `EnsureSettleSig(reqID)` (locked idempotent settle-channel allocator used by `HandleUsageReport`), `Snapshot()` and `ForceFail(reqID, now)` (admin-handler support). The state diagram is unchanged.
 
 Allowed state transitions:
 
@@ -345,9 +289,9 @@ SERVING   → COMPLETED  (ledger entry appended)
 SERVING   → FAILED     (ledger append failed; settlement timeout with append failure)
 ```
 
-`Transition(id, from, to)` is a CAS — returns `ErrIllegalTransition` if the current state is not `from`. Concurrent callers race cleanly: exactly one wins, the loser sees the error. This is how settlement guards against double-finalize.
+`Transition(id, from, to)` is a CAS — returns `session.ErrIllegalTransition` if the current state is not `from`. Concurrent callers race cleanly: exactly one wins, the loser sees the error. This is how settlement guards against double-finalize.
 
-`Sweep(now, terminalTTL)` removes entries with `State ∈ {COMPLETED, FAILED}` and `TerminatedAt ≤ now − terminalTTL` (default 10 min per spec §4.2). Sweep also removes the corresponding `byHash` mapping.
+`SweepTerminal(now, terminalTTL)` removes entries with `State ∈ {COMPLETED, FAILED}` and `TerminatedAt ≤ now − terminalTTL` (default 10 min per spec §4.2). Sweep also removes the corresponding `byHash` mapping.
 
 ### 4.3 `PriceTable` — model pricing
 
@@ -602,21 +546,19 @@ The `pendingQueued` map is populated by `RegisterQueued`, called from `api/insta
 
 ### 5.5 Reservation TTL reaper
 
-Owned by `*Settlement`, started in `Open`, ticking every 30 s:
+**Amended 2026-05-07:** the per-slot reservation drop and the inflight CAS-to-Failed both live in `session.Manager.SweepExpiredAndFail` per the session design spec §3. Broker drives the ticker and runs registry-side compensations (`Registry.DecLoad`) on the typed `Expiry` records returned. Owned by `*Settlement`, started in `Open`, ticking every 30 s:
 
 ```
 on each tick:
-  expired := reservations.Sweep(now)
-  for _, slot := range expired {
-    req, ok := inflight.Get(slot.RequestID)  // by request_id == reservation key
-    if ok && req.State ∈ {SELECTING, ASSIGNED}:
-      inflight.Fail(req.RequestID)
-      registry.DecLoad(req.AssignedSeeder)  // ASSIGNED → load was held
+  expired := mgr.SweepExpiredAndFail(now)  // drops slots, CASes Selecting/Assigned → Failed
+  for _, e := range expired {
+    if e.PriorState == StateAssigned && e.AssignedSeeder != zero:
+      registry.DecLoad(e.AssignedSeeder)
     metric: broker_reservation_ttl_expired_total
   }
 ```
 
-A reservation whose request reached `SERVING` but ledger-append failed is **not** TTL-reaped — operator intervention via `/admin/broker/reservations/release/<request_id>` is the recovery path (§10).
+A reservation whose request reached `SERVING` (or `COMPLETED`/`FAILED`) but ledger-append failed is reported in the `Expiry` slice with the prior state, but `SweepExpiredAndFail` does NOT transition it — operator intervention via `/admin/broker/reservations/release/<request_id>` is the recovery path (§10).
 
 ## 6. Concurrency model
 
@@ -812,11 +754,11 @@ The implementation is complete when:
 16. `Settle` replay after completion returns `RPC_STATUS_NOT_FOUND`.
 17. Cost overspend > 5% rejected with `COST_OVERSPEND`.
 
-**Race-detector-clean:** `go test -race ./tracker/internal/broker/...` passes. `internal/broker` joins `internal/admission`, `internal/federation` on the tracker CLAUDE.md "always run with `-race`" list (already present per tracker spec §6).
+**Race-detector-clean:** `go test -race ./tracker/internal/broker/... ./tracker/internal/session/...` passes. Both `internal/broker` and `internal/session` are on the tracker CLAUDE.md "always run with `-race`" list (per tracker spec §6 plus session-design §6).
 
 ## 12. Cross-cutting amendments shipped by this plan
 
-Five upstream-spec amendments, all in the same PR as the broker implementation so the repo is never internally inconsistent.
+Six upstream-spec amendments, all in the same PR as the broker implementation so the repo is never internally inconsistent.
 
 1. **`shared/proto/rpc.proto`** — rename `BrokerResponse` → `SeederAssignment`; add `BrokerRequestResponse` (oneof), `Queued`, `Rejected`, and enums `PositionBand`, `EtaBand`, `RejectReason`. New validation helper `ValidateBrokerRequestResponse`. (No deployed clients exist for the old name.)
 2. **`shared/proto/rpc.proto`** — keep `OfferPush`, `OfferDecision`, `SettlementPush`, `SettleRequest`, `SettleAck`, `UsageReport`, `UsageAck` as-is; broker integrates with the existing shapes.
@@ -825,6 +767,8 @@ Five upstream-spec amendments, all in the same PR as the broker implementation s
 5. **`plugin/internal/trackerclient.BrokerRequest`** — return type changes from `*BrokerResponse` to a sum-typed `*BrokerResult` mirroring the new oneof. Plugin tracker-client design spec updated. All in-tree callers updated in the same PR.
 
 6. **`tracker/internal/api`** — `installBrokerRequest` swapped from `notImpl` to a real handler that gates through `admission.Decide` and forwards admit results to `broker.Submit`; `installUsageReport` and `installSettle` similarly wired to `Settlement.HandleUsageReport` / `Settlement.HandleSettle`. `api.Deps` gains `Settlement SettlementService`; `api.BrokerService` typed against the new `*broker.Result`. `cmd/run_cmd` constructs `broker.Subsystems` and threads both into `api.Deps` + `server.Deps`.
+
+7. **`tracker/internal/session`** (new package, 2026-05-07 amendment). The lifecycle state — `Inflight`, `Reservations`, `Request`, `State`, the four lifecycle errors (`ErrInsufficientCredits`, `ErrDuplicateReservation`, `ErrIllegalTransition`, `ErrUnknownRequest`), and the typed `SweepExpiredAndFail` composite sweep — lives in `tracker/internal/session` per `docs/superpowers/specs/tracker/2026-05-07-tracker-session-design.md` and `docs/superpowers/plans/2026-05-07-tracker-internal-session.md`. `OpenBroker` / `OpenSettlement` / `Subsystems.Open` take a single `*session.Manager`. The reaper goroutine still lives in `*Settlement` and drives `mgr.SweepExpiredAndFail` followed by registry-side `DecLoad` calls.
 
 ## 13. Open questions
 

@@ -2,6 +2,7 @@ package ccbridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -20,7 +21,15 @@ type scriptedRunner struct {
 func (s *scriptedRunner) Run(_ context.Context, req Request, sink io.Writer) error {
 	prompt := ""
 	if n := len(req.Messages); n > 0 {
-		prompt = req.Messages[n-1].Content
+		// Tests only invoke this Runner with TextContent prompts —
+		// a one-element array containing a single text block.
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(req.Messages[n-1].Content, &blocks); err == nil && len(blocks) > 0 {
+			prompt = blocks[0].Text
+		}
 	}
 	for prefix, body := range s.Responses {
 		if strings.HasPrefix(prompt, prefix) {

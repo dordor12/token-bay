@@ -5,6 +5,7 @@ package ccbridge
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var testClientKey = ed25519.PublicKey(bytes.Repeat([]byte{0x77}, ed25519.PublicKeySize))
 
 // writeFakeClaude writes a small shell script at path that emulates
 // `claude -p` for testing.
@@ -25,87 +28,61 @@ func writeFakeClaude(t *testing.T, path string, body string) {
 func TestExecRunner_Run_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude-fake")
-	// Fake claude: assert flags are present, read stdin (the encoded
-	// messages) and emit a stream-json output that echoes the stdin
-	// back inside a result event so the test can verify both flags
-	// and stdin made it through.
 	writeFakeClaude(t, bin, `#!/bin/sh
-echo "$@" | grep -q -- '--input-format' || exit 17
+echo "$@" | grep -q -- '--resume' || exit 17
+echo "$@" | grep -q -- '--no-session-persistence' || exit 17
 echo "$@" | grep -q -- '--disallowedTools' || exit 17
 echo "$@" | grep -q -- '--mcp-config' || exit 17
-echo "$@" | grep -q -- '{"mcpServers":{}}' || exit 17
-echo "$@" | grep -q -- '--strict-mcp-config' || exit 17
 echo "$@" | grep -q -- '--settings' || exit 17
 echo "$@" | grep -q -- '{"hooks":{}}' || exit 17
-STDIN_BYTES=$(cat)
+echo "$@" | grep -q -- '--input-format' && exit 18  # MUST NOT be present
+test "$HOME" != "$REAL_HOME" || exit 19
+test -d "$HOME/.claude/projects" || exit 20
+SID=$(echo "$@" | sed -E 's/.*--resume ([0-9a-f-]+).*/\1/')
+PROJ=$(ls "$HOME/.claude/projects" | head -1)
+SESSFILE="$HOME/.claude/projects/$PROJ/$SID.jsonl"
+test -f "$SESSFILE" || exit 21
+LINES=$(wc -l < "$SESSFILE" | tr -d ' ')
 echo '{"type":"system","subtype":"init"}'
-# Plain marker so the test can grep for stdin content. Not valid
-# JSON — that's fine; ParseStreamJSON ignores non-{ lines.
-printf 'STDIN_RECEIVED=%s\n' "$STDIN_BYTES"
+printf 'SESSION_RECORDS=%s\n' "$LINES"
 echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":7,"output_tokens":3}}'
 `)
+	t.Setenv("REAL_HOME", os.Getenv("HOME"))
 
-	runner := &ExecRunner{BinaryPath: bin}
+	runner := &ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()}
 	var sink bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err := runner.Run(ctx, Request{
-		Messages: []Message{{Role: RoleUser, Content: "hello-anchor"}},
-		Model:    "claude-sonnet-4-6",
+		Messages: []Message{
+			{Role: RoleUser, Content: TextContent("first")},
+			{Role: RoleAssistant, Content: TextContent("ack")},
+			{Role: RoleUser, Content: TextContent("the new question")},
+		},
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: testClientKey,
 	}, &sink)
 	require.NoError(t, err)
 	out := sink.String()
 	assert.Contains(t, out, `"type":"result"`)
-	// stdin was a stream-json input event with content "hello-anchor".
-	assert.Contains(t, out, "STDIN_RECEIVED=")
-	assert.Contains(t, out, `"role":"user"`)
-	assert.Contains(t, out, `"text":"hello-anchor"`)
-}
-
-func TestExecRunner_Run_MultiTurn_StdinHasAllMessages(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "claude-echo")
-	writeFakeClaude(t, bin, `#!/bin/sh
-STDIN_BYTES=$(cat)
-printf 'STDIN_BYTES=%s\n' "$STDIN_BYTES"
-echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
-`)
-
-	runner := &ExecRunner{BinaryPath: bin}
-	var sink bytes.Buffer
-	err := runner.Run(context.Background(), Request{
-		Messages: []Message{
-			{Role: RoleUser, Content: "first-user-marker"},
-			{Role: RoleAssistant, Content: "first-assistant-marker"},
-			{Role: RoleUser, Content: "second-user-marker"},
-		},
-		Model: "claude-sonnet-4-6",
-	}, &sink)
-	require.NoError(t, err)
-	out := sink.String()
-	// All three turns reach the subprocess.
-	assert.Contains(t, out, "first-user-marker")
-	assert.Contains(t, out, "first-assistant-marker")
-	assert.Contains(t, out, "second-user-marker")
-	// Roles are correctly tagged.
-	assert.Contains(t, out, `"role":"assistant"`)
+	assert.Contains(t, out, "SESSION_RECORDS=2") // 2 history records, last user is the prompt arg
 }
 
 func TestExecRunner_Run_NonZeroExit_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude-fail")
 	writeFakeClaude(t, bin, `#!/bin/sh
-cat > /dev/null
 echo '{"type":"system"}'
 exit 9
 `)
 
-	runner := &ExecRunner{BinaryPath: bin}
+	runner := &ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()}
 	var sink bytes.Buffer
 	err := runner.Run(context.Background(), Request{
-		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-		Model:    "claude-sonnet-4-6",
+		Messages:     []Message{{Role: RoleUser, Content: TextContent("hi")}},
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: testClientKey,
 	}, &sink)
 	require.Error(t, err)
 	var exitErr *ExitError
@@ -118,20 +95,20 @@ func TestExecRunner_Run_ContextCancel_KillsProcess(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude-hang")
 	writeFakeClaude(t, bin, `#!/bin/sh
-cat > /dev/null
 echo '{"type":"system"}'
 sleep 30
 `)
 
-	runner := &ExecRunner{BinaryPath: bin}
+	runner := &ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()}
 	var sink bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
 	err := runner.Run(ctx, Request{
-		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-		Model:    "claude-sonnet-4-6",
+		Messages:     []Message{{Role: RoleUser, Content: TextContent("hi")}},
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: testClientKey,
 	}, &sink)
 	elapsed := time.Since(start)
 	require.Error(t, err)
@@ -142,16 +119,16 @@ func TestExecRunner_Run_FreshTempCWD(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude-pwd")
 	writeFakeClaude(t, bin, `#!/bin/sh
-cat > /dev/null
 PWD_VAL=$(pwd)
 printf '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":0,"output_tokens":0},"cwd":"%s"}\n' "$PWD_VAL"
 `)
 
-	runner := &ExecRunner{BinaryPath: bin}
+	runner := &ExecRunner{BinaryPath: bin, SeederRoot: t.TempDir()}
 	var sink bytes.Buffer
 	require.NoError(t, runner.Run(context.Background(), Request{
-		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-		Model:    "claude-sonnet-4-6",
+		Messages:     []Message{{Role: RoleUser, Content: TextContent("hi")}},
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: testClientKey,
 	}, &sink))
 	out := sink.String()
 	pwd, _ := os.Getwd()

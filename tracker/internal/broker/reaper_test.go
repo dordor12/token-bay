@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 func TestReaper_ExpiresStaleReservation(t *testing.T) {
@@ -17,70 +18,67 @@ func TestReaper_ExpiresStaleReservation(t *testing.T) {
 	_, _ = fr.IncLoad(seeder.IdentityID) // simulate broker's IncLoad on accept
 	deps.Registry = fr
 
-	inflt := NewInflight()
-	resv := NewReservations()
+	mgr := session.New()
 
 	requestID := [16]byte{0xEE}
-	inflt.Insert(&Request{
+	mgr.Inflight.Insert(&session.Request{
 		RequestID:      requestID,
 		AssignedSeeder: ids.IdentityID{0xDD},
-		State:          StateAssigned,
+		State:          session.StateAssigned,
 	})
-	require.NoError(t, resv.Reserve(requestID, ids.IdentityID{0xCC}, 100, 1000, time.Now().Add(-time.Second)))
+	require.NoError(t, mgr.Reservations.Reserve(requestID, ids.IdentityID{0xCC}, 100, 1000, time.Now().Add(-time.Second)))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, resv)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
 	s.runReap(time.Now())
 
-	require.Equal(t, uint64(0), resv.Reserved(ids.IdentityID{0xCC}))
-	req, _ := inflt.Get(requestID)
-	require.Equal(t, StateFailed, req.State)
+	require.Equal(t, uint64(0), mgr.Reservations.Reserved(ids.IdentityID{0xCC}))
+	req, _ := mgr.Inflight.Get(requestID)
+	require.Equal(t, session.StateFailed, req.State)
 }
 
 func TestReaper_SelectingStateTransitioned(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
-	resv := NewReservations()
+	mgr := session.New()
 
 	requestID := [16]byte{0xF1}
-	inflt.Insert(&Request{
+	mgr.Inflight.Insert(&session.Request{
 		RequestID: requestID,
-		State:     StateSelecting,
+		State:     session.StateSelecting,
 	})
-	require.NoError(t, resv.Reserve(requestID, ids.IdentityID{0xAA}, 50, 1000, time.Now().Add(-time.Second)))
+	require.NoError(t, mgr.Reservations.Reserve(requestID, ids.IdentityID{0xAA}, 50, 1000, time.Now().Add(-time.Second)))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, resv)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
 	s.runReap(time.Now())
 
-	req, _ := inflt.Get(requestID)
-	require.Equal(t, StateFailed, req.State)
+	req, _ := mgr.Inflight.Get(requestID)
+	require.Equal(t, session.StateFailed, req.State)
 }
 
 func TestReaper_NoExpiryIfNotExpired(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
-	resv := NewReservations()
+	mgr := session.New()
 
 	requestID := [16]byte{0xF2}
-	inflt.Insert(&Request{
+	mgr.Inflight.Insert(&session.Request{
 		RequestID: requestID,
-		State:     StateAssigned,
+		State:     session.StateAssigned,
 	})
 	// Reservation expires in the future — should NOT be swept.
-	require.NoError(t, resv.Reserve(requestID, ids.IdentityID{0xBB}, 50, 1000, time.Now().Add(time.Hour)))
+	require.NoError(t, mgr.Reservations.Reserve(requestID, ids.IdentityID{0xBB}, 50, 1000, time.Now().Add(time.Hour)))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, resv)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
 	s.runReap(time.Now())
 
-	req, _ := inflt.Get(requestID)
-	require.Equal(t, StateAssigned, req.State) // not yet failed
-	require.Equal(t, uint64(50), resv.Reserved(ids.IdentityID{0xBB}))
+	req, _ := mgr.Inflight.Get(requestID)
+	require.Equal(t, session.StateAssigned, req.State) // not yet failed
+	require.Equal(t, uint64(50), mgr.Reservations.Reserved(ids.IdentityID{0xBB}))
 }

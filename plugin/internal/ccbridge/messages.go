@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 )
 
 // Errors related to Messages validation.
@@ -33,52 +32,18 @@ func ValidateMessages(msgs []Message) error {
 		if m.Role != RoleUser && m.Role != RoleAssistant {
 			return fmt.Errorf("%w: index %d role %q", ErrInvalidRole, i, m.Role)
 		}
-		if m.Content == "" {
+		if len(m.Content) == 0 {
 			return fmt.Errorf("%w: index %d", ErrEmptyContent, i)
+		}
+		// Reject obviously-malformed payloads up front. Content must
+		// be valid JSON; otherwise claude will fail to parse the
+		// stream-json line and the error surface is much worse.
+		if !json.Valid(m.Content) {
+			return fmt.Errorf("%w: index %d: not valid JSON", ErrEmptyContent, i)
 		}
 	}
 	if msgs[len(msgs)-1].Role != RoleUser {
 		return ErrLastMessageNotUser
-	}
-	return nil
-}
-
-// streamJSONInputEvent is the wire shape the claude CLI consumes on
-// stdin under --input-format stream-json. Text-only v1 — content is
-// always a single text block.
-type streamJSONInputEvent struct {
-	Type    string                 `json:"type"`
-	Message streamJSONInputMessage `json:"message"`
-}
-
-type streamJSONInputMessage struct {
-	Role    string                 `json:"role"`
-	Content []streamJSONInputBlock `json:"content"`
-}
-
-type streamJSONInputBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-// EncodeMessages writes msgs to w as line-delimited stream-json input
-// events suitable for `claude -p --input-format stream-json` stdin.
-// Returns the first write error.
-func EncodeMessages(w io.Writer, msgs []Message) error {
-	enc := json.NewEncoder(w) // appends a trailing newline per Encode call
-	for i, m := range msgs {
-		ev := streamJSONInputEvent{
-			Type: m.Role, // "user" or "assistant" — same wire token as the Role
-			Message: streamJSONInputMessage{
-				Role: m.Role,
-				Content: []streamJSONInputBlock{
-					{Type: "text", Text: m.Content},
-				},
-			},
-		}
-		if err := enc.Encode(ev); err != nil {
-			return fmt.Errorf("ccbridge: encode message %d: %w", i, err)
-		}
 	}
 	return nil
 }

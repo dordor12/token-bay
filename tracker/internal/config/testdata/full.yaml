@@ -45,6 +45,15 @@ federation:
   gossip_dedupe_ttl_s: 3600
   transfer_retry_window_hours: 24
   enroll_rate_per_min_per_ip: 1
+  handshake_timeout_s: 5
+  gossip_rate_qps: 100
+  send_queue_depth: 256
+  publish_cadence_s: 3600
+  peers:
+    - tracker_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      pubkey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      addr: "peer1.example.com:7777"
+      region: "us-east"
 
 reputation:
   evaluation_interval_s: 60

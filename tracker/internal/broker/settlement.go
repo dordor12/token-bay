@@ -14,6 +14,7 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // Settlement owns the post-assignment phase of the broker lifecycle:
@@ -23,18 +24,17 @@ import (
 //
 // Construct via OpenSettlement; tear down via Close.
 type Settlement struct {
-	cfg   config.SettlementConfig
-	deps  Deps
-	inflt *Inflight
-	resv  *Reservations
-	stop  chan struct{}
-	wg    sync.WaitGroup
+	cfg  config.SettlementConfig
+	deps Deps
+	mgr  *session.Manager
+	stop chan struct{}
+	wg   sync.WaitGroup
 }
 
 // OpenSettlement constructs a ready Settlement. Required deps: Ledger, Pusher.
-// Optional: Now (defaults to time.Now). If inflt or resv are nil, fresh
-// instances are allocated. Starts the reservation TTL reaper (T19).
-func OpenSettlement(cfg config.SettlementConfig, deps Deps, inflt *Inflight, resv *Reservations) (*Settlement, error) {
+// Optional: Now (defaults to time.Now). When mgr is nil a fresh session.Manager
+// is allocated. Starts the reservation TTL reaper (T19).
+func OpenSettlement(cfg config.SettlementConfig, deps Deps, mgr *session.Manager) (*Settlement, error) {
 	if deps.Ledger == nil {
 		return nil, errors.New("settlement: Ledger required")
 	}
@@ -44,18 +44,14 @@ func OpenSettlement(cfg config.SettlementConfig, deps Deps, inflt *Inflight, res
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	if inflt == nil {
-		inflt = NewInflight()
-	}
-	if resv == nil {
-		resv = NewReservations()
+	if mgr == nil {
+		mgr = session.New()
 	}
 	s := &Settlement{
-		cfg:   cfg,
-		deps:  deps,
-		inflt: inflt,
-		resv:  resv,
-		stop:  make(chan struct{}),
+		cfg:  cfg,
+		deps: deps,
+		mgr:  mgr,
+		stop: make(chan struct{}),
 	}
 	s.startReaper()
 	return s, nil
@@ -92,9 +88,9 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 	// 1. Lookup inflight request.
 	var reqID [16]byte
 	copy(reqID[:], r.RequestId)
-	req, ok := s.inflt.Get(reqID)
+	req, ok := s.mgr.Inflight.Get(reqID)
 	if !ok {
-		return nil, ErrUnknownRequest
+		return nil, session.ErrUnknownRequest
 	}
 
 	// 2. Seeder must be the caller.
@@ -119,8 +115,8 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 
 	// 5. Transition SELECTING→SERVING or ASSIGNED→SERVING (idempotent if already SERVING).
 	// Try both source states; whichever succeeds is fine.
-	if terr := s.inflt.Transition(reqID, StateAssigned, StateServing); terr != nil {
-		if !errors.Is(terr, ErrIllegalTransition) {
+	if terr := s.mgr.Inflight.Transition(reqID, session.StateAssigned, session.StateServing); terr != nil {
+		if !errors.Is(terr, session.ErrIllegalTransition) {
 			return nil, terr
 		}
 		// May already be SERVING from a racing call; if the state is
@@ -170,14 +166,10 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 
 	// Initialise settlement channel before indexing so HandleSettle can
 	// send into it immediately after LookupByHash returns.
-	if req.SettleSig == nil {
-		s.inflt.mu.Lock()
-		if req.SettleSig == nil {
-			req.SettleSig = make(chan []byte, 1)
-		}
-		s.inflt.mu.Unlock()
+	if _, eerr := s.mgr.Inflight.EnsureSettleSig(reqID); eerr != nil {
+		return nil, eerr
 	}
-	if ierr := s.inflt.IndexByHash(reqID, preimageHash); ierr != nil {
+	if ierr := s.mgr.Inflight.IndexByHash(reqID, preimageHash); ierr != nil {
 		return nil, ierr
 	}
 
@@ -215,7 +207,7 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 // independently decide the flag value at settlement time. Once that lands,
 // resolve the consumer pubkey here, verify the sig, and call appendUsageEntry
 // with consumerSigMissing=false when verification succeeds.
-func (s *Settlement) awaitSettle(ctx context.Context, req *Request, body *tbproto.EntryBody, seederSig []byte) {
+func (s *Settlement) awaitSettle(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte) {
 	timeout := time.Duration(s.cfg.SettlementTimeoutS) * time.Second
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -236,7 +228,7 @@ func (s *Settlement) awaitSettle(ctx context.Context, req *Request, body *tbprot
 
 // appendUsageEntry writes the usage entry to the ledger, retrying on
 // ErrStaleTip up to cfg.StaleTipRetries times.
-func (s *Settlement) appendUsageEntry(ctx context.Context, req *Request, body *tbproto.EntryBody, seederSig []byte) {
+func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte) {
 	rec := ledger.UsageRecord{
 		PrevHash:           body.PrevHash,
 		Seq:                body.Seq,
@@ -267,23 +259,23 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *Request, body *t
 		rec.Seq = tipSeq + 1
 	}
 	if appendErr != nil {
-		_ = s.inflt.Transition(req.RequestID, StateServing, StateFailed)
+		_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateFailed)
 		return
 	}
-	_, _, _ = s.resv.Release(req.RequestID)
+	_, _, _ = s.mgr.Reservations.Release(req.RequestID)
 	_, _ = s.deps.Registry.DecLoad(req.AssignedSeeder)
-	_ = s.inflt.Transition(req.RequestID, StateServing, StateCompleted)
+	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted)
 }
 
 // HandleSettle accepts the consumer's counter-signature for a settled usage
 // entry identified by its preimage hash. See broker-design §5.3.
-func (s *Settlement) HandleSettle(ctx context.Context, peerID ids.IdentityID, r *tbproto.SettleRequest) (*tbproto.SettleAck, error) {
+func (s *Settlement) HandleSettle(_ context.Context, peerID ids.IdentityID, r *tbproto.SettleRequest) (*tbproto.SettleAck, error) {
 	if r == nil || len(r.PreimageHash) != 32 {
 		return nil, errors.New("settlement: malformed Settle")
 	}
 	var hash [32]byte
 	copy(hash[:], r.PreimageHash)
-	req, ok := s.inflt.LookupByHash(hash)
+	req, ok := s.mgr.Inflight.LookupByHash(hash)
 	if !ok {
 		return nil, ErrUnknownPreimage
 	}

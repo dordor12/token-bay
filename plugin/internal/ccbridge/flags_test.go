@@ -4,23 +4,32 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func userOnly(text string) []Message {
-	return []Message{{Role: RoleUser, Content: text}}
+	return []Message{{Role: RoleUser, Content: TextContent(text)}}
 }
 
 func TestBuildArgv_HappyPath_IncludesAirtightFlags(t *testing.T) {
-	got := BuildArgv(Request{Messages: userOnly("hello"), Model: "claude-sonnet-4-6"})
+	got := BuildArgv(Request{
+		Messages: userOnly("hello"),
+		Model:    "claude-sonnet-4-6",
+	}, "ABCD-SESSION", "the new prompt")
 
-	// The flags spec §6.2 says are non-negotiable for safety.
+	// Print mode + positional prompt.
 	assert.Contains(t, got, "-p")
-	assert.Contains(t, got, "--input-format")
-	assert.Contains(t, got, "stream-json")
+	assert.Contains(t, got, "the new prompt")
+
+	// Output stream-json + verbose still present (we parse stdout).
 	assert.Contains(t, got, "--output-format")
+	assert.Contains(t, got, "stream-json")
 	assert.Contains(t, got, "--verbose")
-	assert.Contains(t, got, "--model")
-	assert.Contains(t, got, "claude-sonnet-4-6")
+
+	// Stream-json INPUT must NOT be present anymore.
+	assert.NotContains(t, got, "--input-format")
+
+	// Airtight tool/MCP/settings flags unchanged.
 	assert.Contains(t, got, "--tools")
 	assert.Contains(t, got, "--disallowedTools")
 	assert.Contains(t, got, "*")
@@ -30,15 +39,29 @@ func TestBuildArgv_HappyPath_IncludesAirtightFlags(t *testing.T) {
 	assert.Contains(t, got, "--settings")
 	assert.Contains(t, got, `{"hooks":{}}`)
 
-	// No positional prompt: the conversation goes via stdin (stream-json
-	// input), not argv. -p must NOT be followed by a non-flag token.
-	for i, a := range got {
-		if a == "-p" && i+1 < len(got) {
-			next := got[i+1]
-			assert.True(t, len(next) >= 2 && next[:2] == "--",
-				"unexpected token after -p: %q", next)
-		}
-	}
+	// New: resume + no-persist.
+	assert.Contains(t, got, "--resume")
+	assert.Contains(t, got, "ABCD-SESSION")
+	assert.Contains(t, got, "--no-session-persistence")
+
+	// Model passes through.
+	assert.Contains(t, got, "--model")
+	assert.Contains(t, got, "claude-sonnet-4-6")
+}
+
+func TestBuildArgv_PositionalPromptIsLastArg(t *testing.T) {
+	got := BuildArgv(Request{
+		Messages: userOnly("ignored — only Model matters here"),
+		Model:    "claude-haiku-4-5",
+	}, "S1", "the actual prompt text")
+	require.NotEmpty(t, got)
+	assert.Equal(t, "the actual prompt text", got[len(got)-1])
+}
+
+func TestBuildArgv_OmitsResumeWhenSessionIDEmpty(t *testing.T) {
+	got := BuildArgv(Request{Messages: userOnly("hi"), Model: "claude-haiku-4-5"}, "", "hello")
+	assert.NotContains(t, got, "--resume")
+	assert.Contains(t, got, "--no-session-persistence")
 }
 
 func TestBuildArgv_SystemPrompt_AddedWhenSet(t *testing.T) {
@@ -46,20 +69,20 @@ func TestBuildArgv_SystemPrompt_AddedWhenSet(t *testing.T) {
 		System:   "you are PINGBOT",
 		Messages: userOnly("hi"),
 		Model:    "claude-sonnet-4-6",
-	})
+	}, "sid", "prompt-text")
 	assert.Contains(t, got, "--system-prompt")
 	assert.Contains(t, got, "you are PINGBOT")
 }
 
 func TestBuildArgv_NoSystemPrompt_FlagOmitted(t *testing.T) {
-	got := BuildArgv(Request{Messages: userOnly("hi"), Model: "claude-sonnet-4-6"})
+	got := BuildArgv(Request{Messages: userOnly("hi"), Model: "claude-sonnet-4-6"}, "sid", "prompt-text")
 	for i, a := range got {
 		assert.NotEqual(t, "--system-prompt", a, "unexpected --system-prompt at %d", i)
 	}
 }
 
 func TestBuildArgv_RejectsEmptyModel(t *testing.T) {
-	got := BuildArgv(Request{Messages: userOnly("hi"), Model: ""})
+	got := BuildArgv(Request{Messages: userOnly("hi"), Model: ""}, "sid", "prompt-text")
 	for i, a := range got {
 		assert.NotEqual(t, "--model", a, "unexpected --model at %d", i)
 	}
@@ -67,8 +90,6 @@ func TestBuildArgv_RejectsEmptyModel(t *testing.T) {
 
 func TestAirtightFlags_PinnedConstants(t *testing.T) {
 	assert.Equal(t, "-p", FlagPrint)
-	assert.Equal(t, "--input-format", FlagInputFormat)
-	assert.Equal(t, "stream-json", InputFormatStream)
 	assert.Equal(t, "--system-prompt", FlagSystemPrompt)
 	assert.Equal(t, "--tools", FlagTools)
 	assert.Equal(t, "", ToolsNone)
@@ -81,4 +102,6 @@ func TestAirtightFlags_PinnedConstants(t *testing.T) {
 	assert.Equal(t, `{"hooks":{}}`, SettingsNoHooks)
 	assert.Equal(t, "user", RoleUser)
 	assert.Equal(t, "assistant", RoleAssistant)
+	assert.Equal(t, "--resume", FlagResume)
+	assert.Equal(t, "--no-session-persistence", FlagNoSessionPersistence)
 }

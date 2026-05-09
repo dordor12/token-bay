@@ -3,6 +3,7 @@ package ccbridge
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"io"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var bridgeTestClientKey = ed25519.PublicKey(make([]byte, ed25519.PublicKeySize))
 
 // stubRunner is a fixture-driven Runner.
 type stubRunner struct {
@@ -35,14 +38,15 @@ func TestBridgeServe_HappyPath_StreamsAndExtractsUsage(t *testing.T) {
 
 	var sink bytes.Buffer
 	usage, err := b.Serve(context.Background(), Request{
-		Messages: userOnly("hi"),
-		Model:    "claude-sonnet-4-6",
+		Messages:     userOnly("hi"),
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
 	}, &sink)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(11), usage.InputTokens)
 	assert.Equal(t, uint64(22), usage.OutputTokens)
 	require.Len(t, stub.Got.Messages, 1)
-	assert.Equal(t, "hi", stub.Got.Messages[0].Content)
+	assert.JSONEq(t, `[{"type":"text","text":"hi"}]`, string(stub.Got.Messages[0].Content))
 	assert.Equal(t, "claude-sonnet-4-6", stub.Got.Model)
 	assert.Contains(t, sink.String(), `"type":"result"`)
 }
@@ -61,11 +65,12 @@ func TestBridgeServe_LastResultUsageWins_OnMultiTurn(t *testing.T) {
 
 	usage, err := b.Serve(context.Background(), Request{
 		Messages: []Message{
-			{Role: RoleUser, Content: "first"},
-			{Role: RoleAssistant, Content: "ack"},
-			{Role: RoleUser, Content: "second"},
+			{Role: RoleUser, Content: TextContent("first")},
+			{Role: RoleAssistant, Content: TextContent("ack")},
+			{Role: RoleUser, Content: TextContent("second")},
 		},
-		Model: "claude-sonnet-4-6",
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
 	}, io.Discard)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(42), usage.InputTokens)
@@ -74,7 +79,7 @@ func TestBridgeServe_LastResultUsageWins_OnMultiTurn(t *testing.T) {
 
 func TestBridgeServe_RejectsEmptyMessages(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
-	_, err := b.Serve(context.Background(), Request{Messages: nil, Model: "claude-sonnet-4-6"}, io.Discard)
+	_, err := b.Serve(context.Background(), Request{Messages: nil, Model: "claude-sonnet-4-6", ClientPubkey: bridgeTestClientKey}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
 	assert.True(t, errors.Is(err, ErrEmptyMessages))
@@ -84,10 +89,11 @@ func TestBridgeServe_RejectsLastMessageNotUser(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
 	_, err := b.Serve(context.Background(), Request{
 		Messages: []Message{
-			{Role: RoleUser, Content: "hi"},
-			{Role: RoleAssistant, Content: "hello"},
+			{Role: RoleUser, Content: TextContent("hi")},
+			{Role: RoleAssistant, Content: TextContent("hello")},
 		},
-		Model: "claude-sonnet-4-6",
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
 	}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrLastMessageNotUser))
@@ -96,8 +102,9 @@ func TestBridgeServe_RejectsLastMessageNotUser(t *testing.T) {
 func TestBridgeServe_RejectsEmptyModel(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
 	_, err := b.Serve(context.Background(), Request{
-		Messages: userOnly("hi"),
-		Model:    "",
+		Messages:     userOnly("hi"),
+		Model:        "",
+		ClientPubkey: bridgeTestClientKey,
 	}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
@@ -110,8 +117,9 @@ func TestBridgeServe_RunnerError_Propagates(t *testing.T) {
 
 	var sink bytes.Buffer
 	_, err := b.Serve(context.Background(), Request{
-		Messages: userOnly("hi"),
-		Model:    "claude-sonnet-4-6",
+		Messages:     userOnly("hi"),
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
 	}, &sink)
 	require.Error(t, err)
 	var exit *ExitError

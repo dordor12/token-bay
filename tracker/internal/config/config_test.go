@@ -98,6 +98,11 @@ func TestDefaultConfig_SpecDefaultsPopulated(t *testing.T) {
 	assert.Equal(t, 3600, c.Federation.GossipDedupeTTLS)
 	assert.Equal(t, 24, c.Federation.TransferRetryWindowH)
 	assert.Equal(t, 1, c.Federation.EnrollRatePerMinPerIP)
+	assert.Equal(t, 5, c.Federation.HandshakeTimeoutS)
+	assert.Equal(t, 100, c.Federation.GossipRateQPS)
+	assert.Equal(t, 256, c.Federation.SendQueueDepth)
+	assert.Equal(t, 3600, c.Federation.PublishCadenceS)
+	assert.Empty(t, c.Federation.Peers, "peers default must be nil — operator-managed")
 
 	// Reputation
 	assert.Equal(t, 60, c.Reputation.EvaluationIntervalS)

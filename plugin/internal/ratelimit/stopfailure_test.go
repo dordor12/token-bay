@@ -25,6 +25,7 @@ func TestParseStopFailurePayload_RateLimitMinimal_Succeeds(t *testing.T) {
 	assert.Equal(t, ErrorRateLimit, p.Error)
 	assert.Nil(t, p.PermissionMode)
 	assert.Nil(t, p.AgentID)
+	assert.Nil(t, p.AgentType)
 	assert.Nil(t, p.ErrorDetails)
 	assert.Nil(t, p.LastAssistantMessage)
 }
@@ -36,6 +37,7 @@ func TestParseStopFailurePayload_WithAllOptionalFields_ParsesAll(t *testing.T) {
 		"cwd": "/work",
 		"permission_mode": "default",
 		"agent_id": "a-1",
+		"agent_type": "general-purpose",
 		"hook_event_name": "StopFailure",
 		"error": "rate_limit",
 		"error_details": "429 too many requests",
@@ -47,6 +49,8 @@ func TestParseStopFailurePayload_WithAllOptionalFields_ParsesAll(t *testing.T) {
 	assert.Equal(t, "default", *p.PermissionMode)
 	require.NotNil(t, p.AgentID)
 	assert.Equal(t, "a-1", *p.AgentID)
+	require.NotNil(t, p.AgentType)
+	assert.Equal(t, "general-purpose", *p.AgentType)
 	require.NotNil(t, p.ErrorDetails)
 	assert.Equal(t, "429 too many requests", *p.ErrorDetails)
 	require.NotNil(t, p.LastAssistantMessage)

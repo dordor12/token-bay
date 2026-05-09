@@ -21,20 +21,18 @@ func (s *Subsystems) AdminHandler() http.Handler {
 }
 
 // handleListInflight lists all in-flight requests as JSON.
-func (s *Subsystems) handleListInflight(w http.ResponseWriter, r *http.Request) {
-	inflt := s.Broker.inflt
-	inflt.mu.RLock()
+func (s *Subsystems) handleListInflight(w http.ResponseWriter, _ *http.Request) {
 	now := time.Now()
-	out := make([]map[string]any, 0, len(inflt.byID))
-	for _, req := range inflt.byID {
+	snap := s.Broker.mgr.Inflight.Snapshot()
+	out := make([]map[string]any, 0, len(snap))
+	for _, sum := range snap {
 		out = append(out, map[string]any{
-			"request_id":  hex.EncodeToString(req.RequestID[:]),
-			"consumer_id": hex.EncodeToString(req.ConsumerID[:]),
-			"state":       stateName(req.State),
-			"age_seconds": now.Sub(req.StartedAt).Seconds(),
+			"request_id":  hex.EncodeToString(sum.RequestID[:]),
+			"consumer_id": hex.EncodeToString(sum.ConsumerID[:]),
+			"state":       sum.State.String(),
+			"age_seconds": now.Sub(sum.StartedAt).Seconds(),
 		})
 	}
-	inflt.mu.RUnlock()
 	adminWriteJSON(w, http.StatusOK, out)
 }
 
@@ -45,18 +43,12 @@ func (s *Subsystems) handleGetInflight(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request_id", http.StatusBadRequest)
 		return
 	}
-	inflt := s.Broker.inflt
-	inflt.mu.RLock()
-	req, ok := inflt.byID[reqID]
-	inflt.mu.RUnlock()
+	req, ok := s.Broker.mgr.Inflight.Get(reqID)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	resv := s.Broker.resv
-	resv.mu.Lock()
-	slot, hasSlot := resv.byReq[reqID]
-	resv.mu.Unlock()
+	slot, hasSlot := s.Broker.mgr.Reservations.Get(reqID)
 
 	var seederHex string
 	if req.AssignedSeeder != ([32]byte{}) {
@@ -65,7 +57,7 @@ func (s *Subsystems) handleGetInflight(w http.ResponseWriter, r *http.Request) {
 	detail := map[string]any{
 		"request_id":  hex.EncodeToString(req.RequestID[:]),
 		"consumer_id": hex.EncodeToString(req.ConsumerID[:]),
-		"state":       stateName(req.State),
+		"state":       req.State.String(),
 		"seeder_id":   seederHex,
 	}
 	if hasSlot {
@@ -76,10 +68,6 @@ func (s *Subsystems) handleGetInflight(w http.ResponseWriter, r *http.Request) {
 
 // handleListReservations lists per-consumer reserved totals and slot details.
 func (s *Subsystems) handleListReservations(w http.ResponseWriter, _ *http.Request) {
-	resv := s.Broker.resv
-	resv.mu.Lock()
-
-	// Build consumer→slots index.
 	type slotDTO struct {
 		RequestID string `json:"request_id"`
 		Amount    uint64 `json:"amount"`
@@ -91,13 +79,14 @@ func (s *Subsystems) handleListReservations(w http.ResponseWriter, _ *http.Reque
 		Slots      []slotDTO `json:"slots"`
 	}
 
+	snap := s.Broker.mgr.Reservations.Snapshot()
 	byConsumer := make(map[[32]byte]*consumerDTO)
-	for _, slot := range resv.byReq {
+	for _, slot := range snap {
 		cid := slot.ConsumerID
 		if _, ok := byConsumer[cid]; !ok {
 			byConsumer[cid] = &consumerDTO{
 				ConsumerID: hex.EncodeToString(cid[:]),
-				Total:      resv.byID[cid],
+				Total:      s.Broker.mgr.Reservations.Reserved(cid),
 			}
 		}
 		byConsumer[cid].Slots = append(byConsumer[cid].Slots, slotDTO{
@@ -106,7 +95,6 @@ func (s *Subsystems) handleListReservations(w http.ResponseWriter, _ *http.Reque
 			ExpiresAt: slot.ExpiresAt.Unix(),
 		})
 	}
-	resv.mu.Unlock()
 
 	out := make([]*consumerDTO, 0, len(byConsumer))
 	for _, dto := range byConsumer {
@@ -124,7 +112,7 @@ func (s *Subsystems) handleForceReleaseReservation(w http.ResponseWriter, r *htt
 		return
 	}
 	reqIDHex := hex.EncodeToString(reqID[:])
-	_, _, ok := s.Broker.resv.Release(reqID)
+	_, _, ok := s.Broker.mgr.Reservations.Release(reqID)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -146,26 +134,17 @@ func (s *Subsystems) handleForceFailInflight(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	reqIDHex := hex.EncodeToString(reqID[:])
-	inflt := s.Broker.inflt
-	inflt.mu.Lock()
-	req, ok := inflt.byID[reqID]
+	prev, ok := s.Broker.mgr.Inflight.ForceFail(reqID, time.Now())
 	if !ok {
-		inflt.mu.Unlock()
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	prev := req.State
-	req.State = StateFailed
-	if req.TerminatedAt.IsZero() {
-		req.TerminatedAt = time.Now()
-	}
-	inflt.mu.Unlock()
 
 	s.Broker.deps.Logger.Info().
 		Str("event", "broker_admin_override").
 		Str("endpoint", "inflight/fail").
 		Str("request_id", reqIDHex).
-		Str("prev_state", stateName(prev)).
+		Str("prev_state", prev.String()).
 		Msg("")
 	adminWriteJSON(w, http.StatusOK, map[string]any{"failed": true, "request_id": reqIDHex})
 }
@@ -195,22 +174,4 @@ type hexLenError struct{ got, want int }
 
 func (e *hexLenError) Error() string {
 	return "hex ID: wrong length"
-}
-
-// stateName maps State values to human-readable strings for JSON output.
-func stateName(s State) string {
-	switch s {
-	case StateSelecting:
-		return "selecting"
-	case StateAssigned:
-		return "assigned"
-	case StateServing:
-		return "serving"
-	case StateCompleted:
-		return "completed"
-	case StateFailed:
-		return "failed"
-	default:
-		return "unspecified"
-	}
 }

@@ -3,10 +3,17 @@ package ccbridge
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"strings"
 )
+
+// conformanceClientKey is a synthetic zero-byte Ed25519 public key used
+// for the startup conformance gate. The conformance runner executes on
+// the seeder's own machine; the zero key simply ensures ClientPubkey
+// passes the length check so the runner does not reject the request.
+var conformanceClientKey = ed25519.PublicKey(make([]byte, ed25519.PublicKeySize))
 
 // ErrConformanceFailed is returned by RunStartupConformance when an
 // adversarial prompt produced output indicating that Claude Code's
@@ -53,8 +60,9 @@ func RunStartupConformance(ctx context.Context, runner Runner) error {
 	for i, prompt := range AdversarialCorpus {
 		var sink bytes.Buffer
 		req := Request{
-			Messages: []Message{{Role: RoleUser, Content: prompt}},
-			Model:    probeModel,
+			Messages:     []Message{{Role: RoleUser, Content: TextContent(prompt)}},
+			Model:        probeModel,
+			ClientPubkey: conformanceClientKey,
 		}
 		if err := runner.Run(ctx, req, &sink); err != nil {
 			return fmt.Errorf("%w: prompt %d: runner: %v", ErrConformanceFailed, i, err)

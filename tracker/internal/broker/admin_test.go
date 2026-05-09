@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // openTestSubsystems returns a *Subsystems ready for admin tests.
@@ -22,15 +23,17 @@ func openTestSubsystems(t *testing.T) *Subsystems {
 	return sub
 }
 
-// insertInflight is a test helper that adds a Request directly to Broker.inflt.
-func insertInflight(sub *Subsystems, req *Request) {
-	sub.Broker.inflt.Insert(req)
+// insertInflight is a test helper that adds a Request directly to the shared
+// session.Manager's Inflight store.
+func insertInflight(sub *Subsystems, req *session.Request) {
+	sub.Broker.mgr.Inflight.Insert(req)
 }
 
-// insertReservation is a test helper that adds a reservation to Broker.resv.
-// snapshotCredits is set high enough to always admit the reservation.
+// insertReservation is a test helper that adds a reservation to the shared
+// session.Manager's Reservations store. snapshotCredits is set high enough
+// to always admit the reservation.
 func insertReservation(sub *Subsystems, reqID [16]byte, consumer ids.IdentityID, amount uint64) {
-	_ = sub.Broker.resv.Reserve(reqID, consumer, amount, 1_000_000_000, time.Now().Add(time.Hour))
+	_ = sub.Broker.mgr.Reservations.Reserve(reqID, consumer, amount, 1_000_000_000, time.Now().Add(time.Hour))
 }
 
 // doRequest performs an HTTP request against the AdminHandler.
@@ -58,16 +61,16 @@ func TestAdmin_ListInflight(t *testing.T) {
 	reqA := [16]byte{0x01}
 	reqB := [16]byte{0x02}
 
-	insertInflight(sub, &Request{
+	insertInflight(sub, &session.Request{
 		RequestID:  reqA,
 		ConsumerID: consumerA,
-		State:      StateSelecting,
+		State:      session.StateSelecting,
 		StartedAt:  time.Now().Add(-5 * time.Second),
 	})
-	insertInflight(sub, &Request{
+	insertInflight(sub, &session.Request{
 		RequestID:  reqB,
 		ConsumerID: consumerB,
-		State:      StateAssigned,
+		State:      session.StateAssigned,
 		StartedAt:  time.Now().Add(-10 * time.Second),
 	})
 
@@ -110,11 +113,11 @@ func TestAdmin_GetInflight_Detail(t *testing.T) {
 	seederID := ids.IdentityID{0xDD}
 	reqID := [16]byte{0x03}
 
-	insertInflight(sub, &Request{
+	insertInflight(sub, &session.Request{
 		RequestID:      reqID,
 		ConsumerID:     consumerID,
 		AssignedSeeder: seederID,
-		State:          StateAssigned,
+		State:          session.StateAssigned,
 		StartedAt:      time.Now(),
 	})
 
@@ -162,7 +165,7 @@ func TestAdmin_ForceReleaseReservation(t *testing.T) {
 	insertReservation(sub, reqID, consumer, 1000)
 
 	// Confirm reservation exists.
-	require.Equal(t, uint64(1000), sub.Broker.resv.Reserved(consumer))
+	require.Equal(t, uint64(1000), sub.Broker.mgr.Reservations.Reserved(consumer))
 
 	rec := doRequest(t, sub, http.MethodPost,
 		"/broker/reservations/release/"+hex.EncodeToString(reqID[:]))
@@ -173,7 +176,7 @@ func TestAdmin_ForceReleaseReservation(t *testing.T) {
 	require.Equal(t, true, resp["released"])
 
 	// Reservation should be gone.
-	require.Equal(t, uint64(0), sub.Broker.resv.Reserved(consumer))
+	require.Equal(t, uint64(0), sub.Broker.mgr.Reservations.Reserved(consumer))
 }
 
 func TestAdmin_ForceReleaseReservation_NotFound(t *testing.T) {
@@ -190,10 +193,10 @@ func TestAdmin_ForceFailInflight(t *testing.T) {
 
 	consumer := ids.IdentityID{0xCC}
 	reqID := [16]byte{0x31}
-	insertInflight(sub, &Request{
+	insertInflight(sub, &session.Request{
 		RequestID:  reqID,
 		ConsumerID: consumer,
-		State:      StateAssigned,
+		State:      session.StateAssigned,
 		StartedAt:  time.Now(),
 	})
 
@@ -206,9 +209,9 @@ func TestAdmin_ForceFailInflight(t *testing.T) {
 	require.Equal(t, true, resp["failed"])
 
 	// State should now be failed.
-	req, ok := sub.Broker.inflt.Get(reqID)
+	req, ok := sub.Broker.mgr.Inflight.Get(reqID)
 	require.True(t, ok)
-	require.Equal(t, StateFailed, req.State)
+	require.Equal(t, session.StateFailed, req.State)
 }
 
 func TestAdmin_ForceFailInflight_NotFound(t *testing.T) {

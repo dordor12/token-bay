@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -12,20 +14,29 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admin"
 	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/broker"
 	"github.com/token-bay/token-bay/tracker/internal/config"
+	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
 	"github.com/token-bay/token-bay/tracker/internal/server"
 	"github.com/token-bay/token-bay/tracker/internal/stunturn"
 )
+
+// adminTokenEnvVar is the name of the env var holding the admin bearer
+// token. Empty / unset rejects every admin request — operators must set
+// this explicitly to enable the admin port.
+const adminTokenEnvVar = "TOKEN_BAY_ADMIN_TOKEN" //nolint:gosec // env var name, not a credential
 
 // newRunCmd is the composition root: parse --config, build subsystems,
 // construct server.Deps, run server.Run, install SIGINT/SIGTERM handler.
@@ -110,6 +121,49 @@ func newRunCmd() *cobra.Command {
 			}
 			defer brokerSubs.Close() //nolint:errcheck
 
+			// federation: in-process transport in v1; real-QUIC peer
+			// transport ships in a follow-up subsystem. Effectively dormant
+			// when cfg.Federation.Peers is empty.
+			fedHub := federation.NewInprocHub()
+			trackerPub := trackerKey.Public().(ed25519.PublicKey)
+			fedTransport := federation.NewInprocTransport(fedHub, "self", trackerPub, trackerKey)
+			fedPeers := make([]federation.AllowlistedPeer, 0, len(cfg.Federation.Peers))
+			for _, p := range cfg.Federation.Peers {
+				tid, err := hexToTrackerID(p.TrackerID)
+				if err != nil {
+					return fmt.Errorf("federation peer %q: %w", p.Addr, err)
+				}
+				pk, err := hexToPubKey(p.PubKey)
+				if err != nil {
+					return fmt.Errorf("federation peer %q: %w", p.Addr, err)
+				}
+				fedPeers = append(fedPeers, federation.AllowlistedPeer{
+					TrackerID: tid, PubKey: pk, Addr: p.Addr, Region: p.Region,
+				})
+			}
+			fed, err := federation.Open(federation.Config{
+				MyTrackerID:      ids.TrackerID(sha256.Sum256(trackerPub)),
+				MyPriv:           trackerKey,
+				HandshakeTimeout: time.Duration(cfg.Federation.HandshakeTimeoutS) * time.Second,
+				DedupeTTL:        time.Duration(cfg.Federation.GossipDedupeTTLS) * time.Second,
+				SendQueueDepth:   cfg.Federation.SendQueueDepth,
+				GossipRateQPS:    cfg.Federation.GossipRateQPS,
+				PublishCadence:   time.Duration(cfg.Federation.PublishCadenceS) * time.Second,
+				Peers:            fedPeers,
+			}, federation.Deps{
+				Transport: fedTransport,
+				RootSrc:   ledgerRootSourceAdapter{led: led},
+				Archive:   storeAsArchive{store: store},
+				Metrics:   federation.NewMetrics(prometheus.DefaultRegisterer),
+				Logger:    logger,
+				Now:       time.Now,
+			})
+			if err != nil {
+				return fmt.Errorf("federation: %w", err)
+			}
+			defer fed.Close() //nolint:errcheck
+			_ = fed           // operator endpoints will use this in a follow-up
+
 			alloc, err := stunturn.NewAllocator(stunturn.AllocatorConfig{
 				MaxKbpsPerSeeder: cfg.STUNTURN.TURNRelayMaxKbps,
 				SessionTTL:       time.Duration(cfg.STUNTURN.SessionTTLSeconds) * time.Second,
@@ -162,17 +216,40 @@ func newRunCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			// stop() cancels ctx, which drains both the QUIC server and
+			// the admin server. /maintenance reuses the same path so an
+			// HTTP shutdown trigger is identical to SIGTERM.
+			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, stop)
+			if err != nil {
+				return fmt.Errorf("admin: %w", err)
+			}
+
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Run(ctx) }()
 
+			adminErrCh := make(chan error, 1)
+			go func() { adminErrCh <- adminSrv.Run(ctx) }()
+
 			select {
 			case err := <-errCh:
+				graceCtx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
+				defer cancel()
+				_ = adminSrv.Shutdown(graceCtx)
+				return err
+			case err := <-adminErrCh:
+				graceCtx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
+				defer cancel()
+				_ = srv.Shutdown(graceCtx)
 				return err
 			case <-ctx.Done():
 				graceCtx, cancel := context.WithTimeout(context.Background(),
 					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
 				defer cancel()
-				return srv.Shutdown(graceCtx)
+				shutdownErr := srv.Shutdown(graceCtx)
+				_ = adminSrv.Shutdown(graceCtx)
+				return shutdownErr
 			}
 		},
 	}
@@ -252,4 +329,44 @@ func (p *pushProxy) PushSettlementTo(id ids.IdentityID, push *tbproto.Settlement
 		return nil, false
 	}
 	return s.PushSettlementTo(id, push)
+}
+
+// buildAdminServer assembles the admin HTTP server from the live
+// subsystems. The bearer token comes from TOKEN_BAY_ADMIN_TOKEN; an unset
+// or empty value rejects every admin request, which is intentional —
+// operators must opt in to remote admin access.
+func buildAdminServer(
+	cfg *config.Config,
+	logger zerolog.Logger,
+	srv *server.Server,
+	reg *registry.Registry,
+	led *ledger.Ledger,
+	brokerSubs *broker.Subsystems,
+	adm *admission.Subsystem,
+	stop func(),
+) (*admin.Server, error) {
+	token := os.Getenv(adminTokenEnvVar)
+	validator := func(t string) bool { return token != "" && t == token }
+	if token == "" {
+		logger.Warn().Str("env", adminTokenEnvVar).
+			Msg("admin: token unset, all admin requests will be rejected")
+	}
+
+	admissionMount := func(mux *http.ServeMux, guard admin.MuxGuard) {
+		adm.RegisterMux(mux, admission.MuxGuard(guard))
+	}
+
+	return admin.New(admin.Deps{
+		Config:             cfg,
+		Logger:             logger,
+		Now:                time.Now,
+		Version:            version,
+		TokenValidator:     validator,
+		PeerCounter:        srv,
+		Registry:           reg,
+		Ledger:             led,
+		BrokerMux:          brokerSubs.AdminHandler(),
+		AdmissionMount:     admissionMount,
+		TriggerMaintenance: stop,
+	})
 }

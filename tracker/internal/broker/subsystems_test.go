@@ -11,6 +11,7 @@ import (
 
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // TestSubsystems_OpenClose_Roundtrip verifies that Broker and Settlement
@@ -54,11 +55,12 @@ func TestSubsystems_OpenClose_Roundtrip(t *testing.T) {
 
 	requestID := res.Admit.RequestID
 
-	// Verify that Settlement.inflt (shared) has the same request.
-	req, ok := sub.Settlement.inflt.Get(requestID)
-	require.True(t, ok, "Settlement inflt should contain the request inserted by Broker")
+	// Verify that Settlement.mgr (shared) has the same request.
+	require.Same(t, sub.Broker.mgr, sub.Settlement.mgr)
+	req, ok := sub.Settlement.mgr.Inflight.Get(requestID)
+	require.True(t, ok, "Settlement.mgr should contain the request inserted by Broker")
 	require.Equal(t, requestID, req.RequestID)
-	require.Equal(t, StateAssigned, req.State)
+	require.Equal(t, session.StateAssigned, req.State)
 
 	// Now HandleUsageReport through Settlement using the shared inflight.
 	report := buildSeederSignedReport(

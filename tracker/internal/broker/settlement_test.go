@@ -15,6 +15,7 @@ import (
 	"github.com/token-bay/token-bay/shared/signing"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ func buildSeederSignedReport(t *testing.T, seederPriv ed25519.PrivateKey, reques
 
 func TestSettlement_OpenClose(t *testing.T) {
 	deps := testDeps(t)
-	s, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
 	require.NoError(t, s.Close()) // idempotent
@@ -115,14 +116,14 @@ func TestSettlement_OpenClose(t *testing.T) {
 func TestSettlement_OpenRequiresLedger(t *testing.T) {
 	deps := testDeps(t)
 	deps.Ledger = nil
-	_, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+	_, err := OpenSettlement(testSettlementCfg(), deps, nil)
 	require.Error(t, err)
 }
 
 func TestSettlement_OpenRequiresPusher(t *testing.T) {
 	deps := testDeps(t)
 	deps.Pusher = nil
-	_, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+	_, err := OpenSettlement(testSettlementCfg(), deps, nil)
 	require.Error(t, err)
 }
 
@@ -132,22 +133,22 @@ func TestSettlement_OpenRequiresPusher(t *testing.T) {
 
 // makeAssignedRequest creates an inflight request already in StateAssigned
 // with the given seeder and a real seeder ed25519 keypair.
-func makeAssignedRequest(t *testing.T, requestID [16]byte, model string, consumerID, seederID ids.IdentityID, seederPub ed25519.PublicKey, maxIn, maxOut uint64) *Request {
+func makeAssignedRequest(t *testing.T, requestID [16]byte, model string, consumerID, seederID ids.IdentityID, seederPub ed25519.PublicKey, maxIn, maxOut uint64) *session.Request {
 	t.Helper()
-	return &Request{
+	return &session.Request{
 		RequestID:       requestID,
 		ConsumerID:      consumerID,
 		EnvelopeBody:    &tbproto.EnvelopeBody{Model: model, MaxInputTokens: maxIn, MaxOutputTokens: maxOut},
 		MaxCostReserved: 1_000_000,
 		AssignedSeeder:  seederID,
 		SeederPubkey:    seederPub,
-		State:           StateAssigned,
+		State:           session.StateAssigned,
 	}
 }
 
 func TestHandleUsageReport_UnknownRequest(t *testing.T) {
 	deps := testDeps(t)
-	s, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -156,12 +157,12 @@ func TestHandleUsageReport_UnknownRequest(t *testing.T) {
 		Model:     "claude-sonnet-4-6",
 	}
 	_, err = s.HandleUsageReport(context.Background(), ids.IdentityID{0xCC}, r)
-	require.ErrorIs(t, err, ErrUnknownRequest)
+	require.ErrorIs(t, err, session.ErrUnknownRequest)
 }
 
 func TestHandleUsageReport_SeederMismatch(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
+	mgr := session.New()
 
 	requestID := [16]byte{0x01}
 	consumerID := ids.IdentityID{0xCC}
@@ -169,9 +170,9 @@ func TestHandleUsageReport_SeederMismatch(t *testing.T) {
 	otherID := ids.IdentityID{0xEE}
 
 	seederPub, _, _ := ed25519.GenerateKey(rand.Reader)
-	inflt.Insert(makeAssignedRequest(t, requestID, "claude-sonnet-4-6", consumerID, seederID, seederPub, 100, 200))
+	mgr.Inflight.Insert(makeAssignedRequest(t, requestID, "claude-sonnet-4-6", consumerID, seederID, seederPub, 100, 200))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -185,16 +186,16 @@ func TestHandleUsageReport_SeederMismatch(t *testing.T) {
 
 func TestHandleUsageReport_ModelMismatch(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
+	mgr := session.New()
 
 	requestID := [16]byte{0x02}
 	consumerID := ids.IdentityID{0xCC}
 	seederID := ids.IdentityID{0xDD}
 
 	seederPub, _, _ := ed25519.GenerateKey(rand.Reader)
-	inflt.Insert(makeAssignedRequest(t, requestID, "claude-sonnet-4-6", consumerID, seederID, seederPub, 100, 200))
+	mgr.Inflight.Insert(makeAssignedRequest(t, requestID, "claude-sonnet-4-6", consumerID, seederID, seederPub, 100, 200))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -208,7 +209,7 @@ func TestHandleUsageReport_ModelMismatch(t *testing.T) {
 
 func TestHandleUsageReport_CostOverspend(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
+	mgr := session.New()
 
 	requestID := [16]byte{0x03}
 	consumerID := ids.IdentityID{0xCC}
@@ -219,9 +220,9 @@ func TestHandleUsageReport_CostOverspend(t *testing.T) {
 	// Reserve very little — force overspend
 	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
 	req.MaxCostReserved = 1 // 1 credit — way too low
-	inflt.Insert(req)
+	mgr.Inflight.Insert(req)
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -237,7 +238,7 @@ func TestHandleUsageReport_CostOverspend(t *testing.T) {
 
 func TestHandleUsageReport_SeederSigInvalid(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
+	mgr := session.New()
 
 	requestID := [16]byte{0x04}
 	consumerID := ids.IdentityID{0xCC}
@@ -246,12 +247,12 @@ func TestHandleUsageReport_SeederSigInvalid(t *testing.T) {
 
 	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	inflt.Insert(makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200))
+	mgr.Inflight.Insert(makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200))
 
 	const fixedTS uint64 = 1700000000
 	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -275,8 +276,7 @@ func TestHandleUsageReport_AppendsConsumerSigMissing(t *testing.T) {
 	_, _ = fr.IncLoad(seederRec.IdentityID)
 	deps.Registry = fr
 
-	inflt := NewInflight()
-	resv := NewReservations()
+	mgr := session.New()
 
 	requestID := [16]byte{0x05}
 	consumerID := ids.IdentityID{0xCC}
@@ -287,9 +287,9 @@ func TestHandleUsageReport_AppendsConsumerSigMissing(t *testing.T) {
 	require.NoError(t, err)
 
 	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
-	inflt.Insert(req)
+	mgr.Inflight.Insert(req)
 	// Reserve some credits so Release can clean up.
-	_ = resv.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
+	_ = mgr.Reservations.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
 
 	// Use SettlementTimeoutS=0 so the timer fires immediately.
 	cfg := testSettlementCfg()
@@ -299,7 +299,7 @@ func TestHandleUsageReport_AppendsConsumerSigMissing(t *testing.T) {
 	const fixedTS uint64 = 1700000000
 	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
 
-	s, err := OpenSettlement(cfg, deps, inflt, resv)
+	s, err := OpenSettlement(cfg, deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -334,7 +334,7 @@ func TestHandleUsageReport_AppendsConsumerSigMissing(t *testing.T) {
 
 func TestHandleSettle_DispatchSig(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
+	mgr := session.New()
 
 	requestID := [16]byte{0x10}
 	consumerID := ids.IdentityID{0xCC}
@@ -343,15 +343,15 @@ func TestHandleSettle_DispatchSig(t *testing.T) {
 	seederPub, _, _ := ed25519.GenerateKey(rand.Reader)
 	req := makeAssignedRequest(t, requestID, "claude-sonnet-4-6", consumerID, seederID, seederPub, 100, 200)
 	req.SettleSig = make(chan []byte, 1)
-	req.State = StateServing
-	inflt.Insert(req)
+	req.State = session.StateServing
+	mgr.Inflight.Insert(req)
 
 	// Index by a known hash.
 	var hash [32]byte
 	hash[0] = 0xAB
-	require.NoError(t, inflt.IndexByHash(requestID, hash))
+	require.NoError(t, mgr.Inflight.IndexByHash(requestID, hash))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -373,7 +373,7 @@ func TestHandleSettle_DispatchSig(t *testing.T) {
 
 func TestHandleSettle_UnknownPreimage(t *testing.T) {
 	deps := testDeps(t)
-	s, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, nil)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -412,7 +412,7 @@ func TestSettlement_IdentityResolverWired(t *testing.T) {
 	t.Run("nil_identity_no_panic", func(t *testing.T) {
 		deps := testDeps(t)
 		deps.Identity = nil // explicit nil — should not panic
-		s, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+		s, err := OpenSettlement(testSettlementCfg(), deps, nil)
 		require.NoError(t, err)
 		require.NoError(t, s.Close())
 	})
@@ -424,7 +424,7 @@ func TestSettlement_IdentityResolverWired(t *testing.T) {
 		}
 		deps.Identity = resolver
 
-		s, err := OpenSettlement(testSettlementCfg(), deps, nil, nil)
+		s, err := OpenSettlement(testSettlementCfg(), deps, nil)
 		require.NoError(t, err)
 		defer s.Close()
 
@@ -437,7 +437,7 @@ func TestSettlement_IdentityResolverWired(t *testing.T) {
 
 func TestHandleSettle_Duplicate(t *testing.T) {
 	deps := testDeps(t)
-	inflt := NewInflight()
+	mgr := session.New()
 
 	requestID := [16]byte{0x11}
 	consumerID := ids.IdentityID{0xCC}
@@ -446,14 +446,14 @@ func TestHandleSettle_Duplicate(t *testing.T) {
 	seederPub, _, _ := ed25519.GenerateKey(rand.Reader)
 	req := makeAssignedRequest(t, requestID, "claude-sonnet-4-6", consumerID, seederID, seederPub, 100, 200)
 	req.SettleSig = make(chan []byte, 1)
-	req.State = StateServing
-	inflt.Insert(req)
+	req.State = session.StateServing
+	mgr.Inflight.Insert(req)
 
 	var hash [32]byte
 	hash[0] = 0xBA
-	require.NoError(t, inflt.IndexByHash(requestID, hash))
+	require.NoError(t, mgr.Inflight.IndexByHash(requestID, hash))
 
-	s, err := OpenSettlement(testSettlementCfg(), deps, inflt, nil)
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
 	require.NoError(t, err)
 	defer s.Close()
 
