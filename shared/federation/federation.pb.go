@@ -91,9 +91,13 @@ func (Kind) EnumDescriptor() ([]byte, []int) {
 	return file_federation_federation_proto_rawDescGZIP(), []int{0}
 }
 
-// Envelope wraps every steady-state and handshake message exchanged
-// between trackers. The receiver verifies sender_sig over payload
-// against the peer's Ed25519 public key.
+// Envelope wraps every steady-state and handshake message (including
+// Hello) exchanged between trackers. The receiver verifies sender_sig
+// over payload against the peer's Ed25519 public key, which the receiver
+// already holds from its operator-managed allowlist (FederationConfig
+// peers carry hex-encoded pubkeys; tracker_id is sha256(pubkey)). No
+// pubkey is carried on the wire — this prevents trust-on-first-use and
+// confines key authority to the operator's allowlist.
 type Envelope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SenderId      []byte                 `protobuf:"bytes,1,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"` // 32 bytes — sender tracker_id (= sha256(pubkey))
