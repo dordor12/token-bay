@@ -1,0 +1,65 @@
+syntax = "proto3";
+package tokenbay.federation.v1;
+
+option go_package = "github.com/token-bay/token-bay/shared/federation";
+
+// Kind classifies an Envelope's inner payload. Forward-compat: unknown
+// kinds at the receiver MUST be parsed and dropped, not crashed on.
+enum Kind {
+  KIND_UNSPECIFIED           = 0;
+  KIND_HELLO                 = 1;
+  KIND_PEER_AUTH             = 2;
+  KIND_PEERING_ACCEPT        = 3;
+  KIND_PEERING_REJECT        = 4;
+  KIND_ROOT_ATTESTATION      = 5;
+  KIND_EQUIVOCATION_EVIDENCE = 6;
+  KIND_PING                  = 7;
+  KIND_PONG                  = 8;
+}
+
+// Envelope wraps every steady-state and handshake message exchanged
+// between trackers. The receiver verifies sender_sig over payload
+// against the peer's Ed25519 public key.
+message Envelope {
+  bytes sender_id  = 1;  // 32 bytes — sender tracker_id (= sha256(pubkey))
+  Kind  kind       = 2;
+  bytes payload    = 3;  // serialized inner message
+  bytes sender_sig = 4;  // 64 bytes — Ed25519(payload) by sender
+}
+
+message Hello {
+  bytes           tracker_id        = 1;  // 32 bytes
+  uint32          protocol_version  = 2;
+  bytes           nonce             = 3;  // 32 bytes
+  repeated string features          = 4;
+}
+
+message PeerAuth {
+  bytes nonce_sig = 1;  // 64 bytes — Ed25519(counterparty Hello.nonce)
+}
+
+message PeeringAccept {
+  uint32 dedupe_ttl_s    = 1;
+  uint32 gossip_rate_qps = 2;
+}
+
+message PeeringReject { string reason = 1; }
+
+message RootAttestation {
+  bytes  tracker_id  = 1;  // 32 bytes
+  uint64 hour        = 2;
+  bytes  merkle_root = 3;  // exactly storage.PutMerkleRoot's root bytes
+  bytes  tracker_sig = 4;  // 64 bytes — exactly storage.PutMerkleRoot's tracker_sig
+}
+
+message EquivocationEvidence {
+  bytes  tracker_id = 1;  // offender
+  uint64 hour       = 2;
+  bytes  root_a     = 3;
+  bytes  sig_a      = 4;
+  bytes  root_b     = 5;
+  bytes  sig_b      = 6;
+}
+
+message Ping { uint64 nonce = 1; }
+message Pong { uint64 nonce = 1; }
