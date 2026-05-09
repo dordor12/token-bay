@@ -229,3 +229,70 @@ func TestBrokerRequest_NilBroker_NotImplemented(t *testing.T) {
 		t.Fatalf("got %+v", resp.Error)
 	}
 }
+
+// repSpy is a test double for api.ReputationRecorder.
+type repSpy struct {
+	calls []ids.IdentityID
+}
+
+func (s *repSpy) RecordBrokerRequest(c ids.IdentityID, _ string) error {
+	s.calls = append(s.calls, c)
+	return nil
+}
+
+func TestBrokerRequest_RecordsReputationSignal(t *testing.T) {
+	spy := &repSpy{}
+	svc := &fakeBrokerService{
+		submitResult: &broker.Result{
+			Outcome: broker.OutcomeAdmit,
+			Admit: &broker.Assignment{
+				SeederAddr:       "10.0.0.1:4000",
+				SeederPubkey:     bytes.Repeat([]byte{0xBB}, 32),
+				ReservationToken: bytes.Repeat([]byte{0xCC}, 16),
+			},
+		},
+	}
+	adm := &fakeAdmissionForBroker{decideResult: admission.Result{Outcome: admission.OutcomeAdmit}}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm, Reputation: spy})
+
+	consumerBytes := consumerID32()
+	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerBytes),
+	})
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_OK {
+		t.Fatalf("status=%v error=%+v", resp.Status, resp.Error)
+	}
+	if len(spy.calls) != 1 {
+		t.Fatalf("expected 1 reputation call, got %d", len(spy.calls))
+	}
+	var wantID ids.IdentityID
+	copy(wantID[:], consumerBytes)
+	if spy.calls[0] != wantID {
+		t.Errorf("recorded consumer ID = %v, want %v", spy.calls[0], wantID)
+	}
+}
+
+func TestBrokerRequest_NilReputation_DoesNotPanic(t *testing.T) {
+	// Reputation == nil should be silently skipped — no panic.
+	svc := &fakeBrokerService{
+		submitResult: &broker.Result{
+			Outcome: broker.OutcomeAdmit,
+			Admit: &broker.Assignment{
+				SeederAddr:       "10.0.0.1:4000",
+				SeederPubkey:     bytes.Repeat([]byte{0xBB}, 32),
+				ReservationToken: bytes.Repeat([]byte{0xCC}, 16),
+			},
+		},
+	}
+	adm := &fakeAdmissionForBroker{decideResult: admission.Result{Outcome: admission.OutcomeAdmit}}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm}) // no Reputation
+
+	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerID32()),
+	})
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_OK {
+		t.Fatalf("status=%v error=%+v", resp.Status, resp.Error)
+	}
+}
