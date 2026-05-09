@@ -66,6 +66,11 @@ func (s *Subsystem) OnLedgerEvent(ev admission.LedgerEvent) {
 	now := s.now()
 	switch ev.Kind {
 	case admission.LedgerEventSettlement:
+		// Ensure consumer rep_state row exists so longevity tracking
+		// can work for consumers that only appear in settlements.
+		// No signal is appended for the consumer side here — settlement
+		// events only emit a seeder-side primary signal.
+		_ = s.store.ensureState(ctx, ev.ConsumerID, now)
 		sigMissing := ev.Flags&1 != 0
 		var seederSig SignalKind
 		if sigMissing {

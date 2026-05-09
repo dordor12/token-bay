@@ -94,6 +94,27 @@ func TestIngest_OnLedgerEvent_DisputeUpheld(t *testing.T) {
 	require.Equal(t, 1, countEvents(t, s, SignalDisputeUpheld))
 }
 
+func TestIngest_OnLedgerEvent_Settlement_EnsuresConsumerState(t *testing.T) {
+	s := openForTest(t)
+	ctx := context.Background()
+	consumer := mkID(0xCA)
+	seeder := mkID(0x5A)
+	s.OnLedgerEvent(admission.LedgerEvent{
+		Kind:        admission.LedgerEventSettlement,
+		ConsumerID:  consumer,
+		SeederID:    seeder,
+		CostCredits: 100,
+		Timestamp:   time.Unix(1_700_000_000, 0),
+	})
+
+	// Consumer must have a rep_state row even though no signal is
+	// appended for the consumer side. first_seen_at drives the
+	// longevity bonus.
+	_, ok, err := s.store.readState(ctx, consumer)
+	require.NoError(t, err)
+	require.True(t, ok, "OnLedgerEvent settlement must ensureState for ConsumerID")
+}
+
 func TestIngest_AfterCloseReturnsSentinel(t *testing.T) {
 	s := openForTest(t)
 	require.NoError(t, s.Close())
