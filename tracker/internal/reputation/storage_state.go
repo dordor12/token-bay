@@ -124,6 +124,38 @@ func (s *storage) transition(ctx context.Context, id ids.IdentityID,
 	return nil
 }
 
+// appendReason adds reason to id's reasons array without changing
+// state or since. Used when a categorical breach fires for an identity
+// already in the breach's target state — the audit trail still needs
+// the row so the evaluator can count breaches for §6.2 freeze logic.
+func (s *storage) appendReason(ctx context.Context, id ids.IdentityID,
+	reason ReasonRecord, now time.Time,
+) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cur, ok, err := s.readStateLocked(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("reputation: appendReason: identity not found")
+	}
+	cur.Reasons = append(cur.Reasons, reason)
+	payload, err := json.Marshal(cur.Reasons)
+	if err != nil {
+		return fmt.Errorf("reputation: appendReason: encode reasons: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+        UPDATE rep_state
+           SET reasons = ?, updated_at = ?
+         WHERE identity_id = ?`,
+		string(payload), now.Unix(), id[:]); err != nil {
+		return fmt.Errorf("reputation: appendReason: update: %w", err)
+	}
+	return nil
+}
+
 // readStateLocked is the internal variant of readState used inside
 // transition while holding writeMu. Same semantics; separate name so
 // callers don't reach for the public-style readState which itself

@@ -136,12 +136,34 @@ func (s *Subsystem) RecordCategoricalBreach(id ids.IdentityID, kind BreachKind) 
 		BreachKind: kind.String(),
 		At:         now.Unix(),
 	}
-	if err := s.store.transition(ctx, id, target, reason, now); err != nil {
-		// canTransition rejects if already FROZEN; that's fine.
-		if errors.Is(err, errInvalidTransition) {
-			return nil
-		}
+
+	cur, ok, err := s.store.readState(ctx, id)
+	if err != nil {
 		return err
+	}
+	switch {
+	case !ok:
+		// ensureState was just called; readState should always find it.
+		// Be defensive and treat as fresh-OK.
+		if err := s.store.transition(ctx, id, target, reason, now); err != nil {
+			return err
+		}
+	case cur.State == StateFrozen:
+		// Terminal state; ignore further breaches.
+		return nil
+	case cur.State == target:
+		// Same target state — append reason for §6.2 freeze counting
+		// without re-running the (no-op) state transition.
+		if err := s.store.appendReason(ctx, id, reason, now); err != nil {
+			return err
+		}
+	default:
+		if err := s.store.transition(ctx, id, target, reason, now); err != nil {
+			if errors.Is(err, errInvalidTransition) {
+				return nil
+			}
+			return err
+		}
 	}
 	return s.refreshOne(ctx, id)
 }

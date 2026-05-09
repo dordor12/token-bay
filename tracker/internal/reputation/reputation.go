@@ -166,5 +166,33 @@ func (s *Subsystem) startEvaluator() {
 
 func (s *Subsystem) runEvaluator() {
 	defer s.wg.Done()
-	<-s.stop
+	interval := time.Duration(s.cfg.EvaluationIntervalS) * time.Second
+	t := time.NewTimer(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			ctx, cancel := context.WithTimeout(context.Background(), interval)
+			if err := s.runOneCycleSafe(ctx); err != nil {
+				// Log path lands in Task 17 — for now, eat the error
+				// (drop-event-not-process is the spec §11 behavior).
+				_ = err
+			}
+			cancel()
+			t.Reset(interval)
+		}
+	}
+}
+
+// runOneCycleSafe wraps runOneCycle with panic recovery so a single
+// evaluator panic doesn't kill the goroutine.
+func (s *Subsystem) runOneCycleSafe(ctx context.Context) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("reputation: evaluator panic: %v", r)
+		}
+	}()
+	return s.runOneCycle(ctx)
 }
