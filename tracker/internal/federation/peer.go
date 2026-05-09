@@ -15,9 +15,10 @@ type Peer struct {
 	conn     PeerConn
 	dispatch func(*fed.Envelope)
 
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stopOnce sync.Once
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 // NewPeerForTest is a thin constructor exposed only because tests need to
@@ -28,11 +29,15 @@ func NewPeerForTest(conn PeerConn, dispatch func(*fed.Envelope)) *Peer {
 }
 
 // Start launches the background recvLoop tied to parent's lifetime.
+// Idempotent — repeat calls are no-ops, preventing goroutine leaks if a
+// caller accidentally re-Starts an already-running Peer.
 func (p *Peer) Start(parent context.Context) {
-	ctx, cancel := context.WithCancel(parent)
-	p.cancel = cancel
-	p.wg.Add(1)
-	go p.recvLoop(ctx)
+	p.startOnce.Do(func() {
+		ctx, cancel := context.WithCancel(parent)
+		p.cancel = cancel
+		p.wg.Add(1)
+		go p.recvLoop(ctx)
+	})
 }
 
 func (p *Peer) recvLoop(ctx context.Context) {
