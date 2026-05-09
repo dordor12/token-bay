@@ -136,6 +136,7 @@ func (f *Federation) attachAndWait(p AllowlistedPeer) func(PeerConn) {
 	return func(c PeerConn) {
 		res, err := RunHandshakeDialer(f.listenCtx, c, f.cfg.MyTrackerID, f.cfg.MyPriv, p.TrackerID, p.PubKey, f.cfg.HandshakeTimeout)
 		if err != nil {
+			f.dep.Logger.Warn().Err(err).Str("peer", p.Addr).Msg("federation: dialer handshake failed")
 			f.dep.Metrics.InvalidFrames("handshake")
 			_ = c.Close()
 			return
@@ -175,6 +176,35 @@ func (f *Federation) ListenAddr() string {
 	return ""
 }
 
+// AddPeer adds a new operator-allowlisted peer at runtime, registering
+// it in PeerStatePending and spawning a Dialer goroutine to bring it
+// online. Returns ErrPeerExists if a peer with the same TrackerID is
+// already known.
+func (f *Federation) AddPeer(p AllowlistedPeer) error {
+	if err := f.reg.Add(PeerInfo{
+		TrackerID: p.TrackerID, PubKey: p.PubKey, Addr: p.Addr, Region: p.Region,
+		State: PeerStatePending,
+	}); err != nil {
+		return err
+	}
+	d := &Dialer{
+		Transport:   f.dep.Transport,
+		Peer:        p,
+		MyTrackerID: f.cfg.MyTrackerID,
+		MyPriv:      f.cfg.MyPriv,
+		HandshakeTO: f.cfg.HandshakeTimeout,
+		BackoffBase: f.cfg.RedialBase,
+		BackoffMax:  f.cfg.RedialMax,
+		Now:         f.dep.Now,
+		OnConnected: f.attachAndWait(p),
+		OnFailure: func(reason string, _ error) {
+			f.dep.Metrics.InvalidFrames(reason)
+		},
+	}
+	go d.Run(f.listenCtx)
+	return nil
+}
+
 // Close shuts down the subsystem, stopping all peer goroutines and closing
 // the transport. Safe to call more than once.
 func (f *Federation) Close() error {
@@ -204,6 +234,7 @@ func (f *Federation) acceptInbound(c PeerConn) {
 	// instead of waiting for the transport's per-conn timeout.
 	res, err := RunHandshakeListener(f.listenCtx, c, f.cfg.MyTrackerID, f.cfg.MyPriv, expected, f.cfg.HandshakeTimeout)
 	if err != nil {
+		f.dep.Logger.Warn().Err(err).Str("addr", c.RemoteAddr()).Msg("federation: listener handshake failed")
 		f.dep.Metrics.InvalidFrames("handshake")
 		_ = c.Close()
 		return

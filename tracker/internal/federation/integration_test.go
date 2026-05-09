@@ -149,3 +149,131 @@ func TestIntegration_Equivocation_LocalDetection(t *testing.T) {
 		}
 	}
 }
+
+func openQUICFederation(t *testing.T, p quicPeer, peers []federation.AllowlistedPeer) (*federation.Federation, *fakeArchive, *fakeRootSrc) {
+	t.Helper()
+	cert, err := federation.CertFromIdentity(p.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, err := federation.NewQUICTransport(federation.QUICConfig{
+		ListenAddr:  "127.0.0.1:0",
+		IdleTimeout: 5 * time.Second,
+		Cert:        cert,
+		HandshakeTO: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	arch := newFakeArchive()
+	src := &fakeRootSrc{ok: false}
+	logger := zerolog.Nop()
+	f, err := federation.Open(federation.Config{
+		MyTrackerID:      ids.TrackerID(sha256.Sum256(p.pub)),
+		MyPriv:           p.priv,
+		HandshakeTimeout: 2 * time.Second,
+		DedupeTTL:        time.Hour,
+		DedupeCap:        1024,
+		GossipRateQPS:    100,
+		SendQueueDepth:   256,
+		PublishCadence:   time.Hour,
+		IdleTimeout:      5 * time.Second,
+		RedialBase:       50 * time.Millisecond,
+		RedialMax:        500 * time.Millisecond,
+		Peers:            peers,
+	}, federation.Deps{
+		Transport: tr,
+		RootSrc:   src,
+		Archive:   arch,
+		Metrics:   federation.NewMetrics(prometheus.NewRegistry()),
+		Logger:    logger,
+		Now:       time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f, arch, src
+}
+
+func TestIntegration_QUIC_RootAttestation_AB(t *testing.T) {
+	t.Parallel()
+	a := newQUICPeer(t)
+	b := newQUICPeer(t)
+
+	// Open A and B with no peers, capture their bound ports, then call
+	// AddPeer to inject the cross-references. AddPeer spawns the per-peer
+	// Dialer goroutine, mirroring how a future operator admin API would
+	// register peers at runtime.
+	aFed, _, srcA := openQUICFederation(t, a, nil)
+	bFed, archB, _ := openQUICFederation(t, b, nil)
+
+	if err := aFed.AddPeer(federation.AllowlistedPeer{
+		TrackerID: ids.TrackerID(sha256.Sum256(b.pub)), PubKey: b.pub, Addr: bFed.ListenAddr(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bFed.AddPeer(federation.AllowlistedPeer{
+		TrackerID: ids.TrackerID(sha256.Sum256(a.pub)), PubKey: a.pub, Addr: aFed.ListenAddr(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	steady := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, p := range aFed.Peers() {
+			if p.State == federation.PeerStateSteady {
+				steady = true
+				break
+			}
+		}
+		if steady {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !steady {
+		ps := aFed.Peers()
+		t.Logf("aFed peers before publish: %d", len(ps))
+		for _, p := range ps {
+			t.Logf("  peer state=%v addr=%s", p.State, p.Addr)
+		}
+		t.Fatal("aFed never reached steady state with B")
+	}
+
+	srcA.root = b32(7)
+	srcA.sig = b64(8)
+	srcA.ok = true
+	if err := aFed.PublishHour(context.Background(), 100); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	aIDBytes := ids.TrackerID(sha256.Sum256(a.pub)).Bytes()
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok, _ := archB.GetPeerRoot(context.Background(), aIDBytes[:], 100); ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("B never archived A's root over QUIC (steady state was reached)")
+}
+
+// b32/b64 are short helpers for the QUIC integration test (parallel to b()).
+func b32(v byte) []byte {
+	out := make([]byte, 32)
+	for i := range out {
+		out[i] = v
+	}
+	return out
+}
+
+func b64(v byte) []byte {
+	out := make([]byte, 64)
+	for i := range out {
+		out[i] = v
+	}
+	return out
+}

@@ -164,3 +164,50 @@ func TestQUICTransport_NewQUICTransport_BindFailureSurfaces(t *testing.T) {
 		t.Fatalf("expected bind error on %s", addr)
 	}
 }
+
+func TestQUICTransport_TwoListeners_CrossDial(t *testing.T) {
+	t.Parallel()
+	// Two listening transports dialing each other simultaneously — the
+	// pattern federation uses where both sides Listen + Dial.
+	a := newQUICPeer(t)
+	b := newQUICPeer(t)
+	aT := openLoopbackQUIC(t, a)
+	bT := openLoopbackQUIC(t, b)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	aAccepted := make(chan federation.PeerConn, 1)
+	bAccepted := make(chan federation.PeerConn, 1)
+	go func() { _ = aT.Listen(ctx, func(c federation.PeerConn) { aAccepted <- c }) }()
+	go func() { _ = bT.Listen(ctx, func(c federation.PeerConn) { bAccepted <- c }) }()
+
+	// Both A and B dial each other simultaneously (the federation pattern).
+	type dialResult struct {
+		conn federation.PeerConn
+		err  error
+	}
+	aToBCh := make(chan dialResult, 1)
+	bToACh := make(chan dialResult, 1)
+	go func() {
+		c, err := aT.Dial(ctx, bT.ListenAddr(), b.pub)
+		aToBCh <- dialResult{c, err}
+	}()
+	go func() {
+		c, err := bT.Dial(ctx, aT.ListenAddr(), a.pub)
+		bToACh <- dialResult{c, err}
+	}()
+
+	a2b := <-aToBCh
+	b2a := <-bToACh
+	if a2b.err != nil {
+		t.Fatalf("a dial b: %v", a2b.err)
+	}
+	if b2a.err != nil {
+		t.Fatalf("b dial a: %v", b2a.err)
+	}
+	defer a2b.conn.Close()
+	defer b2a.conn.Close()
+	_ = <-aAccepted
+	_ = <-bAccepted
+}
