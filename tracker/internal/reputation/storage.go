@@ -14,7 +14,7 @@ import (
 // storage per Subsystem; the Subsystem owns its lifecycle.
 type storage struct {
 	db      *sql.DB
-	writeMu sync.Mutex //nolint:unused // used by future write methods (Task 5+)
+	writeMu sync.Mutex
 	closeMu sync.Mutex
 	closed  bool
 }
@@ -60,7 +60,7 @@ func (s *storage) Close() error {
 // sqlNoRows is a small indirection so other storage_*.go files can
 // reference sql.ErrNoRows without each importing database/sql for that
 // single sentinel.
-func sqlNoRows() error { return sql.ErrNoRows } //nolint:unused // consumed by future storage_*.go files (Task 7+)
+func sqlNoRows() error { return sql.ErrNoRows }
 
 func applySchema(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
