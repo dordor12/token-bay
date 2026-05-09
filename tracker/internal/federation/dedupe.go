@@ -62,8 +62,19 @@ func (d *Dedupe) Seen(id [32]byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.evictExpiredLocked()
-	_, ok := d.idx[id]
-	return ok
+	el, ok := d.idx[id]
+	if !ok {
+		return false
+	}
+	ent := el.Value.(*dedupeEntry)
+	if !d.now().Before(ent.expiry) {
+		// Stranded expired entry (re-Mark broke list expiry order).
+		// Evict it lazily so the next call sees it as gone.
+		delete(d.idx, id)
+		d.order.Remove(el)
+		return false
+	}
+	return true
 }
 
 // Size returns the current number of live entries (test-only convenience).

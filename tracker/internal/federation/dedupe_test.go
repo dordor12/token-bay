@@ -53,6 +53,51 @@ func TestDedupe_CapacityEvicts(t *testing.T) {
 	}
 }
 
+func TestDedupe_Seen_ReturnsFalseForStrandedExpiredEntry(t *testing.T) {
+	t.Parallel()
+	clock := newFakeClock(time.Unix(1000, 0))
+	d := federation.NewDedupe(time.Minute, 1024, clock.Now)
+
+	// Mark A, then B. List order (front→back): B, A.
+	d.Mark([32]byte{0xa})
+	clock.Advance(time.Second)
+	d.Mark([32]byte{0xb})
+
+	// Re-mark A — moves to front, refreshes its TTL.
+	// List order is now (front→back): A (fresh), B (older).
+	clock.Advance(time.Second)
+	d.Mark([32]byte{0xa})
+
+	// Wait long enough that B has expired but A has not, then re-mark A
+	// again to keep its TTL fresh.
+	clock.Advance(45 * time.Second)
+	d.Mark([32]byte{0xa})
+
+	// Now wait until B is well past TTL but A is still fresh (because we
+	// keep re-marking it). After this point B is "stranded": expired but
+	// sitting in the list because evictExpiredLocked walks back→front
+	// and may stop early once a non-expired entry is at the back.
+	clock.Advance(45 * time.Second)
+	if d.Seen([32]byte{0xb}) {
+		t.Fatal("Seen returned true for stranded expired entry B")
+	}
+}
+
+func TestDedupe_Mark_ReMarkRefreshesTTL(t *testing.T) {
+	t.Parallel()
+	clock := newFakeClock(time.Unix(1000, 0))
+	d := federation.NewDedupe(time.Minute, 1024, clock.Now)
+	id := [32]byte{0xc}
+
+	d.Mark(id)
+	clock.Advance(45 * time.Second)
+	d.Mark(id)                      // refresh
+	clock.Advance(45 * time.Second) // 90s since first mark, but only 45s since refresh
+	if !d.Seen(id) {
+		t.Fatal("Seen returned false after re-Mark refreshed TTL")
+	}
+}
+
 // fakeClock — file-level test helper.
 type fakeClock struct{ now time.Time }
 
