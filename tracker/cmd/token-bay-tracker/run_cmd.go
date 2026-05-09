@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	crand "crypto/rand"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -12,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admin"
 	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/broker"
@@ -26,6 +29,11 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/server"
 	"github.com/token-bay/token-bay/tracker/internal/stunturn"
 )
+
+// adminTokenEnvVar is the name of the env var holding the admin bearer
+// token. Empty / unset rejects every admin request — operators must set
+// this explicitly to enable the admin port.
+const adminTokenEnvVar = "TOKEN_BAY_ADMIN_TOKEN" //nolint:gosec // env var name, not a credential
 
 // newRunCmd is the composition root: parse --config, build subsystems,
 // construct server.Deps, run server.Run, install SIGINT/SIGTERM handler.
@@ -162,17 +170,40 @@ func newRunCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
+			// stop() cancels ctx, which drains both the QUIC server and
+			// the admin server. /maintenance reuses the same path so an
+			// HTTP shutdown trigger is identical to SIGTERM.
+			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, stop)
+			if err != nil {
+				return fmt.Errorf("admin: %w", err)
+			}
+
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Run(ctx) }()
 
+			adminErrCh := make(chan error, 1)
+			go func() { adminErrCh <- adminSrv.Run(ctx) }()
+
 			select {
 			case err := <-errCh:
+				graceCtx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
+				defer cancel()
+				_ = adminSrv.Shutdown(graceCtx)
+				return err
+			case err := <-adminErrCh:
+				graceCtx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
+				defer cancel()
+				_ = srv.Shutdown(graceCtx)
 				return err
 			case <-ctx.Done():
 				graceCtx, cancel := context.WithTimeout(context.Background(),
 					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
 				defer cancel()
-				return srv.Shutdown(graceCtx)
+				shutdownErr := srv.Shutdown(graceCtx)
+				_ = adminSrv.Shutdown(graceCtx)
+				return shutdownErr
 			}
 		},
 	}
@@ -252,4 +283,44 @@ func (p *pushProxy) PushSettlementTo(id ids.IdentityID, push *tbproto.Settlement
 		return nil, false
 	}
 	return s.PushSettlementTo(id, push)
+}
+
+// buildAdminServer assembles the admin HTTP server from the live
+// subsystems. The bearer token comes from TOKEN_BAY_ADMIN_TOKEN; an unset
+// or empty value rejects every admin request, which is intentional —
+// operators must opt in to remote admin access.
+func buildAdminServer(
+	cfg *config.Config,
+	logger zerolog.Logger,
+	srv *server.Server,
+	reg *registry.Registry,
+	led *ledger.Ledger,
+	brokerSubs *broker.Subsystems,
+	adm *admission.Subsystem,
+	stop func(),
+) (*admin.Server, error) {
+	token := os.Getenv(adminTokenEnvVar)
+	validator := func(t string) bool { return token != "" && t == token }
+	if token == "" {
+		logger.Warn().Str("env", adminTokenEnvVar).
+			Msg("admin: token unset, all admin requests will be rejected")
+	}
+
+	admissionMount := func(mux *http.ServeMux, guard admin.MuxGuard) {
+		adm.RegisterMux(mux, admission.MuxGuard(guard))
+	}
+
+	return admin.New(admin.Deps{
+		Config:             cfg,
+		Logger:             logger,
+		Now:                time.Now,
+		Version:            version,
+		TokenValidator:     validator,
+		PeerCounter:        srv,
+		Registry:           reg,
+		Ledger:             led,
+		BrokerMux:          brokerSubs.AdminHandler(),
+		AdmissionMount:     admissionMount,
+		TriggerMaintenance: stop,
+	})
 }
