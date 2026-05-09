@@ -88,7 +88,7 @@ func (t *InprocTransport) Dial(ctx context.Context, addr string, expectedPeer ed
 	t.conns = append(t.conns, pair.left)
 	t.mu.Unlock()
 	srv.mu.Unlock()
-	fn(pair.right)
+	go fn(pair.right)
 	return pair.left, nil
 }
 
