@@ -2,6 +2,7 @@ package reputation
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -38,5 +39,12 @@ func TestOpen_StartsAndCloses(t *testing.T) {
 }
 
 func TestOpen_AfterCloseMethodsReturnSentinel(t *testing.T) {
-	t.Skip("wired in Task 13 — RecordBrokerRequest not yet implemented")
+	cfg := config.DefaultConfig().Reputation
+	cfg.StoragePath = filepath.Join(t.TempDir(), "rep.sqlite")
+	s, err := Open(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	err = s.RecordBrokerRequest(mkID(0x01), "admit")
+	require.True(t, errors.Is(err, ErrSubsystemClosed))
 }

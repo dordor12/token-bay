@@ -152,10 +152,10 @@ func (s *Subsystem) reloadCache(ctx context.Context) error {
 }
 
 // now returns the configured wall clock.
-func (s *Subsystem) now() time.Time { return s.nowFn() } //nolint:unused // wired in Task 13/16
+func (s *Subsystem) now() time.Time { return s.nowFn() }
 
 // idKey converts an ids.IdentityID to the map key type.
-func idKey(id ids.IdentityID) idsKey { return idsKey(id) } //nolint:unused // wired in Task 13
+func idKey(id ids.IdentityID) idsKey { return idsKey(id) } //nolint:unused // wired in Task 16
 
 // startEvaluator launches the periodic goroutine. Real loop lands in
 // Task 16; until then, runEvaluator just blocks on stop.
