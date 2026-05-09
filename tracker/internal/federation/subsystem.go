@@ -25,6 +25,11 @@ type Federation struct {
 	equiv  *Equivocator
 	pub    *Publisher
 
+	// listenCtx is the cancellable context Open creates. It scopes both
+	// the Listen goroutine and the per-peer dial goroutines, AND is
+	// threaded into acceptInbound so a Close during an in-flight
+	// listener handshake aborts cleanly. Lock order: f.mu > reg.mu.
+	listenCtx    context.Context
 	listenCancel context.CancelFunc
 	mu           sync.Mutex
 	peers        map[ids.TrackerID]*Peer // active recv goroutines
@@ -94,6 +99,7 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	// Listen on the transport. The accept callback runs the listener-side
 	// handshake and, on success, attaches a Peer recv loop.
 	ctx, cancel := context.WithCancel(context.Background())
+	f.listenCtx = ctx
 	f.listenCancel = cancel
 	go func() { _ = dep.Transport.Listen(ctx, f.acceptInbound) }()
 
@@ -168,7 +174,9 @@ func (f *Federation) acceptInbound(c PeerConn) {
 	for _, p := range f.reg.All() {
 		expected[p.TrackerID] = p.PubKey
 	}
-	res, err := RunHandshakeListener(context.Background(), c, f.cfg.MyTrackerID, f.cfg.MyPriv, expected, f.cfg.HandshakeTimeout)
+	// Use the Open-scoped ctx so a Close mid-handshake aborts cleanly
+	// instead of waiting for the transport's per-conn timeout.
+	res, err := RunHandshakeListener(f.listenCtx, c, f.cfg.MyTrackerID, f.cfg.MyPriv, expected, f.cfg.HandshakeTimeout)
 	if err != nil {
 		f.dep.Metrics.InvalidFrames("handshake")
 		_ = c.Close()
