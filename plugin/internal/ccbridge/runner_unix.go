@@ -156,18 +156,26 @@ func extractTextContent(raw json.RawMessage) (string, error) {
 // cached on r.cachedVersion so subsequent calls are free. Falls back
 // to "2.1.138" on any error.
 //
-// The probe uses its own short timeout independent of ctx. The
-// session-file Version field is informational (claude-code does not
-// validate it on load), so a missing or malformed `claude --version`
-// must not block or fail the request — a fake/test binary that
-// ignores --version and hangs would otherwise stall the entire Run.
+// The probe uses its own short timeout independent of ctx and a
+// short WaitDelay so a malformed --version response (script that
+// spawns a long-running child holding stdout open) doesn't stall
+// past the timeout. The session-file Version field is informational
+// — claude-code does not validate it on load — so the probe must
+// fail-open quickly rather than blocking the request.
 func (r *ExecRunner) resolveVersion(ctx context.Context) (string, error) {
 	if r.cachedVersion != "" {
 		return r.cachedVersion, nil
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(probeCtx, r.resolveBinary(), "--version").Output()
+	cmd := exec.CommandContext(probeCtx, r.resolveBinary(), "--version")
+	// WaitDelay caps how long Wait blocks after the process is
+	// killed by ctx-cancel waiting for stdio pipes to close. Without
+	// it, an orphaned child of the probe (e.g. a test stub that
+	// spawns `sleep 30` and inherits stdout) keeps the pipe open
+	// and Output() waits for the orphan to exit on its own.
+	cmd.WaitDelay = 200 * time.Millisecond
+	out, err := cmd.Output()
 	if err != nil {
 		r.cachedVersion = "2.1.138"
 		return r.cachedVersion, nil
