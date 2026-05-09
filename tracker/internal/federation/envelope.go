@@ -11,11 +11,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// trackerIDLen is the byte length of a tracker identity (sha256 of Ed25519
-// public key). Duplicated here from shared/federation to avoid an internal
-// import cycle later. Both packages enforce identical lengths.
-const trackerIDLen = 32
-
 // SignEnvelope wraps payload in an Envelope signed by priv.
 //
 // payload MUST already be the Marshal() bytes of the inner proto. The
@@ -25,8 +20,8 @@ func SignEnvelope(priv ed25519.PrivateKey, senderID []byte, kind fed.Kind, paylo
 	if len(priv) != ed25519.PrivateKeySize {
 		return nil, errors.New("federation: SignEnvelope requires Ed25519 private key")
 	}
-	if len(senderID) != trackerIDLen {
-		return nil, fmt.Errorf("federation: senderID must be %d bytes", trackerIDLen)
+	if len(senderID) != fed.TrackerIDLen {
+		return nil, fmt.Errorf("federation: senderID must be %d bytes", fed.TrackerIDLen)
 	}
 	env := &fed.Envelope{
 		SenderId:  append([]byte(nil), senderID...),

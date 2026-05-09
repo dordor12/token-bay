@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"testing"
 
 	fed "github.com/token-bay/token-bay/shared/federation"
@@ -35,8 +36,8 @@ func TestEnvelope_VerifyEnvelope_RejectsBadSig(t *testing.T) {
 	other, _, _ := ed25519.GenerateKey(crand.Reader)
 	id := sha256.Sum256(pub)
 	env, _ := federation.SignEnvelope(priv, id[:], fed.Kind_KIND_PING, []byte{1})
-	if err := federation.VerifyEnvelope(other, env); err == nil {
-		t.Fatal("expected verify failure under wrong key")
+	if err := federation.VerifyEnvelope(other, env); !errors.Is(err, federation.ErrSigInvalid) {
+		t.Fatalf("expected ErrSigInvalid, got %v", err)
 	}
 }
 
