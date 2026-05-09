@@ -42,10 +42,18 @@ func seederRecord(t *testing.T, id ids.IdentityID, headroom float64, model strin
 	}
 }
 
-// stubReputation lets tests control Score / IsFrozen per id.
+// recordedOutcome captures a single RecordOfferOutcome call for test assertions.
+type recordedOutcome struct {
+	ID      ids.IdentityID
+	Outcome string
+}
+
+// stubReputation lets tests control Score / IsFrozen per id and inspect
+// outcomes recorded via RecordOfferOutcome.
 type stubReputation struct {
-	scores map[ids.IdentityID]float64
-	frozen map[ids.IdentityID]bool
+	scores           map[ids.IdentityID]float64
+	frozen           map[ids.IdentityID]bool
+	recordedOutcomes []recordedOutcome
 }
 
 func newStubReputation() *stubReputation {
@@ -59,5 +67,7 @@ func (s *stubReputation) Score(id ids.IdentityID) (float64, bool) {
 	v, ok := s.scores[id]
 	return v, ok
 }
-func (s *stubReputation) IsFrozen(id ids.IdentityID) bool           { return s.frozen[id] }
-func (s *stubReputation) RecordOfferOutcome(ids.IdentityID, string) {}
+func (s *stubReputation) IsFrozen(id ids.IdentityID) bool { return s.frozen[id] }
+func (s *stubReputation) RecordOfferOutcome(id ids.IdentityID, outcome string) {
+	s.recordedOutcomes = append(s.recordedOutcomes, recordedOutcome{ID: id, Outcome: outcome})
+}

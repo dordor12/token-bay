@@ -201,6 +201,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 			continue
 		}
 
+		b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "accept")
 		// Accepted — load stays incremented; settlement releases on terminal.
 		_ = b.mgr.Inflight.MarkSeeder(req.RequestID, seeder.IdentityID, ephPub)
 		if terr := b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateAssigned); terr != nil {

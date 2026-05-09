@@ -314,6 +314,32 @@ func TestSubmit_ReservationReleasedOnNoCapacity(t *testing.T) {
 	require.Equal(t, uint64(0), b.mgr.Reservations.Reserved(consumer))
 }
 
+func TestSubmit_RecordsAcceptOutcome(t *testing.T) {
+	deps := testDeps(t)
+	fr := newFakeRegistry()
+	seederID := ids.IdentityID{42}
+	fr.Add(seederRecord(t, seederID, 0.9, "claude-sonnet-4-6"))
+	deps.Registry = fr
+	p := withFakePusher(t, &deps)
+	queueDecision(p, true, bytesAllB(32, 0xAA))
+
+	rep := newStubReputation()
+	deps.Reputation = rep
+
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
+	require.NoError(t, err)
+	defer b.Close()
+
+	env := makeAdmittedEnvelope(t, "claude-sonnet-4-6", 100, 200, 1_000_000)
+	res, err := b.Submit(context.Background(), env)
+	require.NoError(t, err)
+	require.Equal(t, OutcomeAdmit, res.Outcome)
+
+	require.Len(t, rep.recordedOutcomes, 1)
+	require.Equal(t, seederID, rep.recordedOutcomes[0].ID)
+	require.Equal(t, "accept", rep.recordedOutcomes[0].Outcome)
+}
+
 func TestSubmit_UnknownModel(t *testing.T) {
 	deps := testDeps(t)
 	deps.Registry = newFakeRegistry()
