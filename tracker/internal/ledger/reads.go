@@ -31,3 +31,11 @@ func (l *Ledger) EntryByHash(ctx context.Context, hash []byte) (*tbproto.Entry, 
 func (l *Ledger) EntriesSince(ctx context.Context, sinceSeq uint64, limit int) ([]*tbproto.Entry, error) {
 	return l.store.EntriesSince(ctx, sinceSeq, limit)
 }
+
+// MerkleRoot returns the persisted hourly Merkle root and the tracker's
+// signature over it, or ok=false if the orchestrator has not yet
+// produced a root for this hour. Thin passthrough to storage; used by
+// the federation publisher.
+func (l *Ledger) MerkleRoot(ctx context.Context, hour uint64) (root, sig []byte, ok bool, err error) {
+	return l.store.GetMerkleRoot(ctx, hour)
+}
