@@ -57,6 +57,7 @@ func (t *InprocTransport) Listen(ctx context.Context, accept func(PeerConn)) err
 }
 
 func (t *InprocTransport) Dial(ctx context.Context, addr string, expectedPeer ed25519.PublicKey) (PeerConn, error) {
+	// Lock order: srv.mu then t.mu (dialer side). Never invert.
 	t.hub.mu.Lock()
 	srv, ok := t.hub.listeners[addr]
 	t.hub.mu.Unlock()
@@ -131,16 +132,15 @@ func newInprocPair(localPub, remotePub ed25519.PublicKey) *inprocPair {
 	return &inprocPair{left: left, right: right}
 }
 
-func (c *inprocConn) Send(ctx context.Context, frame []byte) error {
+func (c *inprocConn) Send(ctx context.Context, frame []byte) (retErr error) {
 	if len(frame) > MaxFrameBytes {
 		return ErrFrameTooLarge
 	}
-	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-	if closed {
-		return ErrPeerClosed
-	}
+	defer func() {
+		if recover() != nil {
+			retErr = ErrPeerClosed
+		}
+	}()
 	select {
 	case c.send <- frame:
 		return nil
@@ -172,7 +172,6 @@ func (c *inprocConn) Close() error {
 	}
 	c.closed = true
 	c.mu.Unlock()
-	defer func() { _ = recover() }() // double-close is fine
 	close(c.send)
 	return nil
 }

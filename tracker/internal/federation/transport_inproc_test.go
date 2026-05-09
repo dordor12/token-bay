@@ -105,3 +105,28 @@ func TestInprocTransport_Send_FrameTooLarge(t *testing.T) {
 		t.Fatalf("expected ErrFrameTooLarge, got %v", err)
 	}
 }
+
+func TestInprocTransport_Send_AfterClose_ReturnsErrPeerClosed(t *testing.T) {
+	t.Parallel()
+	pub, priv, _ := ed25519.GenerateKey(crand.Reader)
+	hub := federation.NewInprocHub()
+	server := federation.NewInprocTransport(hub, "srv", pub, priv)
+	defer server.Close()
+	go func() { _ = server.Listen(context.Background(), func(federation.PeerConn) {}) }()
+
+	cliPub, cliPriv, _ := ed25519.GenerateKey(crand.Reader)
+	client := federation.NewInprocTransport(hub, "cli", cliPub, cliPriv)
+	defer client.Close()
+
+	conn, err := client.Dial(context.Background(), "srv", pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Must NOT panic; must return ErrPeerClosed.
+	if err := conn.Send(context.Background(), []byte("late")); !errors.Is(err, federation.ErrPeerClosed) {
+		t.Fatalf("Send after Close: got %v, want ErrPeerClosed", err)
+	}
+}
