@@ -1,0 +1,5 @@
+# Force LF line endings for SSE test fixtures.
+# The SSE protocol uses bare LF (\n) as the event field separator, so
+# these files must never receive CRLF conversion on Windows checkout.
+plugin/internal/ssetranslate/testdata/**/*.sse text eol=lf
+plugin/internal/ssetranslate/testdata/**/*.jsonl text eol=lf
