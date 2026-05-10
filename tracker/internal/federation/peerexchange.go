@@ -18,9 +18,9 @@ const defaultPeerExchangeEmitCap = 256
 // (on-demand in v1) gossip of a KnownPeer table, plus inbound merge.
 //
 // Outbound: EmitNow(ctx) lists the top-EmitCap rows from the archive,
-// refreshes health_score for source='allowlist' rows using
-// PeerConnected (slice-3 placeholder; slice 5 replaces with real
-// metrics), packs into a PeerExchange proto, marshals, and Forwards.
+// computes a fresh health_score per row via *PeerHealth (slice 5),
+// writes the freshly-computed score back to the archive row, packs
+// into a PeerExchange proto, marshals, and Forwards.
 //
 // Inbound: OnIncoming(ctx, env, msg) upserts every entry (skipping
 // self-entries by tracker_id) and forwards the envelope onward via the
@@ -30,16 +30,16 @@ type peerExchangeCoordinator struct {
 }
 
 type peerExchangeCoordinatorCfg struct {
-	MyTrackerID   ids.TrackerID
-	MyPriv        ed25519.PrivateKey
-	Archive       KnownPeersArchive
-	Forward       Forwarder
-	PeerConnected func(ids.TrackerID) bool
-	Now           func() time.Time
-	EmitCap       int
-	Invalid       func(reason string)
-	OnEmit        func()
-	OnReceived    func(outcome string)
+	MyTrackerID ids.TrackerID
+	MyPriv      ed25519.PrivateKey
+	Archive     KnownPeersArchive
+	Forward     Forwarder
+	Health      *PeerHealth
+	Now         func() time.Time
+	EmitCap     int
+	Invalid     func(reason string)
+	OnEmit      func()
+	OnReceived  func(outcome string)
 }
 
 func newPeerExchangeCoordinator(cfg peerExchangeCoordinatorCfg) *peerExchangeCoordinator {
@@ -63,22 +63,18 @@ func (pc *peerExchangeCoordinator) EmitNow(ctx context.Context) error {
 
 	out := make([]*fed.KnownPeer, 0, len(rows))
 	for _, r := range rows {
-		health := r.HealthScore
-		if r.Source == "allowlist" && len(r.TrackerID) == 32 {
-			var tid ids.TrackerID
-			copy(tid[:], r.TrackerID)
-			if pc.cfg.PeerConnected != nil && pc.cfg.PeerConnected(tid) {
-				health = 1.0
-			} else {
-				health = 0.5
-			}
+		var tid ids.TrackerID
+		copy(tid[:], r.TrackerID)
+		score := pc.cfg.Health.Score(tid, pc.cfg.Now())
+		if err := pc.cfg.Archive.UpdateKnownPeerHealth(ctx, r.TrackerID, score); err != nil {
+			pc.cfg.Invalid("health_persist")
 		}
 		out = append(out, &fed.KnownPeer{
 			TrackerId:   append([]byte(nil), r.TrackerID...),
 			Addr:        r.Addr,
 			LastSeen:    uint64(r.LastSeen.Unix()), //nolint:gosec // G115 — Unix() is non-negative for any sane wall clock
 			RegionHint:  r.RegionHint,
-			HealthScore: health,
+			HealthScore: score,
 		})
 	}
 

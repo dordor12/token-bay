@@ -80,6 +80,8 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		}
 	}
 
+	health := NewPeerHealth(cfg.Health, dep.Now, nil)
+
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
 	equiv := NewEquivocator(dep.Archive, forward, reg).WithSelf(cfg.MyTrackerID)
 	apply.RegisterEquivocator(equiv.OnLocalConflict)
@@ -130,12 +132,12 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 			MyPriv:      cfg.MyPriv,
 			Archive:     dep.KnownPeers,
 			Forward:     forward,
+			Health:      health,
 			Now:         dep.Now,
 			EmitCap:     defaultPeerExchangeEmitCap,
 			Invalid:     func(name string) { dep.Metrics.InvalidFrames(name) },
 			OnEmit:      dep.Metrics.PeerExchangeEmitted,
 			OnReceived:  dep.Metrics.PeerExchangeReceived,
-			// PeerConnected is patched on f below — registry is owned by f.
 		})
 	}
 
@@ -150,11 +152,9 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
 		return f.SendToPeer(ctx, peer, kind, payload)
 	}
-	if peerExchange != nil {
-		peerExchange.cfg.PeerConnected = func(id ids.TrackerID) bool {
-			return f.reg.IsActive(id)
-		}
-	}
+	// PeerConnected closure removed in slice 5 — peer-exchange now uses
+	// *PeerHealth.Score (wired via cfg.Health below) instead of the
+	// allowlist-connected placeholder.
 
 	// Add operator-allowlisted peers in pending state. Dialing them is
 	// kicked off below; this slice initializes their entries so they
