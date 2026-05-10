@@ -1,0 +1,42 @@
+package ssetranslate
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// loadPair returns (stream-json input, expected SSE output) for the
+// fixture pair under testdata/sj/<name>.jsonl + testdata/sse/<name>.sse.
+func loadPair(t *testing.T, name string) ([]byte, []byte) {
+	t.Helper()
+	in, err := os.ReadFile(filepath.Join("testdata", "sj", name+".jsonl"))
+	require.NoError(t, err, "load input %q", name)
+	out, err := os.ReadFile(filepath.Join("testdata", "sse", name+".sse"))
+	require.NoError(t, err, "load expected %q", name)
+	return in, out
+}
+
+// runFixture pumps the stream-json through a Writer one chunk at a time
+// (whole file as one Write here; per-line splitting is exercised in a
+// dedicated property test) and returns the captured SSE bytes.
+func runFixture(t *testing.T, in []byte) []byte {
+	t.Helper()
+	var sink bytes.Buffer
+	w := NewWriter(&sink)
+	n, err := w.Write(in)
+	require.NoError(t, err)
+	assert.Equal(t, len(in), n)
+	require.NoError(t, w.Close())
+	return sink.Bytes()
+}
+
+func TestTranslate_TextOnlySingleCycle(t *testing.T) {
+	in, want := loadPair(t, "text_only_single_cycle")
+	got := runFixture(t, in)
+	assert.Equal(t, string(want), string(got))
+}
