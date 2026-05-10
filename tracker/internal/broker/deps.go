@@ -39,10 +39,13 @@ type AdmissionService interface {
 }
 
 // ReputationService is advisory: nil falls back to fallbackReputation.
+// RecordOfferOutcome's error return mirrors *reputation.Subsystem; the
+// broker discards it (the tunnel decision must not depend on a
+// reputation hiccup).
 type ReputationService interface {
 	Score(ids.IdentityID) (float64, bool)
 	IsFrozen(ids.IdentityID) bool
-	RecordOfferOutcome(seeder ids.IdentityID, outcome string)
+	RecordOfferOutcome(seeder ids.IdentityID, outcome string) error
 	OnLedgerEvent(ev admission.LedgerEvent)
 }
 
@@ -86,7 +89,7 @@ type Deps struct {
 // fallbackReputation is the v1 default when no reputation subsystem is wired.
 type fallbackReputation struct{}
 
-func (fallbackReputation) Score(ids.IdentityID) (float64, bool)      { return 0.5, false }
-func (fallbackReputation) IsFrozen(ids.IdentityID) bool              { return false }
-func (fallbackReputation) RecordOfferOutcome(ids.IdentityID, string) {}
-func (fallbackReputation) OnLedgerEvent(admission.LedgerEvent)       {}
+func (fallbackReputation) Score(ids.IdentityID) (float64, bool)            { return 0.5, false }
+func (fallbackReputation) IsFrozen(ids.IdentityID) bool                    { return false }
+func (fallbackReputation) RecordOfferOutcome(ids.IdentityID, string) error { return nil }
+func (fallbackReputation) OnLedgerEvent(admission.LedgerEvent)             {}
