@@ -61,3 +61,58 @@ func (l *Ledger) AppendTransferOut(ctx context.Context, r TransferOutRecord) (*t
 		deltas:      []balanceDelta{{identityID: r.ConsumerID, delta: -delta}},
 	})
 }
+
+// TransferInRecord is the typed input to AppendTransferIn. Unlike
+// AppendTransferOut there is no consumer signature: the entry is
+// tracker-signed only, and its authority comes from the peer-region's
+// TRANSFER_PROOF that the federation layer has already verified before
+// invoking this hook.
+//
+// IdentityID is the recipient of the credit. The on-chain entry
+// zero-fills consumer_id and seeder_id per the per-kind matrix; the
+// balance delta is routed via IdentityID directly without leaving any
+// counterparty trace on the entry body itself.
+type TransferInRecord struct {
+	PrevHash    []byte // 32 bytes
+	Seq         uint64
+	IdentityID  []byte // 32 bytes — recipient of the credit
+	Amount      uint64 // absolute value; credited
+	Timestamp   uint64
+	TransferRef []byte // 32 bytes — same nonce/UUID as the source's transfer_out
+}
+
+// AppendTransferIn credits Amount to IdentityID and records a
+// transfer_in entry whose Ref == TransferRef. The on-chain entry
+// zero-fills consumer_id and seeder_id; the balance delta is routed via
+// IdentityID directly.
+//
+// Returns ErrStaleTip if PrevHash/Seq don't match the current tip.
+// v1 has no on-chain idempotency check at the ledger layer; the
+// federation layer's in-memory pending-and-issued maps cover
+// within-process retries. Persistent idempotency is a follow-up (see
+// the federation cross-region transfer subsystem spec §14).
+func (l *Ledger) AppendTransferIn(ctx context.Context, r TransferInRecord) (*tbproto.Entry, error) {
+	if r.Amount == 0 {
+		return nil, errors.New("ledger: transfer_in amount must be > 0")
+	}
+	delta, err := signedAmount(r.Amount)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := entry.BuildTransferInEntry(entry.TransferInInput{
+		PrevHash:    r.PrevHash,
+		Seq:         r.Seq,
+		Amount:      r.Amount,
+		Timestamp:   r.Timestamp,
+		TransferRef: r.TransferRef,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ledger: build transfer_in: %w", err)
+	}
+
+	return l.appendEntry(ctx, appendInput{
+		body:   body,
+		deltas: []balanceDelta{{identityID: r.IdentityID, delta: delta}},
+	})
+}
