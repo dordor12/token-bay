@@ -76,7 +76,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 		}
 		if errInner := w.handleLine(line); errInner != nil {
 			w.firstWriteErr = errInner
-			return len(p), errInner
+			return 0, errInner
 		}
 	}
 	return len(p), nil
@@ -104,7 +104,7 @@ func synthStopReason(s string) *string { return &s }
 
 // handleLine processes one newline-terminated stream-json line.
 func (w *Writer) handleLine(line []byte) error {
-	body := bytes.TrimRight(line, "\n")
+	body := bytes.TrimRight(line, "\r\n")
 	if len(body) == 0 || body[0] != '{' {
 		return nil // tolerate malformed/empty lines
 	}
@@ -375,7 +375,7 @@ func (w *Writer) emit(event string, v any) error {
 		return fmt.Errorf("ssetranslate: marshal %s: %w", event, err)
 	}
 	if _, err := fmt.Fprintf(w.inner, "event: %s\ndata: %s\n\n", event, payload); err != nil {
-		return err
+		return fmt.Errorf("ssetranslate: write %s: %w", event, err)
 	}
 	return nil
 }
