@@ -74,10 +74,11 @@ func (s *stubReputation) Score(id ids.IdentityID) (float64, bool) {
 	return v, ok
 }
 func (s *stubReputation) IsFrozen(id ids.IdentityID) bool { return s.frozen[id] }
-func (s *stubReputation) RecordOfferOutcome(id ids.IdentityID, outcome string) {
+func (s *stubReputation) RecordOfferOutcome(id ids.IdentityID, outcome string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recordedOutcomes = append(s.recordedOutcomes, recordedOutcome{ID: id, Outcome: outcome})
+	return nil
 }
 
 func (s *stubReputation) OnLedgerEvent(ev admission.LedgerEvent) {
