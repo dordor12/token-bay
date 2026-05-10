@@ -65,9 +65,11 @@ One test file per source file.
 - `Deps.AuditLog` is opened by the caller because audit-log paths come from
   config and the caller already touched config; threading it through the
   supervisor would just relay the same value.
-- `OfferHandler` and `SettlementHandler` are not in `Deps` yet —
-  `trackerclient` tolerates nil for both, and the seeder/consumer push
-  paths land in their own feature plans.
+- `Deps.SeederFlow` is the seeder-side flow coordinator. When set, the
+  supervisor wires it as `trackerclient.Config.OfferHandler` and runs
+  it as a background goroutine for the lifetime of ctx. `nil` disables
+  the seeder role at this process. `SettlementHandler` is still not
+  in `Deps`; the consumer push path lands in its own feature plan.
 - `closeIgnoreServerClosed` swallows `http.ErrServerClosed` from
   `ccproxy.Close`. The ccproxy `Start` registers its own ctx-cancel
   goroutine that calls `Close`, so the supervisor's explicit close races
