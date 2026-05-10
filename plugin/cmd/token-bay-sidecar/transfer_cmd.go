@@ -236,7 +236,7 @@ the tracker.`,
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			endpoints, err := resolveTrackerEndpoints(cfg.Tracker)
+			endpoints, err := resolveTrackerEndpoints(cfg.Tracker, filepath.Dir(configPath), time.Now())
 			if err != nil {
 				return err
 			}
