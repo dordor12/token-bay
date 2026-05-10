@@ -29,6 +29,7 @@ type Federation struct {
 	transfer     *transferCoordinator
 	revocation   *revocationCoordinator
 	peerExchange *peerExchangeCoordinator
+	health       *PeerHealth
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -83,7 +84,7 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	health := NewPeerHealth(cfg.Health, dep.Now, nil)
 
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
-	equiv := NewEquivocator(dep.Archive, forward, reg, nil).WithSelf(cfg.MyTrackerID)
+	equiv := NewEquivocator(dep.Archive, forward, reg, health.OnEquivocation).WithSelf(cfg.MyTrackerID)
 	apply.RegisterEquivocator(equiv.OnLocalConflict)
 
 	pub := NewPublisher(dep.RootSrc, forward, cfg.MyTrackerID)
@@ -119,10 +120,11 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 			}
 			return info.PubKey, true
 		},
-		Now:        dep.Now,
-		Invalid:    func(name string) { dep.Metrics.InvalidFrames(name) },
-		OnEmit:     dep.Metrics.RevocationsEmitted,
-		OnReceived: dep.Metrics.RevocationsReceived,
+		Now:                  dep.Now,
+		Invalid:              func(name string) { dep.Metrics.InvalidFrames(name) },
+		OnEmit:               dep.Metrics.RevocationsEmitted,
+		OnReceived:           dep.Metrics.RevocationsReceived,
+		OnRevocationObserved: health.OnRevocation,
 	})
 
 	var peerExchange *peerExchangeCoordinator
@@ -146,7 +148,8 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		reg: reg, dedupe: dedupe, gossip: gossip,
 		apply: apply, equiv: equiv, pub: pub,
 		transfer: transfer, revocation: revocation, peerExchange: peerExchange,
-		peers: make(map[ids.TrackerID]*Peer),
+		health: health,
+		peers:  make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
 	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
@@ -441,6 +444,7 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.dep.Metrics.RootAttestationsReceived("archived")
+			f.health.OnRootAttestation(peerID, f.dep.Now())
 		case fed.Kind_KIND_EQUIVOCATION_EVIDENCE:
 			f.equiv.OnIncomingEvidence(context.Background(), env, peerID)
 		case fed.Kind_KIND_PING, fed.Kind_KIND_PONG:
