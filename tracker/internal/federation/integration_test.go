@@ -261,6 +261,29 @@ func TestIntegration_QUIC_RootAttestation_AB(t *testing.T) {
 	t.Fatal("B never archived A's root over QUIC (steady state was reached)")
 }
 
+func TestIntegration_StartTransfer_DisabledWithoutLedger(t *testing.T) {
+	t.Parallel()
+	tt := newTwoTracker(t) // no Ledger wired
+
+	var nonce [32]byte
+	nonce[0] = 0x01
+	_, err := tt.b.StartTransfer(context.Background(), federation.StartTransferInput{
+		SourceTrackerID: tt.aID,
+		IdentityID:      ids.IdentityID{},
+		Amount:          1,
+		Nonce:           nonce,
+		ConsumerSig:     b(64, 0x55),
+		ConsumerPub:     b(32, 0x66),
+		Timestamp:       1,
+	})
+	if err == nil {
+		t.Fatal("err=nil, want ErrTransferDisabled")
+	}
+	if !errors.Is(err, federation.ErrTransferDisabled) {
+		t.Fatalf("err=%v, want ErrTransferDisabled", err)
+	}
+}
+
 // b32/b64 are short helpers for the QUIC integration test (parallel to b()).
 func b32(v byte) []byte {
 	out := make([]byte, 32)

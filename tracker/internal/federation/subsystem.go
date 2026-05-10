@@ -18,12 +18,13 @@ type Federation struct {
 	cfg Config
 	dep Deps
 
-	reg    *Registry
-	dedupe *Dedupe
-	gossip *Gossip
-	apply  *RootAttestApplier
-	equiv  *Equivocator
-	pub    *Publisher
+	reg      *Registry
+	dedupe   *Dedupe
+	gossip   *Gossip
+	apply    *RootAttestApplier
+	equiv    *Equivocator
+	pub      *Publisher
+	transfer *transferCoordinator
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -81,13 +82,35 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 
 	pub := NewPublisher(dep.RootSrc, forward, cfg.MyTrackerID)
 
+	transfer := newTransferCoordinator(transferCoordinatorCfg{
+		MyTrackerID: cfg.MyTrackerID,
+		MyPriv:      cfg.MyPriv,
+		Ledger:      dep.Ledger,
+		IssuedCap:   cfg.IssuedProofCap,
+		Now:         dep.Now,
+		PeerPubKey: func(id ids.TrackerID) (ed25519.PublicKey, bool) {
+			info, ok := reg.Get(id)
+			if !ok {
+				return nil, false
+			}
+			return info.PubKey, true
+		},
+		// Send is patched after we have *Federation; transfer never
+		// invokes it before f is constructed and the patch lands below.
+		Send:           nil,
+		MetricsCounter: func(name string) { dep.Metrics.InvalidFrames(name) },
+	})
+
 	f := &Federation{
 		cfg: cfg, dep: dep,
 		reg: reg, dedupe: dedupe, gossip: gossip,
-		apply: apply, equiv: equiv, pub: pub,
+		apply: apply, equiv: equiv, pub: pub, transfer: transfer,
 		peers: make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
+	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
+		return f.SendToPeer(ctx, peer, kind, payload)
+	}
 
 	// Add operator-allowlisted peers in pending state. Dialing them is
 	// kicked off below; this slice initializes their entries so they
@@ -163,6 +186,30 @@ func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
 // PublishHour drives a single publisher tick.
 func (f *Federation) PublishHour(ctx context.Context, hour uint64) error {
 	return f.pub.PublishHour(ctx, hour)
+}
+
+// StartTransfer is the api-handler entry point for a destination-side
+// cross-region credit transfer. Returns ErrTransferDisabled if the
+// federation was opened without a LedgerHooks dep, ErrPeerNotConnected
+// if the source tracker isn't in steady state, ErrTransferTimeout on
+// timeout, or the proof on success.
+func (f *Federation) StartTransfer(ctx context.Context, in StartTransferInput) (StartTransferOutput, error) {
+	if f.transfer == nil || f.transfer.cfg.Ledger == nil {
+		return StartTransferOutput{}, ErrTransferDisabled
+	}
+	if !f.reg.IsActive(in.SourceTrackerID) {
+		return StartTransferOutput{}, fmt.Errorf("%w: source=%x", ErrPeerNotConnected, in.SourceTrackerID.Bytes())
+	}
+	if f.cfg.TransferTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, f.cfg.TransferTimeout)
+		defer cancel()
+	}
+	out, err := f.transfer.StartTransfer(ctx, in)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return out, ErrTransferTimeout
+	}
+	return out, err
 }
 
 // ListenAddr returns the bound network address of the underlying
@@ -290,6 +337,24 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 			f.equiv.OnIncomingEvidence(context.Background(), env, peerID)
 		case fed.Kind_KIND_PING, fed.Kind_KIND_PONG:
 			// keepalive — no action in this slice beyond the metric.
+		case fed.Kind_KIND_TRANSFER_PROOF_REQUEST:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnRequest(context.Background(), env, peerID)
+		case fed.Kind_KIND_TRANSFER_PROOF:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnProof(context.Background(), env, peerID)
+		case fed.Kind_KIND_TRANSFER_APPLIED:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnApplied(context.Background(), env, peerID)
 		default:
 			f.dep.Metrics.InvalidFrames(fmt.Sprintf("kind_%d", int(env.Kind)))
 		}
