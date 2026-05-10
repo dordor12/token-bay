@@ -45,6 +45,11 @@ type Deps struct {
 	Metrics   *Metrics
 	Logger    zerolog.Logger
 	Now       func() time.Time
+
+	// Ledger is the cross-region credit transfer hook. May be nil; when
+	// nil, Federation.StartTransfer returns ErrTransferDisabled and
+	// inbound transfer kinds are rejected with the same.
+	Ledger LedgerHooks
 }
 
 func (c Config) withDefaults() Config {
