@@ -24,7 +24,7 @@ func ValidateEnvelope(e *Envelope) error {
 	if len(e.SenderId) != TrackerIDLen {
 		return fmt.Errorf("federation: sender_id len %d != %d", len(e.SenderId), TrackerIDLen)
 	}
-	if e.Kind <= Kind_KIND_UNSPECIFIED || e.Kind > Kind_KIND_TRANSFER_APPLIED {
+	if e.Kind <= Kind_KIND_UNSPECIFIED || e.Kind > Kind_KIND_REVOCATION {
 		return fmt.Errorf("federation: kind %d out of range", int32(e.Kind))
 	}
 	if len(e.Payload) == 0 {
@@ -195,6 +195,37 @@ func ValidateTransferProof(m *TransferProof) error {
 	}
 	if m.Timestamp == 0 {
 		return errors.New("federation: transfer_proof.timestamp must be > 0")
+	}
+	return nil
+}
+
+// ValidateRevocation enforces shape invariants on a Revocation. Callers
+// MUST verify the issuer's tracker_sig separately (validation only checks
+// shape, not signatures).
+func ValidateRevocation(m *Revocation) error {
+	if m == nil {
+		return errors.New("federation: nil Revocation")
+	}
+	if len(m.TrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: revocation.tracker_id len %d != %d", len(m.TrackerId), TrackerIDLen)
+	}
+	if allZero(m.TrackerId) {
+		return errors.New("federation: revocation.tracker_id is all zero")
+	}
+	if len(m.IdentityId) != TrackerIDLen {
+		return fmt.Errorf("federation: revocation.identity_id len %d != %d", len(m.IdentityId), TrackerIDLen)
+	}
+	if allZero(m.IdentityId) {
+		return errors.New("federation: revocation.identity_id is all zero")
+	}
+	if len(m.TrackerSig) != SigLen {
+		return fmt.Errorf("federation: revocation.tracker_sig len %d != %d", len(m.TrackerSig), SigLen)
+	}
+	if m.RevokedAt == 0 {
+		return errors.New("federation: revocation.revoked_at must be > 0")
+	}
+	if m.Reason <= RevocationReason_REVOCATION_REASON_UNSPECIFIED || m.Reason > RevocationReason_REVOCATION_REASON_EXPIRED {
+		return fmt.Errorf("federation: revocation.reason %d out of range", int32(m.Reason))
 	}
 	return nil
 }
