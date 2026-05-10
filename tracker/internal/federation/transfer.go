@@ -369,6 +369,42 @@ func (tc *transferCoordinator) OnProof(_ context.Context, env *fed.Envelope, fro
 	}
 }
 
+// OnApplied is the dispatcher hook for KIND_TRANSFER_APPLIED. The
+// destination-side credit is already booked on the source by the time
+// this arrives; the message is a confirmation for source-side
+// observability.
+func (tc *transferCoordinator) OnApplied(_ context.Context, env *fed.Envelope, fromPeer ids.TrackerID) {
+	applied := &fed.TransferApplied{}
+	if err := proto.Unmarshal(env.Payload, applied); err != nil {
+		tc.cfg.MetricsCounter("transfer_applied_shape")
+		return
+	}
+	if err := fed.ValidateTransferApplied(applied); err != nil {
+		tc.cfg.MetricsCounter("transfer_applied_shape")
+		return
+	}
+	myID := tc.cfg.MyTrackerID.Bytes()
+	if !equalID(applied.SourceTrackerId, myID[:]) {
+		tc.cfg.MetricsCounter("transfer_applied_misrouted")
+		return
+	}
+	dstPub, ok := tc.cfg.PeerPubKey(fromPeer)
+	if !ok {
+		tc.cfg.MetricsCounter("transfer_applied_unknown_peer")
+		return
+	}
+	cb, err := fed.CanonicalTransferAppliedPreSig(applied)
+	if err != nil {
+		tc.cfg.MetricsCounter("transfer_applied_canonical")
+		return
+	}
+	if !ed25519.Verify(dstPub, cb, applied.DestTrackerSig) {
+		tc.cfg.MetricsCounter("transfer_applied_sig")
+		return
+	}
+	tc.cfg.MetricsCounter("transfer_applied_received_ok")
+}
+
 // isLedgerTransferRefExists is the federation-internal indirection
 // for the ledger's ErrTransferRefExists sentinel. The ledger package
 // is not imported here to keep federation's dependency surface

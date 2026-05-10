@@ -413,3 +413,102 @@ func TestTransferCoordinator_StartTransfer_HappyPath(t *testing.T) {
 		t.Fatal("TransferApplied not sent within 2s")
 	}
 }
+
+func TestTransferCoordinator_OnProof_Orphan(t *testing.T) {
+	t.Parallel()
+	srcPub, srcPriv := keypairFromSeed(0x11)
+	dstPub, dstPriv := keypairFromSeed(0x22)
+	srcID := trackerID(srcPub)
+	dstID := trackerID(dstPub)
+
+	metrics := map[string]int{}
+	var mu sync.Mutex
+	tc := newTransferCoordinator(transferCoordinatorCfg{
+		MyTrackerID: dstID,
+		MyPriv:      dstPriv,
+		Ledger:      &fakeLedger{},
+		Now:         func() time.Time { return time.Unix(1714000000, 0) },
+		PeerPubKey:  func(id ids.TrackerID) (ed25519.PublicKey, bool) { return srcPub, id == srcID },
+		Send:        func(context.Context, ids.TrackerID, fed.Kind, []byte) error { return nil },
+		MetricsCounter: func(n string) {
+			mu.Lock()
+			defer mu.Unlock()
+			metrics[n]++
+		},
+	})
+
+	srcIDBytes := srcID.Bytes()
+	dstIDBytes := dstID.Bytes()
+	proof := &fed.TransferProof{
+		SourceTrackerId:    srcIDBytes[:],
+		DestTrackerId:      dstIDBytes[:],
+		IdentityId:         bytes.Repeat([]byte{0x44}, 32),
+		Amount:             1500,
+		Nonce:              bytes.Repeat([]byte{0x55}, 32),
+		SourceChainTipHash: bytes.Repeat([]byte{0xCC}, 32),
+		SourceSeq:          7,
+		Timestamp:          1714000000,
+	}
+	cb, err := fed.CanonicalTransferProofPreSig(proof)
+	require.NoError(t, err)
+	proof.SourceTrackerSig = ed25519.Sign(srcPriv, cb)
+	payload, err := proto.Marshal(proof)
+	require.NoError(t, err)
+	env, err := SignEnvelope(srcPriv, srcIDBytes[:], fed.Kind_KIND_TRANSFER_PROOF, payload)
+	require.NoError(t, err)
+
+	tc.OnProof(context.Background(), env, srcID)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, metrics["transfer_proof_orphan"])
+}
+
+func TestTransferCoordinator_OnApplied_HappyPath(t *testing.T) {
+	t.Parallel()
+	srcPub, srcPriv := keypairFromSeed(0x11)
+	dstPub, dstPriv := keypairFromSeed(0x22)
+	srcID := trackerID(srcPub)
+	dstID := trackerID(dstPub)
+
+	metrics := map[string]int{}
+	var mu sync.Mutex
+	tc := newTransferCoordinator(transferCoordinatorCfg{
+		MyTrackerID: srcID,
+		MyPriv:      srcPriv,
+		Ledger:      &fakeLedger{},
+		Now:         func() time.Time { return time.Unix(1714000000, 0) },
+		PeerPubKey: func(id ids.TrackerID) (ed25519.PublicKey, bool) {
+			if id == dstID {
+				return dstPub, true
+			}
+			return nil, false
+		},
+		Send: func(context.Context, ids.TrackerID, fed.Kind, []byte) error { return nil },
+		MetricsCounter: func(n string) {
+			mu.Lock()
+			defer mu.Unlock()
+			metrics[n]++
+		},
+	})
+
+	srcIDBytes := srcID.Bytes()
+	dstIDBytes := dstID.Bytes()
+	applied := &fed.TransferApplied{
+		SourceTrackerId: srcIDBytes[:],
+		DestTrackerId:   dstIDBytes[:],
+		Nonce:           bytes.Repeat([]byte{0x55}, 32),
+		Timestamp:       1714000001,
+	}
+	cb, err := fed.CanonicalTransferAppliedPreSig(applied)
+	require.NoError(t, err)
+	applied.DestTrackerSig = ed25519.Sign(dstPriv, cb)
+	payload, err := proto.Marshal(applied)
+	require.NoError(t, err)
+	env, err := SignEnvelope(dstPriv, dstIDBytes[:], fed.Kind_KIND_TRANSFER_APPLIED, payload)
+	require.NoError(t, err)
+
+	tc.OnApplied(context.Background(), env, dstID)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, metrics["transfer_applied_received_ok"])
+}
