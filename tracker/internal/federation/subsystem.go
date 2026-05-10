@@ -229,6 +229,11 @@ func (f *Federation) attachAndWait(p AllowlistedPeer) func(PeerConn) {
 			return
 		}
 		pe := f.attachPeerLocked(res, c)
+		if pe == nil {
+			// attachPeerLocked already closed c (subsystem was closed
+			// concurrently); nothing to wait on.
+			return
+		}
 		pe.Wait()
 	}
 }
@@ -384,11 +389,19 @@ func (f *Federation) attachPeer(res HandshakeResult, c PeerConn) {
 
 // attachPeerLocked is the shared body of attachPeer + the Dialer's
 // OnConnected hook. Returns the *Peer so callers can Wait() on its
-// recvLoop. Lock order: f.mu > reg.mu (see Registry).
+// recvLoop, or nil if the subsystem is already closed. Lock order:
+// f.mu > reg.mu (see Registry).
 func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	dispatch := f.makeDispatcher(c, res.PeerTrackerID)
 	pe := NewPeerForTest(c, dispatch)
 	f.mu.Lock()
+	if f.closed {
+		// Close() already nilled f.peers; dialing-late after Close is a
+		// race we resolve by dropping the connection here.
+		f.mu.Unlock()
+		_ = c.Close()
+		return nil
+	}
 	f.peers[res.PeerTrackerID] = pe
 	_ = f.reg.Update(PeerInfo{TrackerID: res.PeerTrackerID, PubKey: res.PeerPubKey, Addr: c.RemoteAddr(), State: PeerStateSteady, Conn: c})
 	f.mu.Unlock()
