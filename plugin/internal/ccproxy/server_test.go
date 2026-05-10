@@ -114,3 +114,33 @@ func TestServer_CleanClose_NoError(t *testing.T) {
 	require.NoError(t, s.Start(context.Background()))
 	assert.NoError(t, s.Close())
 }
+
+func TestServer_HandleAnthropic_NetworkMode_RoutesThroughNetworkRouter(t *testing.T) {
+	canned := "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	conn := &fakePeerConn{receiveOK: true, receiveBody: canned}
+	dialer := &fakeDialer{conn: conn}
+
+	store := NewSessionModeStore()
+	store.EnterNetworkMode("session-z", EntryMetadata{
+		EnteredAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	srv := New(WithSessionStore(store), WithNetworkRouter(&NetworkRouter{Dialer: dialer}))
+	require.NoError(t, srv.Start(context.Background()))
+	defer srv.Close()
+
+	httpReq, _ := http.NewRequest(http.MethodPost, srv.URL()+"v1/messages", strings.NewReader(`{"model":"x"}`))
+	httpReq.Header.Set("X-Claude-Code-Session-Id", "session-z")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+	assert.Equal(t, canned, string(body))
+}
