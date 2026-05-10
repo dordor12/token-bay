@@ -7,11 +7,12 @@
 package proto
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -39,21 +40,23 @@ const (
 	RpcMethod_RPC_METHOD_TRANSFER_REQUEST RpcMethod = 7
 	RpcMethod_RPC_METHOD_STUN_ALLOCATE    RpcMethod = 8
 	RpcMethod_RPC_METHOD_TURN_RELAY_OPEN  RpcMethod = 9
+	RpcMethod_RPC_METHOD_BOOTSTRAP_PEERS  RpcMethod = 10
 )
 
 // Enum value maps for RpcMethod.
 var (
 	RpcMethod_name = map[int32]string{
-		0: "RPC_METHOD_UNSPECIFIED",
-		1: "RPC_METHOD_ENROLL",
-		2: "RPC_METHOD_BROKER_REQUEST",
-		3: "RPC_METHOD_BALANCE",
-		4: "RPC_METHOD_SETTLE",
-		5: "RPC_METHOD_USAGE_REPORT",
-		6: "RPC_METHOD_ADVERTISE",
-		7: "RPC_METHOD_TRANSFER_REQUEST",
-		8: "RPC_METHOD_STUN_ALLOCATE",
-		9: "RPC_METHOD_TURN_RELAY_OPEN",
+		0:  "RPC_METHOD_UNSPECIFIED",
+		1:  "RPC_METHOD_ENROLL",
+		2:  "RPC_METHOD_BROKER_REQUEST",
+		3:  "RPC_METHOD_BALANCE",
+		4:  "RPC_METHOD_SETTLE",
+		5:  "RPC_METHOD_USAGE_REPORT",
+		6:  "RPC_METHOD_ADVERTISE",
+		7:  "RPC_METHOD_TRANSFER_REQUEST",
+		8:  "RPC_METHOD_STUN_ALLOCATE",
+		9:  "RPC_METHOD_TURN_RELAY_OPEN",
+		10: "RPC_METHOD_BOOTSTRAP_PEERS",
 	}
 	RpcMethod_value = map[string]int32{
 		"RPC_METHOD_UNSPECIFIED":      0,
@@ -66,6 +69,7 @@ var (
 		"RPC_METHOD_TRANSFER_REQUEST": 7,
 		"RPC_METHOD_STUN_ALLOCATE":    8,
 		"RPC_METHOD_TURN_RELAY_OPEN":  9,
+		"RPC_METHOD_BOOTSTRAP_PEERS":  10,
 	}
 )
 
@@ -1609,6 +1613,194 @@ func (x *TurnRelayOpenResponse) GetToken() []byte {
 	return nil
 }
 
+type BootstrapPeersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootstrapPeersRequest) Reset() {
+	*x = BootstrapPeersRequest{}
+	mi := &file_proto_rpc_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootstrapPeersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootstrapPeersRequest) ProtoMessage() {}
+
+func (x *BootstrapPeersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_rpc_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootstrapPeersRequest.ProtoReflect.Descriptor instead.
+func (*BootstrapPeersRequest) Descriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{23}
+}
+
+type BootstrapPeer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TrackerId     []byte                 `protobuf:"bytes,1,opt,name=tracker_id,json=trackerId,proto3" json:"tracker_id,omitempty"`         // 32 bytes — SHA-256 of peer tracker's SPKI
+	Addr          string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`                                    // host:port (UDP for QUIC); len ≤ 256, valid UTF-8
+	RegionHint    string                 `protobuf:"bytes,3,opt,name=region_hint,json=regionHint,proto3" json:"region_hint,omitempty"`      // human-friendly; len ≤ 64, valid UTF-8
+	HealthScore   float64                `protobuf:"fixed64,4,opt,name=health_score,json=healthScore,proto3" json:"health_score,omitempty"` // 0..1; NaN rejected by validator
+	LastSeen      uint64                 `protobuf:"varint,5,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`           // unix seconds
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootstrapPeer) Reset() {
+	*x = BootstrapPeer{}
+	mi := &file_proto_rpc_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootstrapPeer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootstrapPeer) ProtoMessage() {}
+
+func (x *BootstrapPeer) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_rpc_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootstrapPeer.ProtoReflect.Descriptor instead.
+func (*BootstrapPeer) Descriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *BootstrapPeer) GetTrackerId() []byte {
+	if x != nil {
+		return x.TrackerId
+	}
+	return nil
+}
+
+func (x *BootstrapPeer) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *BootstrapPeer) GetRegionHint() string {
+	if x != nil {
+		return x.RegionHint
+	}
+	return ""
+}
+
+func (x *BootstrapPeer) GetHealthScore() float64 {
+	if x != nil {
+		return x.HealthScore
+	}
+	return 0
+}
+
+func (x *BootstrapPeer) GetLastSeen() uint64 {
+	if x != nil {
+		return x.LastSeen
+	}
+	return 0
+}
+
+type BootstrapPeerList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IssuerId      []byte                 `protobuf:"bytes,1,opt,name=issuer_id,json=issuerId,proto3" json:"issuer_id,omitempty"`     // 32 — issuing tracker's IdentityID
+	SignedAt      uint64                 `protobuf:"varint,2,opt,name=signed_at,json=signedAt,proto3" json:"signed_at,omitempty"`    // unix seconds
+	ExpiresAt     uint64                 `protobuf:"varint,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // unix seconds
+	Peers         []*BootstrapPeer       `protobuf:"bytes,4,rep,name=peers,proto3" json:"peers,omitempty"`
+	Sig           []byte                 `protobuf:"bytes,5,opt,name=sig,proto3" json:"sig,omitempty"` // 64 — Ed25519 over CanonicalBootstrapPeerListPreSig(list)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootstrapPeerList) Reset() {
+	*x = BootstrapPeerList{}
+	mi := &file_proto_rpc_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootstrapPeerList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootstrapPeerList) ProtoMessage() {}
+
+func (x *BootstrapPeerList) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_rpc_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootstrapPeerList.ProtoReflect.Descriptor instead.
+func (*BootstrapPeerList) Descriptor() ([]byte, []int) {
+	return file_proto_rpc_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *BootstrapPeerList) GetIssuerId() []byte {
+	if x != nil {
+		return x.IssuerId
+	}
+	return nil
+}
+
+func (x *BootstrapPeerList) GetSignedAt() uint64 {
+	if x != nil {
+		return x.SignedAt
+	}
+	return 0
+}
+
+func (x *BootstrapPeerList) GetExpiresAt() uint64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+func (x *BootstrapPeerList) GetPeers() []*BootstrapPeer {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
+func (x *BootstrapPeerList) GetSig() []byte {
+	if x != nil {
+		return x.Sig
+	}
+	return nil
+}
+
 type HeartbeatPing struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Seq           uint64                 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
@@ -1619,7 +1811,7 @@ type HeartbeatPing struct {
 
 func (x *HeartbeatPing) Reset() {
 	*x = HeartbeatPing{}
-	mi := &file_proto_rpc_proto_msgTypes[23]
+	mi := &file_proto_rpc_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1631,7 +1823,7 @@ func (x *HeartbeatPing) String() string {
 func (*HeartbeatPing) ProtoMessage() {}
 
 func (x *HeartbeatPing) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[23]
+	mi := &file_proto_rpc_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1644,7 +1836,7 @@ func (x *HeartbeatPing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPing.ProtoReflect.Descriptor instead.
 func (*HeartbeatPing) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{23}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *HeartbeatPing) GetSeq() uint64 {
@@ -1670,7 +1862,7 @@ type HeartbeatPong struct {
 
 func (x *HeartbeatPong) Reset() {
 	*x = HeartbeatPong{}
-	mi := &file_proto_rpc_proto_msgTypes[24]
+	mi := &file_proto_rpc_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1682,7 +1874,7 @@ func (x *HeartbeatPong) String() string {
 func (*HeartbeatPong) ProtoMessage() {}
 
 func (x *HeartbeatPong) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[24]
+	mi := &file_proto_rpc_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1695,7 +1887,7 @@ func (x *HeartbeatPong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPong.ProtoReflect.Descriptor instead.
 func (*HeartbeatPong) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{24}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *HeartbeatPong) GetSeq() uint64 {
@@ -1718,7 +1910,7 @@ type OfferPush struct {
 
 func (x *OfferPush) Reset() {
 	*x = OfferPush{}
-	mi := &file_proto_rpc_proto_msgTypes[25]
+	mi := &file_proto_rpc_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1730,7 +1922,7 @@ func (x *OfferPush) String() string {
 func (*OfferPush) ProtoMessage() {}
 
 func (x *OfferPush) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[25]
+	mi := &file_proto_rpc_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1743,7 +1935,7 @@ func (x *OfferPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OfferPush.ProtoReflect.Descriptor instead.
 func (*OfferPush) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{25}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *OfferPush) GetConsumerId() []byte {
@@ -1792,7 +1984,7 @@ type OfferDecision struct {
 
 func (x *OfferDecision) Reset() {
 	*x = OfferDecision{}
-	mi := &file_proto_rpc_proto_msgTypes[26]
+	mi := &file_proto_rpc_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1804,7 +1996,7 @@ func (x *OfferDecision) String() string {
 func (*OfferDecision) ProtoMessage() {}
 
 func (x *OfferDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[26]
+	mi := &file_proto_rpc_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1817,7 +2009,7 @@ func (x *OfferDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OfferDecision.ProtoReflect.Descriptor instead.
 func (*OfferDecision) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{26}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *OfferDecision) GetAccept() bool {
@@ -1851,7 +2043,7 @@ type SettlementPush struct {
 
 func (x *SettlementPush) Reset() {
 	*x = SettlementPush{}
-	mi := &file_proto_rpc_proto_msgTypes[27]
+	mi := &file_proto_rpc_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1863,7 +2055,7 @@ func (x *SettlementPush) String() string {
 func (*SettlementPush) ProtoMessage() {}
 
 func (x *SettlementPush) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_rpc_proto_msgTypes[27]
+	mi := &file_proto_rpc_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1876,7 +2068,7 @@ func (x *SettlementPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlementPush.ProtoReflect.Descriptor instead.
 func (*SettlementPush) Descriptor() ([]byte, []int) {
-	return file_proto_rpc_proto_rawDescGZIP(), []int{27}
+	return file_proto_rpc_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SettlementPush) GetPreimageHash() []byte {
@@ -1989,7 +2181,23 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\fR\tsessionId\"T\n" +
 	"\x15TurnRelayOpenResponse\x12%\n" +
 	"\x0erelay_endpoint\x18\x01 \x01(\tR\rrelayEndpoint\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\fR\x05token\"/\n" +
+	"\x05token\x18\x02 \x01(\fR\x05token\"\x17\n" +
+	"\x15BootstrapPeersRequest\"\xa3\x01\n" +
+	"\rBootstrapPeer\x12\x1d\n" +
+	"\n" +
+	"tracker_id\x18\x01 \x01(\fR\ttrackerId\x12\x12\n" +
+	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +
+	"\vregion_hint\x18\x03 \x01(\tR\n" +
+	"regionHint\x12!\n" +
+	"\fhealth_score\x18\x04 \x01(\x01R\vhealthScore\x12\x1b\n" +
+	"\tlast_seen\x18\x05 \x01(\x04R\blastSeen\"\xb6\x01\n" +
+	"\x11BootstrapPeerList\x12\x1b\n" +
+	"\tissuer_id\x18\x01 \x01(\fR\bissuerId\x12\x1b\n" +
+	"\tsigned_at\x18\x02 \x01(\x04R\bsignedAt\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x03 \x01(\x04R\texpiresAt\x126\n" +
+	"\x05peers\x18\x04 \x03(\v2 .tokenbay.proto.v1.BootstrapPeerR\x05peers\x12\x10\n" +
+	"\x03sig\x18\x05 \x01(\fR\x03sig\"/\n" +
 	"\rHeartbeatPing\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\f\n" +
 	"\x01t\x18\x02 \x01(\x04R\x01t\"!\n" +
@@ -2008,7 +2216,7 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\rreject_reason\x18\x03 \x01(\tR\frejectReason\"Z\n" +
 	"\x0eSettlementPush\x12#\n" +
 	"\rpreimage_hash\x18\x01 \x01(\fR\fpreimageHash\x12#\n" +
-	"\rpreimage_body\x18\x02 \x01(\fR\fpreimageBody*\xa2\x02\n" +
+	"\rpreimage_body\x18\x02 \x01(\fR\fpreimageBody*\xc2\x02\n" +
 	"\tRpcMethod\x12\x1a\n" +
 	"\x16RPC_METHOD_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11RPC_METHOD_ENROLL\x10\x01\x12\x1d\n" +
@@ -2019,7 +2227,9 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\x14RPC_METHOD_ADVERTISE\x10\x06\x12\x1f\n" +
 	"\x1bRPC_METHOD_TRANSFER_REQUEST\x10\a\x12\x1c\n" +
 	"\x18RPC_METHOD_STUN_ALLOCATE\x10\b\x12\x1e\n" +
-	"\x1aRPC_METHOD_TURN_RELAY_OPEN\x10\t*\xd8\x01\n" +
+	"\x1aRPC_METHOD_TURN_RELAY_OPEN\x10\t\x12\x1e\n" +
+	"\x1aRPC_METHOD_BOOTSTRAP_PEERS\x10\n" +
+	"*\xd8\x01\n" +
 	"\tRpcStatus\x12\x1a\n" +
 	"\x16RPC_STATUS_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rRPC_STATUS_OK\x10\x01\x12\x16\n" +
@@ -2058,43 +2268,48 @@ func file_proto_rpc_proto_rawDescGZIP() []byte {
 	return file_proto_rpc_proto_rawDescData
 }
 
-var file_proto_rpc_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_proto_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
-var file_proto_rpc_proto_goTypes = []any{
-	(RpcMethod)(0),                // 0: tokenbay.proto.v1.RpcMethod
-	(RpcStatus)(0),                // 1: tokenbay.proto.v1.RpcStatus
-	(PositionBand)(0),             // 2: tokenbay.proto.v1.PositionBand
-	(EtaBand)(0),                  // 3: tokenbay.proto.v1.EtaBand
-	(RejectReason)(0),             // 4: tokenbay.proto.v1.RejectReason
-	(*RpcError)(nil),              // 5: tokenbay.proto.v1.RpcError
-	(*RpcRequest)(nil),            // 6: tokenbay.proto.v1.RpcRequest
-	(*RpcResponse)(nil),           // 7: tokenbay.proto.v1.RpcResponse
-	(*EnrollRequest)(nil),         // 8: tokenbay.proto.v1.EnrollRequest
-	(*EnrollResponse)(nil),        // 9: tokenbay.proto.v1.EnrollResponse
-	(*SeederAssignment)(nil),      // 10: tokenbay.proto.v1.SeederAssignment
-	(*NoCapacity)(nil),            // 11: tokenbay.proto.v1.NoCapacity
-	(*Queued)(nil),                // 12: tokenbay.proto.v1.Queued
-	(*Rejected)(nil),              // 13: tokenbay.proto.v1.Rejected
-	(*BrokerRequestResponse)(nil), // 14: tokenbay.proto.v1.BrokerRequestResponse
-	(*BalanceRequest)(nil),        // 15: tokenbay.proto.v1.BalanceRequest
-	(*SettleRequest)(nil),         // 16: tokenbay.proto.v1.SettleRequest
-	(*SettleAck)(nil),             // 17: tokenbay.proto.v1.SettleAck
-	(*UsageReport)(nil),           // 18: tokenbay.proto.v1.UsageReport
-	(*UsageAck)(nil),              // 19: tokenbay.proto.v1.UsageAck
-	(*Advertisement)(nil),         // 20: tokenbay.proto.v1.Advertisement
-	(*AdvertiseAck)(nil),          // 21: tokenbay.proto.v1.AdvertiseAck
-	(*TransferRequest)(nil),       // 22: tokenbay.proto.v1.TransferRequest
-	(*TransferProof)(nil),         // 23: tokenbay.proto.v1.TransferProof
-	(*StunAllocateRequest)(nil),   // 24: tokenbay.proto.v1.StunAllocateRequest
-	(*StunAllocateResponse)(nil),  // 25: tokenbay.proto.v1.StunAllocateResponse
-	(*TurnRelayOpenRequest)(nil),  // 26: tokenbay.proto.v1.TurnRelayOpenRequest
-	(*TurnRelayOpenResponse)(nil), // 27: tokenbay.proto.v1.TurnRelayOpenResponse
-	(*HeartbeatPing)(nil),         // 28: tokenbay.proto.v1.HeartbeatPing
-	(*HeartbeatPong)(nil),         // 29: tokenbay.proto.v1.HeartbeatPong
-	(*OfferPush)(nil),             // 30: tokenbay.proto.v1.OfferPush
-	(*OfferDecision)(nil),         // 31: tokenbay.proto.v1.OfferDecision
-	(*SettlementPush)(nil),        // 32: tokenbay.proto.v1.SettlementPush
-}
+var (
+	file_proto_rpc_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+	file_proto_rpc_proto_msgTypes  = make([]protoimpl.MessageInfo, 31)
+	file_proto_rpc_proto_goTypes   = []any{
+		(RpcMethod)(0),                // 0: tokenbay.proto.v1.RpcMethod
+		(RpcStatus)(0),                // 1: tokenbay.proto.v1.RpcStatus
+		(PositionBand)(0),             // 2: tokenbay.proto.v1.PositionBand
+		(EtaBand)(0),                  // 3: tokenbay.proto.v1.EtaBand
+		(RejectReason)(0),             // 4: tokenbay.proto.v1.RejectReason
+		(*RpcError)(nil),              // 5: tokenbay.proto.v1.RpcError
+		(*RpcRequest)(nil),            // 6: tokenbay.proto.v1.RpcRequest
+		(*RpcResponse)(nil),           // 7: tokenbay.proto.v1.RpcResponse
+		(*EnrollRequest)(nil),         // 8: tokenbay.proto.v1.EnrollRequest
+		(*EnrollResponse)(nil),        // 9: tokenbay.proto.v1.EnrollResponse
+		(*SeederAssignment)(nil),      // 10: tokenbay.proto.v1.SeederAssignment
+		(*NoCapacity)(nil),            // 11: tokenbay.proto.v1.NoCapacity
+		(*Queued)(nil),                // 12: tokenbay.proto.v1.Queued
+		(*Rejected)(nil),              // 13: tokenbay.proto.v1.Rejected
+		(*BrokerRequestResponse)(nil), // 14: tokenbay.proto.v1.BrokerRequestResponse
+		(*BalanceRequest)(nil),        // 15: tokenbay.proto.v1.BalanceRequest
+		(*SettleRequest)(nil),         // 16: tokenbay.proto.v1.SettleRequest
+		(*SettleAck)(nil),             // 17: tokenbay.proto.v1.SettleAck
+		(*UsageReport)(nil),           // 18: tokenbay.proto.v1.UsageReport
+		(*UsageAck)(nil),              // 19: tokenbay.proto.v1.UsageAck
+		(*Advertisement)(nil),         // 20: tokenbay.proto.v1.Advertisement
+		(*AdvertiseAck)(nil),          // 21: tokenbay.proto.v1.AdvertiseAck
+		(*TransferRequest)(nil),       // 22: tokenbay.proto.v1.TransferRequest
+		(*TransferProof)(nil),         // 23: tokenbay.proto.v1.TransferProof
+		(*StunAllocateRequest)(nil),   // 24: tokenbay.proto.v1.StunAllocateRequest
+		(*StunAllocateResponse)(nil),  // 25: tokenbay.proto.v1.StunAllocateResponse
+		(*TurnRelayOpenRequest)(nil),  // 26: tokenbay.proto.v1.TurnRelayOpenRequest
+		(*TurnRelayOpenResponse)(nil), // 27: tokenbay.proto.v1.TurnRelayOpenResponse
+		(*BootstrapPeersRequest)(nil), // 28: tokenbay.proto.v1.BootstrapPeersRequest
+		(*BootstrapPeer)(nil),         // 29: tokenbay.proto.v1.BootstrapPeer
+		(*BootstrapPeerList)(nil),     // 30: tokenbay.proto.v1.BootstrapPeerList
+		(*HeartbeatPing)(nil),         // 31: tokenbay.proto.v1.HeartbeatPing
+		(*HeartbeatPong)(nil),         // 32: tokenbay.proto.v1.HeartbeatPong
+		(*OfferPush)(nil),             // 33: tokenbay.proto.v1.OfferPush
+		(*OfferDecision)(nil),         // 34: tokenbay.proto.v1.OfferDecision
+		(*SettlementPush)(nil),        // 35: tokenbay.proto.v1.SettlementPush
+	}
+)
 var file_proto_rpc_proto_depIdxs = []int32{
 	0,  // 0: tokenbay.proto.v1.RpcRequest.method:type_name -> tokenbay.proto.v1.RpcMethod
 	1,  // 1: tokenbay.proto.v1.RpcResponse.status:type_name -> tokenbay.proto.v1.RpcStatus
@@ -2106,11 +2321,12 @@ var file_proto_rpc_proto_depIdxs = []int32{
 	11, // 7: tokenbay.proto.v1.BrokerRequestResponse.no_capacity:type_name -> tokenbay.proto.v1.NoCapacity
 	12, // 8: tokenbay.proto.v1.BrokerRequestResponse.queued:type_name -> tokenbay.proto.v1.Queued
 	13, // 9: tokenbay.proto.v1.BrokerRequestResponse.rejected:type_name -> tokenbay.proto.v1.Rejected
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	29, // 10: tokenbay.proto.v1.BootstrapPeerList.peers:type_name -> tokenbay.proto.v1.BootstrapPeer
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_proto_rpc_proto_init() }
@@ -2130,7 +2346,7 @@ func file_proto_rpc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_rpc_proto_rawDesc), len(file_proto_rpc_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   28,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
