@@ -46,3 +46,9 @@ func TestTranslate_MultiBlock_TextThenToolUse(t *testing.T) {
 	got := runFixture(t, in)
 	assert.Equal(t, string(want), string(got))
 }
+
+func TestTranslate_ToolUseThenText(t *testing.T) {
+	in, want := loadPair(t, "tool_use_then_text")
+	got := runFixture(t, in)
+	assert.Equal(t, string(want), string(got))
+}
