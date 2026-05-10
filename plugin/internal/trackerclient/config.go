@@ -53,6 +53,16 @@ type Config struct {
 	BackoffBase  time.Duration
 	BackoffMax   time.Duration
 	MaxFrameSize int
+
+	// Metrics is an optional observability hook. Currently used only by
+	// FetchBootstrapPeers; future RPCs may attach their own counters.
+	Metrics BootstrapMetrics
+}
+
+// BootstrapMetrics is the optional observability hook for bootstrap-list
+// fetches. Nil-safe — Client skips metrics if absent.
+type BootstrapMetrics interface {
+	IncBootstrapPeersFetched(outcome string) // outcome ∈ {ok, sig_invalid, expired, invalid, empty, issuer_mismatch, rpc_error}
 }
 
 // withDefaults returns a copy of cfg with zero-valued fields filled in.
