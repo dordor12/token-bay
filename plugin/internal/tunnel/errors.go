@@ -40,4 +40,15 @@ var (
 	// ErrTunnelClosed is returned by Send/Receive after Close has been
 	// called or after the underlying QUIC connection has terminated.
 	ErrTunnelClosed = errors.New("tunnel: closed")
+
+	// ErrHolePunchFailed is returned by Dial when a rendezvous-mode dial
+	// could not establish a direct UDP path to the peer's reflexive address
+	// before the configured HolePunchTimeout. The wrapped error is the last
+	// underlying QUIC handshake error.
+	ErrHolePunchFailed = errors.New("tunnel: hole-punch failed")
+
+	// ErrRelayFailed is returned by Dial when the tracker's relay coords
+	// could not be obtained (Rendezvous.OpenRelay error) or the QUIC
+	// handshake against the relay endpoint failed.
+	ErrRelayFailed = errors.New("tunnel: relay dial failed")
 )
