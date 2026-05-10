@@ -18,6 +18,7 @@ enum Kind {
   KIND_TRANSFER_PROOF_REQUEST = 9;
   KIND_TRANSFER_PROOF         = 10;
   KIND_TRANSFER_APPLIED       = 11;
+  KIND_REVOCATION             = 12;
 }
 
 // Envelope wraps every steady-state and handshake message (including
@@ -100,4 +101,19 @@ message TransferApplied {
   bytes  nonce             = 3;
   uint64 timestamp         = 4;
   bytes  dest_tracker_sig  = 5;
+}
+
+enum RevocationReason {
+  REVOCATION_REASON_UNSPECIFIED = 0;
+  REVOCATION_REASON_ABUSE       = 1;  // reputation-driven freeze
+  REVOCATION_REASON_MANUAL      = 2;  // operator-issued
+  REVOCATION_REASON_EXPIRED     = 3;  // identity TTL elapsed
+}
+
+message Revocation {
+  bytes            tracker_id  = 1;  // 32 bytes — issuer
+  bytes            identity_id = 2;  // 32 bytes — revoked identity
+  RevocationReason reason      = 3;
+  uint64           revoked_at  = 4;  // unix seconds
+  bytes            tracker_sig = 5;  // 64 bytes — Ed25519(canonical) by issuer
 }

@@ -39,6 +39,7 @@ const (
 	Kind_KIND_TRANSFER_PROOF_REQUEST Kind = 9
 	Kind_KIND_TRANSFER_PROOF         Kind = 10
 	Kind_KIND_TRANSFER_APPLIED       Kind = 11
+	Kind_KIND_REVOCATION             Kind = 12
 )
 
 // Enum value maps for Kind.
@@ -56,6 +57,7 @@ var (
 		9:  "KIND_TRANSFER_PROOF_REQUEST",
 		10: "KIND_TRANSFER_PROOF",
 		11: "KIND_TRANSFER_APPLIED",
+		12: "KIND_REVOCATION",
 	}
 	Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":            0,
@@ -70,6 +72,7 @@ var (
 		"KIND_TRANSFER_PROOF_REQUEST": 9,
 		"KIND_TRANSFER_PROOF":         10,
 		"KIND_TRANSFER_APPLIED":       11,
+		"KIND_REVOCATION":             12,
 	}
 )
 
@@ -98,6 +101,58 @@ func (x Kind) Number() protoreflect.EnumNumber {
 // Deprecated: Use Kind.Descriptor instead.
 func (Kind) EnumDescriptor() ([]byte, []int) {
 	return file_federation_federation_proto_rawDescGZIP(), []int{0}
+}
+
+type RevocationReason int32
+
+const (
+	RevocationReason_REVOCATION_REASON_UNSPECIFIED RevocationReason = 0
+	RevocationReason_REVOCATION_REASON_ABUSE       RevocationReason = 1 // reputation-driven freeze
+	RevocationReason_REVOCATION_REASON_MANUAL      RevocationReason = 2 // operator-issued
+	RevocationReason_REVOCATION_REASON_EXPIRED     RevocationReason = 3 // identity TTL elapsed
+)
+
+// Enum value maps for RevocationReason.
+var (
+	RevocationReason_name = map[int32]string{
+		0: "REVOCATION_REASON_UNSPECIFIED",
+		1: "REVOCATION_REASON_ABUSE",
+		2: "REVOCATION_REASON_MANUAL",
+		3: "REVOCATION_REASON_EXPIRED",
+	}
+	RevocationReason_value = map[string]int32{
+		"REVOCATION_REASON_UNSPECIFIED": 0,
+		"REVOCATION_REASON_ABUSE":       1,
+		"REVOCATION_REASON_MANUAL":      2,
+		"REVOCATION_REASON_EXPIRED":     3,
+	}
+)
+
+func (x RevocationReason) Enum() *RevocationReason {
+	p := new(RevocationReason)
+	*p = x
+	return p
+}
+
+func (x RevocationReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RevocationReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_federation_federation_proto_enumTypes[1].Descriptor()
+}
+
+func (RevocationReason) Type() protoreflect.EnumType {
+	return &file_federation_federation_proto_enumTypes[1]
+}
+
+func (x RevocationReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RevocationReason.Descriptor instead.
+func (RevocationReason) EnumDescriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{1}
 }
 
 // Envelope wraps every steady-state and handshake message (including
@@ -907,6 +962,82 @@ func (x *TransferApplied) GetDestTrackerSig() []byte {
 	return nil
 }
 
+type Revocation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TrackerId     []byte                 `protobuf:"bytes,1,opt,name=tracker_id,json=trackerId,proto3" json:"tracker_id,omitempty"`    // 32 bytes — issuer
+	IdentityId    []byte                 `protobuf:"bytes,2,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"` // 32 bytes — revoked identity
+	Reason        RevocationReason       `protobuf:"varint,3,opt,name=reason,proto3,enum=tokenbay.federation.v1.RevocationReason" json:"reason,omitempty"`
+	RevokedAt     uint64                 `protobuf:"varint,4,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`   // unix seconds
+	TrackerSig    []byte                 `protobuf:"bytes,5,opt,name=tracker_sig,json=trackerSig,proto3" json:"tracker_sig,omitempty"` // 64 bytes — Ed25519(canonical) by issuer
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Revocation) Reset() {
+	*x = Revocation{}
+	mi := &file_federation_federation_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Revocation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Revocation) ProtoMessage() {}
+
+func (x *Revocation) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Revocation.ProtoReflect.Descriptor instead.
+func (*Revocation) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *Revocation) GetTrackerId() []byte {
+	if x != nil {
+		return x.TrackerId
+	}
+	return nil
+}
+
+func (x *Revocation) GetIdentityId() []byte {
+	if x != nil {
+		return x.IdentityId
+	}
+	return nil
+}
+
+func (x *Revocation) GetReason() RevocationReason {
+	if x != nil {
+		return x.Reason
+	}
+	return RevocationReason_REVOCATION_REASON_UNSPECIFIED
+}
+
+func (x *Revocation) GetRevokedAt() uint64 {
+	if x != nil {
+		return x.RevokedAt
+	}
+	return 0
+}
+
+func (x *Revocation) GetTrackerSig() []byte {
+	if x != nil {
+		return x.TrackerSig
+	}
+	return nil
+}
+
 var File_federation_federation_proto protoreflect.FileDescriptor
 
 const file_federation_federation_proto_rawDesc = "" +
@@ -979,7 +1110,18 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x0fdest_tracker_id\x18\x02 \x01(\fR\rdestTrackerId\x12\x14\n" +
 	"\x05nonce\x18\x03 \x01(\fR\x05nonce\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x04R\ttimestamp\x12(\n" +
-	"\x10dest_tracker_sig\x18\x05 \x01(\fR\x0edestTrackerSig*\xa0\x02\n" +
+	"\x10dest_tracker_sig\x18\x05 \x01(\fR\x0edestTrackerSig\"\xce\x01\n" +
+	"\n" +
+	"Revocation\x12\x1d\n" +
+	"\n" +
+	"tracker_id\x18\x01 \x01(\fR\ttrackerId\x12\x1f\n" +
+	"\videntity_id\x18\x02 \x01(\fR\n" +
+	"identityId\x12@\n" +
+	"\x06reason\x18\x03 \x01(\x0e2(.tokenbay.federation.v1.RevocationReasonR\x06reason\x12\x1d\n" +
+	"\n" +
+	"revoked_at\x18\x04 \x01(\x04R\trevokedAt\x12\x1f\n" +
+	"\vtracker_sig\x18\x05 \x01(\fR\n" +
+	"trackerSig*\xb5\x02\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -994,7 +1136,13 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x1bKIND_TRANSFER_PROOF_REQUEST\x10\t\x12\x17\n" +
 	"\x13KIND_TRANSFER_PROOF\x10\n" +
 	"\x12\x19\n" +
-	"\x15KIND_TRANSFER_APPLIED\x10\vB2Z0github.com/token-bay/token-bay/shared/federationb\x06proto3"
+	"\x15KIND_TRANSFER_APPLIED\x10\v\x12\x13\n" +
+	"\x0fKIND_REVOCATION\x10\f*\x8f\x01\n" +
+	"\x10RevocationReason\x12!\n" +
+	"\x1dREVOCATION_REASON_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17REVOCATION_REASON_ABUSE\x10\x01\x12\x1c\n" +
+	"\x18REVOCATION_REASON_MANUAL\x10\x02\x12\x1d\n" +
+	"\x19REVOCATION_REASON_EXPIRED\x10\x03B2Z0github.com/token-bay/token-bay/shared/federationb\x06proto3"
 
 var (
 	file_federation_federation_proto_rawDescOnce sync.Once
@@ -1009,31 +1157,34 @@ func file_federation_federation_proto_rawDescGZIP() []byte {
 }
 
 var (
-	file_federation_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 12)
+	file_federation_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 13)
 	file_federation_federation_proto_goTypes   = []any{
 		(Kind)(0),                    // 0: tokenbay.federation.v1.Kind
-		(*Envelope)(nil),             // 1: tokenbay.federation.v1.Envelope
-		(*Hello)(nil),                // 2: tokenbay.federation.v1.Hello
-		(*PeerAuth)(nil),             // 3: tokenbay.federation.v1.PeerAuth
-		(*PeeringAccept)(nil),        // 4: tokenbay.federation.v1.PeeringAccept
-		(*PeeringReject)(nil),        // 5: tokenbay.federation.v1.PeeringReject
-		(*RootAttestation)(nil),      // 6: tokenbay.federation.v1.RootAttestation
-		(*EquivocationEvidence)(nil), // 7: tokenbay.federation.v1.EquivocationEvidence
-		(*Ping)(nil),                 // 8: tokenbay.federation.v1.Ping
-		(*Pong)(nil),                 // 9: tokenbay.federation.v1.Pong
-		(*TransferProofRequest)(nil), // 10: tokenbay.federation.v1.TransferProofRequest
-		(*TransferProof)(nil),        // 11: tokenbay.federation.v1.TransferProof
-		(*TransferApplied)(nil),      // 12: tokenbay.federation.v1.TransferApplied
+		(RevocationReason)(0),        // 1: tokenbay.federation.v1.RevocationReason
+		(*Envelope)(nil),             // 2: tokenbay.federation.v1.Envelope
+		(*Hello)(nil),                // 3: tokenbay.federation.v1.Hello
+		(*PeerAuth)(nil),             // 4: tokenbay.federation.v1.PeerAuth
+		(*PeeringAccept)(nil),        // 5: tokenbay.federation.v1.PeeringAccept
+		(*PeeringReject)(nil),        // 6: tokenbay.federation.v1.PeeringReject
+		(*RootAttestation)(nil),      // 7: tokenbay.federation.v1.RootAttestation
+		(*EquivocationEvidence)(nil), // 8: tokenbay.federation.v1.EquivocationEvidence
+		(*Ping)(nil),                 // 9: tokenbay.federation.v1.Ping
+		(*Pong)(nil),                 // 10: tokenbay.federation.v1.Pong
+		(*TransferProofRequest)(nil), // 11: tokenbay.federation.v1.TransferProofRequest
+		(*TransferProof)(nil),        // 12: tokenbay.federation.v1.TransferProof
+		(*TransferApplied)(nil),      // 13: tokenbay.federation.v1.TransferApplied
+		(*Revocation)(nil),           // 14: tokenbay.federation.v1.Revocation
 	}
 )
 var file_federation_federation_proto_depIdxs = []int32{
 	0, // 0: tokenbay.federation.v1.Envelope.kind:type_name -> tokenbay.federation.v1.Kind
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 1: tokenbay.federation.v1.Revocation.reason:type_name -> tokenbay.federation.v1.RevocationReason
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_federation_federation_proto_init() }
@@ -1046,8 +1197,8 @@ func file_federation_federation_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_federation_federation_proto_rawDesc), len(file_federation_federation_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   12,
+			NumEnums:      2,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
