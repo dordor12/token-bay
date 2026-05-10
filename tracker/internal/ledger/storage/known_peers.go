@@ -65,6 +65,26 @@ func (s *Store) UpsertKnownPeer(ctx context.Context, p KnownPeer) error {
 	return nil
 }
 
+// UpdateKnownPeerHealth updates only the health_score column for the
+// given tracker_id. No-op (returns nil) if the row does not exist.
+// Does not touch last_seen, region_hint, or source. Used by federation
+// peer-exchange to write back a freshly computed score without the
+// "I just observed this peer" semantics of UpsertKnownPeer.
+func (s *Store) UpdateKnownPeerHealth(ctx context.Context, trackerID []byte, score float64) error {
+	if len(trackerID) == 0 {
+		return errors.New("storage: UpdateKnownPeerHealth requires non-empty tracker_id")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE known_peers SET health_score = ? WHERE tracker_id = ?`,
+		score, trackerID,
+	); err != nil {
+		return fmt.Errorf("storage: UpdateKnownPeerHealth: %w", err)
+	}
+	return nil
+}
+
 // GetKnownPeer returns the row for trackerID, or ok=false on miss.
 func (s *Store) GetKnownPeer(ctx context.Context, trackerID []byte) (KnownPeer, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
