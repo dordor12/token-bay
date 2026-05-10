@@ -81,14 +81,15 @@ type Deps struct {
 	Now    func() time.Time
 	Debug  bool // surface internal-error messages on responses
 
-	Ledger     LedgerService
-	Registry   RegistryService
-	StunTurn   StunTurnService
-	Broker     BrokerService
-	Settlement SettlementService
-	Admission  AdmissionService
-	Federation FederationService
-	Reputation ReputationRecorder
+	Ledger         LedgerService
+	Registry       RegistryService
+	StunTurn       StunTurnService
+	Broker         BrokerService
+	Settlement     SettlementService
+	Admission      AdmissionService
+	Federation     FederationService
+	Reputation     ReputationRecorder
+	BootstrapPeers BootstrapPeersService
 }
 
 // RequestCtx carries per-call info every handler may need.
@@ -128,6 +129,7 @@ func NewRouter(d Deps) (*Router, error) {
 	r.handlers[tbproto.RpcMethod_RPC_METHOD_TRANSFER_REQUEST] = r.installTransferRequest()
 	r.handlers[tbproto.RpcMethod_RPC_METHOD_STUN_ALLOCATE] = r.installStunAllocate()
 	r.handlers[tbproto.RpcMethod_RPC_METHOD_TURN_RELAY_OPEN] = r.installTurnRelayOpen()
+	r.handlers[tbproto.RpcMethod_RPC_METHOD_BOOTSTRAP_PEERS] = r.installBootstrapPeers()
 	return r, nil
 }
 
