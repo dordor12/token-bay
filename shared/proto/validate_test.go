@@ -1,6 +1,9 @@
 package proto
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"math"
 	"strings"
 	"testing"
 
@@ -340,4 +343,85 @@ func TestValidateOfferAndSettlementPush(t *testing.T) {
 		PreimageHash: make([]byte, 32),
 		PreimageBody: []byte{1},
 	}))
+}
+
+func validBootstrapPeer() *BootstrapPeer {
+	return &BootstrapPeer{
+		TrackerId:   bytes.Repeat([]byte{1}, 32),
+		Addr:        "tracker.example.org:443",
+		RegionHint:  "eu-central-1",
+		HealthScore: 0.9,
+		LastSeen:    1714000000,
+	}
+}
+
+func validBootstrapPeerList() *BootstrapPeerList {
+	return &BootstrapPeerList{
+		IssuerId:  bytes.Repeat([]byte{2}, 32),
+		SignedAt:  1714000000,
+		ExpiresAt: 1714000600,
+		Peers:     []*BootstrapPeer{validBootstrapPeer()},
+		Sig:       bytes.Repeat([]byte{3}, ed25519.SignatureSize),
+	}
+}
+
+func TestValidateBootstrapPeerList_HappyPath(t *testing.T) {
+	require.NoError(t, ValidateBootstrapPeerList(validBootstrapPeerList()))
+}
+
+func TestValidateBootstrapPeerList_EmptyPeersOK(t *testing.T) {
+	bl := validBootstrapPeerList()
+	bl.Peers = nil
+	require.NoError(t, ValidateBootstrapPeerList(bl))
+}
+
+func TestValidateBootstrapPeerList_BadShape(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*BootstrapPeerList)
+	}{
+		{"nil msg", func(_ *BootstrapPeerList) {}},
+		{"issuer_id wrong len", func(m *BootstrapPeerList) { m.IssuerId = bytes.Repeat([]byte{2}, 16) }},
+		{"sig wrong len", func(m *BootstrapPeerList) { m.Sig = bytes.Repeat([]byte{3}, 32) }},
+		{"signed_at zero", func(m *BootstrapPeerList) { m.SignedAt = 0 }},
+		{"expires_at not after signed_at", func(m *BootstrapPeerList) { m.ExpiresAt = m.SignedAt }},
+		{"lifetime > 1h", func(m *BootstrapPeerList) { m.ExpiresAt = m.SignedAt + 3601 }},
+		{"too many entries", func(m *BootstrapPeerList) {
+			m.Peers = make([]*BootstrapPeer, 257)
+			for i := range m.Peers {
+				m.Peers[i] = validBootstrapPeer()
+			}
+		}},
+		{"nil entry", func(m *BootstrapPeerList) { m.Peers = []*BootstrapPeer{nil} }},
+		{"entry tracker_id wrong len", func(m *BootstrapPeerList) {
+			m.Peers[0].TrackerId = bytes.Repeat([]byte{1}, 16)
+		}},
+		{"entry addr empty", func(m *BootstrapPeerList) { m.Peers[0].Addr = "" }},
+		{"entry addr too long", func(m *BootstrapPeerList) {
+			m.Peers[0].Addr = string(bytes.Repeat([]byte("a"), 257))
+		}},
+		{"entry addr invalid utf8", func(m *BootstrapPeerList) { m.Peers[0].Addr = "\xff\xfe" }},
+		{"entry region_hint too long", func(m *BootstrapPeerList) {
+			m.Peers[0].RegionHint = string(bytes.Repeat([]byte("r"), 65))
+		}},
+		{"entry region_hint invalid utf8", func(m *BootstrapPeerList) { m.Peers[0].RegionHint = "\xff" }},
+		{"entry health_score negative", func(m *BootstrapPeerList) { m.Peers[0].HealthScore = -0.1 }},
+		{"entry health_score above one", func(m *BootstrapPeerList) { m.Peers[0].HealthScore = 1.1 }},
+		{"entry health_score nan", func(m *BootstrapPeerList) { m.Peers[0].HealthScore = math.NaN() }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var m *BootstrapPeerList
+			if tc.name != "nil msg" {
+				m = validBootstrapPeerList()
+				tc.mutate(m)
+			}
+			require.Error(t, ValidateBootstrapPeerList(m))
+		})
+	}
+}
+
+func TestValidateRPCRequest_AcceptsBootstrapPeers(t *testing.T) {
+	r := &RpcRequest{Method: RpcMethod_RPC_METHOD_BOOTSTRAP_PEERS, Payload: []byte{0x00}}
+	require.NoError(t, ValidateRPCRequest(r))
 }

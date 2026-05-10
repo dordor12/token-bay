@@ -1,8 +1,11 @@
 package proto
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"math"
+	"unicode/utf8"
 
 	"github.com/token-bay/token-bay/shared/exhaustionproof"
 )
@@ -199,7 +202,8 @@ func ValidateRPCRequest(r *RpcRequest) error {
 		RpcMethod_RPC_METHOD_ADVERTISE,
 		RpcMethod_RPC_METHOD_TRANSFER_REQUEST,
 		RpcMethod_RPC_METHOD_STUN_ALLOCATE,
-		RpcMethod_RPC_METHOD_TURN_RELAY_OPEN:
+		RpcMethod_RPC_METHOD_TURN_RELAY_OPEN,
+		RpcMethod_RPC_METHOD_BOOTSTRAP_PEERS:
 	default:
 		return fmt.Errorf("proto: RpcRequest.Method invalid: %v", r.Method)
 	}
@@ -334,6 +338,70 @@ func ValidateSettlementPush(s *SettlementPush) error {
 	}
 	if len(s.PreimageBody) == 0 {
 		return errors.New("proto: SettlementPush.PreimageBody empty")
+	}
+	return nil
+}
+
+// Bootstrap-peers caps. The validator caps are conservative ceilings;
+// the tracker config (FederationBootstrapConfig) imposes operational
+// limits below them.
+const (
+	MaxBootstrapPeers             = 256
+	MaxBootstrapPeerAddrLen       = 256
+	MaxBootstrapPeerRegionHintLen = 64
+	MaxBootstrapPeerListLifetimeS = 60 * 60 // 1 hour sanity ceiling
+)
+
+// ValidateBootstrapPeerList enforces shape invariants on a signed
+// bootstrap snapshot. Signature verification is a separate step
+// (VerifyBootstrapPeerListSig); this only checks structural validity.
+func ValidateBootstrapPeerList(l *BootstrapPeerList) error {
+	if l == nil {
+		return errors.New("proto: nil BootstrapPeerList")
+	}
+	if len(l.IssuerId) != 32 {
+		return fmt.Errorf("proto: BootstrapPeerList.issuer_id len %d != 32", len(l.IssuerId))
+	}
+	if len(l.Sig) != ed25519.SignatureSize {
+		return fmt.Errorf("proto: BootstrapPeerList.sig len %d != %d", len(l.Sig), ed25519.SignatureSize)
+	}
+	if l.SignedAt == 0 {
+		return errors.New("proto: BootstrapPeerList.signed_at zero")
+	}
+	if l.ExpiresAt <= l.SignedAt {
+		return fmt.Errorf("proto: BootstrapPeerList.expires_at %d not > signed_at %d", l.ExpiresAt, l.SignedAt)
+	}
+	if l.ExpiresAt-l.SignedAt > MaxBootstrapPeerListLifetimeS {
+		return fmt.Errorf("proto: BootstrapPeerList lifetime %d > %d", l.ExpiresAt-l.SignedAt, MaxBootstrapPeerListLifetimeS)
+	}
+	if len(l.Peers) > MaxBootstrapPeers {
+		return fmt.Errorf("proto: BootstrapPeerList.peers len %d > %d", len(l.Peers), MaxBootstrapPeers)
+	}
+	for i, p := range l.Peers {
+		if p == nil {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d] is nil", i)
+		}
+		if len(p.TrackerId) != 32 {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].tracker_id len %d != 32", i, len(p.TrackerId))
+		}
+		if len(p.Addr) == 0 {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].addr empty", i)
+		}
+		if len(p.Addr) > MaxBootstrapPeerAddrLen {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].addr len %d > %d", i, len(p.Addr), MaxBootstrapPeerAddrLen)
+		}
+		if !utf8.ValidString(p.Addr) {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].addr invalid utf-8", i)
+		}
+		if len(p.RegionHint) > MaxBootstrapPeerRegionHintLen {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].region_hint len %d > %d", i, len(p.RegionHint), MaxBootstrapPeerRegionHintLen)
+		}
+		if !utf8.ValidString(p.RegionHint) {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].region_hint invalid utf-8", i)
+		}
+		if math.IsNaN(p.HealthScore) || p.HealthScore < 0.0 || p.HealthScore > 1.0 {
+			return fmt.Errorf("proto: BootstrapPeerList.peers[%d].health_score %f out of [0,1]", i, p.HealthScore)
+		}
 	}
 	return nil
 }
