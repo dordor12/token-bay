@@ -28,6 +28,7 @@ type PeerHealth struct {
 	mu              sync.Mutex
 	lastRoot        map[ids.TrackerID]time.Time
 	revGossipDelays map[ids.TrackerID]*ringBuf16
+	equivocated     map[ids.TrackerID]struct{}
 }
 
 // NewPeerHealth returns a fresh PeerHealth. now must not be nil.
@@ -44,6 +45,7 @@ func NewPeerHealth(cfg HealthConfig, now func() time.Time, onComputed func(outco
 		onComputed:      onComputed,
 		lastRoot:        make(map[ids.TrackerID]time.Time),
 		revGossipDelays: make(map[ids.TrackerID]*ringBuf16),
+		equivocated:     make(map[ids.TrackerID]struct{}),
 	}
 }
 
@@ -72,11 +74,24 @@ func (h *PeerHealth) OnRevocation(peer ids.TrackerID, revokedAt, recvAt time.Tim
 	rb.push(delay)
 }
 
+// OnEquivocation flags peer as equivocating. Idempotent. The flag is
+// sticky for the life of the process — there is no admin clear path
+// in this slice (spec §3, §4.2).
+func (h *PeerHealth) OnEquivocation(peer ids.TrackerID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.equivocated[peer] = struct{}{}
+}
+
 // Score computes the current health score for peer in [0, 1].
 // See spec §4.1 for the formula.
 func (h *PeerHealth) Score(peer ids.TrackerID, now time.Time) float64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if _, equiv := h.equivocated[peer]; equiv {
+		return 0
+	}
 
 	uptimeSub := 0.0
 	if last, ok := h.lastRoot[peer]; ok {

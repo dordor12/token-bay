@@ -103,6 +103,30 @@ func TestPeerHealth_RevGossipSubScore_RingWrap(t *testing.T) {
 	require.InDelta(t, 0.0, h.Score(p, now), 0.0001)
 }
 
+func TestPeerHealth_EquivocationGate(t *testing.T) {
+	now := time.Unix(10000, 0)
+	h := NewPeerHealth(HealthConfig{
+		UptimeWindow: 2 * time.Hour, RevGossipWindow: 600 * time.Second,
+		RevGossipBufferSize: 16,
+		UptimeWeight:        0.7, RevGossipWeight: 0.3,
+	}, func() time.Time { return now }, nil)
+
+	var p ids.TrackerID
+	p[0] = 0xEE
+
+	// Max signals + no equiv → 1.0.
+	h.OnRootAttestation(p, now)
+	require.InDelta(t, 0.7+0.3, h.Score(p, now), 0.0001)
+
+	// Flag equivocation → score forced to 0 even with max signals.
+	h.OnEquivocation(p)
+	require.InDelta(t, 0.0, h.Score(p, now), 0.0001)
+
+	// Idempotent: re-flag is fine.
+	h.OnEquivocation(p)
+	require.InDelta(t, 0.0, h.Score(p, now), 0.0001)
+}
+
 func TestPeerHealth_RevGossipSubScore_NegativeDelayClampedToZero(t *testing.T) {
 	now := time.Unix(10000, 0)
 	h := NewPeerHealth(HealthConfig{
