@@ -52,6 +52,12 @@ type Deps struct {
 	// nil, Federation.StartTransfer returns ErrTransferDisabled and
 	// inbound transfer kinds are rejected with the same.
 	Ledger LedgerHooks
+
+	// RevocationArchive is the federation→storage hook for peer
+	// revocations. May be nil; when nil, Federation.OnFreeze is a
+	// no-op and inbound KIND_REVOCATION is rejected with metric
+	// reason "revocation_disabled".
+	RevocationArchive PeerRevocationArchive
 }
 
 func (c Config) withDefaults() Config {
