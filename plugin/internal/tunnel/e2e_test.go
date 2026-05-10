@@ -94,7 +94,7 @@ func TestE2E_ConsumerSeederRoundTrip(t *testing.T) {
 	require.NoError(t, consumerTun.Send(requestBody))
 	st, r, err := consumerTun.Receive(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, statusOK, st)
+	assert.Equal(t, StatusOK, st)
 
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)

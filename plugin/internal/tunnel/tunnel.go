@@ -39,7 +39,7 @@ func (t *Tunnel) Send(body []byte) error {
 
 // Receive returns the seeder's response status and an io.Reader of the
 // remaining content bytes (until the peer closes write or the QUIC
-// connection terminates). status==statusError implies the reader yields
+// connection terminates). Status==StatusError implies the reader yields
 // the UTF-8 error message.
 //
 // If ctx has a deadline, it is propagated to the stream's read path
@@ -52,7 +52,7 @@ func (t *Tunnel) Send(body []byte) error {
 // quic-wrapped network error from the underlying stream.Read — Tunnel is
 // half-duplex single-stream by contract; callers should not race Close
 // against Receive.
-func (t *Tunnel) Receive(ctx context.Context) (status, io.Reader, error) {
+func (t *Tunnel) Receive(ctx context.Context) (Status, io.Reader, error) {
 	t.mu.Lock()
 	closed := t.closed
 	t.mu.Unlock()
@@ -99,7 +99,7 @@ func (t *Tunnel) SendOK() error {
 	if closed {
 		return ErrTunnelClosed
 	}
-	return writeResponseStatus(t.stream, statusOK)
+	return writeResponseStatus(t.stream, StatusOK)
 }
 
 // SendError writes the error status byte and msg. Caller should

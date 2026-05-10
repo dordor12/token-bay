@@ -1,6 +1,9 @@
 package ccproxy
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -67,4 +70,26 @@ func TestSessionModeStore_Concurrent_Safe(t *testing.T) {
 	}
 	wg.Wait()
 	// No panic / data race — test passes under -race if we got here.
+}
+
+func TestSessionModeStore_PreservesSeederAssignmentFields(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	addr := netip.MustParseAddrPort("127.0.0.1:5555")
+
+	s := NewSessionModeStore()
+	s.EnterNetworkMode("session-y", EntryMetadata{
+		EnteredAt:     time.Now(),
+		ExpiresAt:     time.Now().Add(15 * time.Minute),
+		SeederAddr:    addr,
+		SeederPubkey:  pub,
+		EphemeralPriv: priv,
+	})
+
+	mode, got := s.GetMode("session-y")
+	require.Equal(t, ModeNetwork, mode)
+	require.NotNil(t, got)
+	assert.Equal(t, addr, got.SeederAddr)
+	assert.Equal(t, ed25519.PublicKey(pub), got.SeederPubkey)
+	assert.Equal(t, ed25519.PrivateKey(priv), got.EphemeralPriv)
 }

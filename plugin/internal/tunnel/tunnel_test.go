@@ -92,7 +92,7 @@ func TestTunnel_RequestResponse_OK(t *testing.T) {
 	require.NoError(t, consumer.Send([]byte(`{"model":"opus"}`)))
 	st, r, err := consumer.Receive(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, statusOK, st)
+	assert.Equal(t, StatusOK, st)
 
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestTunnel_RequestResponse_PeerError(t *testing.T) {
 	require.NoError(t, consumer.Send([]byte(`{}`)))
 	st, r, err := consumer.Receive(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, statusError, st)
+	assert.Equal(t, StatusError, st)
 	body, err := io.ReadAll(r)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("rate-limited"), body)
