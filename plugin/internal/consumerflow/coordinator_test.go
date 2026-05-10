@@ -36,6 +36,13 @@ type fakeBroker struct {
 	balanceCall int
 	balance     *tbproto.SignedBalanceSnapshot
 	balanceErr  error
+	settles     []settleCall
+	settleErr   error
+}
+
+type settleCall struct {
+	preimageHash []byte
+	sig          []byte
 }
 
 func (f *fakeBroker) BrokerRequest(_ context.Context, env *tbproto.EnvelopeSigned) (*BrokerResult, error) {
@@ -50,6 +57,24 @@ func (f *fakeBroker) BalanceCached(_ context.Context, _ ids.IdentityID) (*tbprot
 	defer f.mu.Unlock()
 	f.balanceCall++
 	return f.balance, f.balanceErr
+}
+
+func (f *fakeBroker) Settle(_ context.Context, preimageHash, sig []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settles = append(f.settles, settleCall{
+		preimageHash: append([]byte(nil), preimageHash...),
+		sig:          append([]byte(nil), sig...),
+	})
+	return f.settleErr
+}
+
+func (f *fakeBroker) settleSnapshot() []settleCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]settleCall, len(f.settles))
+	copy(out, f.settles)
+	return out
 }
 
 type fakeProber struct {
@@ -129,9 +154,42 @@ func (f *fakeEnvelopeBuilder) Build(spec envelopebuilder.RequestSpec, p *exhaust
 	}, nil
 }
 
-type fakeIdentity struct{ id ids.IdentityID }
+type fakeIdentity struct {
+	id      ids.IdentityID
+	priv    ed25519.PrivateKey
+	signErr error
 
-func (f fakeIdentity) IdentityID() ids.IdentityID { return f.id }
+	mu     sync.Mutex
+	signed [][]byte
+}
+
+func (f *fakeIdentity) IdentityID() ids.IdentityID { return f.id }
+
+func (f *fakeIdentity) Sign(msg []byte) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.signed = append(f.signed, append([]byte(nil), msg...))
+	if f.signErr != nil {
+		return nil, f.signErr
+	}
+	if f.priv == nil {
+		// Default: deterministic 64-byte fake signature derived from the
+		// first 8 bytes of msg, suitable for assert.Equal comparisons in
+		// tests that don't care about cryptographic validity.
+		out := make([]byte, ed25519.SignatureSize)
+		copy(out, msg)
+		return out, nil
+	}
+	return ed25519.Sign(f.priv, msg), nil
+}
+
+func (f *fakeIdentity) signedSnapshot() [][]byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([][]byte, len(f.signed))
+	copy(out, f.signed)
+	return out
+}
 
 // recordingAudit is a test-only AuditWriter that captures records in
 // memory so tests can assert on refusal reasons without parsing log files.
@@ -201,7 +259,7 @@ func goodAssignmentResult() *BrokerResult {
 	}
 }
 
-func newTestDeps(t *testing.T) (Deps, *fakeBroker, *fakeProber, *fakeProofBuilder, *fakeEnvelopeBuilder, *ccproxy.SessionModeStore, *settingsjson.Store, *recordingAudit) {
+func newTestDeps(t *testing.T) (Deps, *fakeBroker, *fakeProber, *fakeProofBuilder, *fakeEnvelopeBuilder, *ccproxy.SessionModeStore, *settingsjson.Store, *recordingAudit) { //nolint:unparam // test helper signature
 	t.Helper()
 	store := newTestStore(t)
 
@@ -224,7 +282,7 @@ func newTestDeps(t *testing.T) (Deps, *fakeBroker, *fakeProber, *fakeProofBuilde
 		UsageProber:     prober,
 		ProofBuilder:    proofB,
 		EnvelopeBuilder: envB,
-		Identity:        fakeIdentity{id: id},
+		Identity:        &fakeIdentity{id: id},
 		SidecarURLFunc:  func() string { return "http://127.0.0.1:54321/" },
 		DefaultModel:    "claude-sonnet-4-6",
 		MaxInputTokens:  200_000,

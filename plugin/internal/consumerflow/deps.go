@@ -24,6 +24,7 @@ import (
 type BrokerClient interface {
 	BrokerRequest(ctx context.Context, env *tbproto.EnvelopeSigned) (*BrokerResult, error)
 	BalanceCached(ctx context.Context, id ids.IdentityID) (*tbproto.SignedBalanceSnapshot, error)
+	Settle(ctx context.Context, preimageHash, sig []byte) error
 }
 
 // BrokerResult is the consumerflow-local mirror of trackerclient.BrokerResult.
@@ -107,9 +108,18 @@ type EnvelopeBuilder interface {
 	Build(spec envelopebuilder.RequestSpec, proof *exhaustionproof.ExhaustionProofV1, balance *tbproto.SignedBalanceSnapshot) (*tbproto.EnvelopeSigned, error)
 }
 
-// IdentityProvider exposes the consumer's IdentityID for balance lookup.
+// IdentityProvider exposes the consumer's IdentityID for balance lookup
+// and signs preimage bodies as part of settlement countersign. The
+// production *identity.Signer satisfies this directly.
 type IdentityProvider interface {
 	IdentityID() ids.IdentityID
+	Sign(msg []byte) ([]byte, error)
+}
+
+// SettlementMetrics is the optional observability hook for the consumer's
+// countersign decisions. Nil-safe — Coordinator skips metrics if absent.
+type SettlementMetrics interface {
+	IncSettlementDecision(outcome string) // outcome ∈ {countersigned, refused_unknown_request, refused_over_budget, refused_preimage_mismatch, refused_decode_error, refused_sign_error, refused_settle_error}
 }
 
 // Deps is everything the Coordinator needs. The cmd layer constructs each
@@ -186,6 +196,10 @@ type Deps struct {
 
 	// Now returns the current time. Defaults to time.Now.
 	Now func() time.Time
+
+	// Metrics is an optional observability hook for settlement decisions.
+	// Nil-safe.
+	Metrics SettlementMetrics
 }
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps chain.

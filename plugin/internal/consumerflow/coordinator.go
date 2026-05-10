@@ -34,24 +34,45 @@ const reapInterval = 30 * time.Second
 // not available until ccproxy receives it.
 const bodyHashLen = 32
 
+// SettlementRequest is the consumerflow-local mirror of
+// trackerclient.SettlementRequest. Mirrored so this package has zero
+// compile-time dependency on trackerclient's exported result types — the
+// cmd layer adapts trackerclient.SettlementRequest into this shape via a
+// small adapter.
+type SettlementRequest struct {
+	PreimageHash [32]byte
+	PreimageBody []byte
+}
+
 // Coordinator is the consumer-side fallback orchestrator. It implements
 // hooks.Sink so the dispatcher can feed events to it directly, and exposes
 // Run for the sidecar supervisor to drive periodic state (TTL reap).
 //
 // Concurrency: Coordinator is safe for concurrent use; the active-session
-// map is guarded by mu and each Sink method is synchronous w.r.t. its own
-// session.
+// map and pending-settlement map are guarded by mu and each Sink method
+// is synchronous w.r.t. its own session.
 type Coordinator struct {
 	deps Deps
 
-	mu             sync.Mutex
-	activeSessions map[string]*activeEntry
+	mu                 sync.Mutex
+	activeSessions     map[string]*activeEntry
+	pendingSettlements map[[16]byte]*pendingSettlement
 }
 
 type activeEntry struct {
 	enteredAt  time.Time
 	expiresAt  time.Time
 	sidecarURL string
+}
+
+// pendingSettlement is the per-fallback bookkeeping the consumer keeps so a
+// later server-pushed settlement can be matched against the original
+// reservation: the request_id key is the broker-assigned reservation_token,
+// and the body must report ≤ maxOutputTokens or we refuse and audit.
+type pendingSettlement struct {
+	sessionID       string
+	maxOutputTokens uint64
+	seederPubkey    []byte
 }
 
 // New validates deps and constructs the Coordinator. No goroutines start.
@@ -77,8 +98,9 @@ func New(deps Deps) (*Coordinator, error) {
 		deps.PrivacyTier = tbproto.PrivacyTier_PRIVACY_TIER_STANDARD
 	}
 	return &Coordinator{
-		deps:           deps,
-		activeSessions: make(map[string]*activeEntry),
+		deps:               deps,
+		activeSessions:     make(map[string]*activeEntry),
+		pendingSettlements: make(map[[16]byte]*pendingSettlement),
 	}, nil
 }
 
@@ -285,6 +307,15 @@ func (c *Coordinator) handleRateLimit(ctx context.Context, p *ratelimit.StopFail
 		expiresAt:  expiresAt,
 		sidecarURL: sidecarURL,
 	}
+	if rt := res.Assignment.ReservationToken; len(rt) == 16 {
+		var key [16]byte
+		copy(key[:], rt)
+		c.pendingSettlements[key] = &pendingSettlement{
+			sessionID:       p.SessionID,
+			maxOutputTokens: c.deps.MaxOutputTokens,
+			seederPubkey:    append([]byte(nil), res.Assignment.SeederPubkey...),
+		}
+	}
 	c.mu.Unlock()
 
 	// Audit the successful entry. v1 records ServedLocally=false to denote
@@ -335,6 +366,11 @@ func (c *Coordinator) exitNetworkMode(_ context.Context, sessionID, reason strin
 	entry, ok := c.activeSessions[sessionID]
 	if ok {
 		delete(c.activeSessions, sessionID)
+	}
+	for k, ps := range c.pendingSettlements {
+		if ps.sessionID == sessionID {
+			delete(c.pendingSettlements, k)
+		}
 	}
 	c.mu.Unlock()
 
