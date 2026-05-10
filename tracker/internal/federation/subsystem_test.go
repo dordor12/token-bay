@@ -3,14 +3,17 @@ package federation_test
 import (
 	"context"
 	"crypto/sha256"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 
 	"github.com/token-bay/token-bay/shared/ids"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
+	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 )
 
 func TestFederation_OpenClose_NoPeers(t *testing.T) {
@@ -102,4 +105,73 @@ func TestFederation_OnFreeze_NoArchive_IsNoOp(t *testing.T) {
 	// Should not panic; no archive, no listeners — silent no-op.
 	identity := ids.IdentityID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
 	f.OnFreeze(context.Background(), identity, "freeze_repeat", time.Unix(1714000000, 0))
+}
+
+func TestFederation_PublishPeerExchange_NoArchive_ReturnsErr(t *testing.T) {
+	t.Parallel()
+	hub := federation.NewInprocHub()
+	srv := newPeerCfg(t)
+	tr := federation.NewInprocTransport(hub, "srv", srv.pub, srv.priv)
+	defer tr.Close()
+	srvID := ids.TrackerID(sha256.Sum256(srv.pub))
+	f, err := federation.Open(federation.Config{
+		MyTrackerID: srvID,
+		MyPriv:      srv.priv,
+	}, federation.Deps{
+		Transport: tr,
+		RootSrc:   &fakeRootSrc{ok: false},
+		Archive:   newFakeArchive(),
+		Metrics:   federation.NewMetrics(prometheus.NewRegistry()),
+		Logger:    zerolog.Nop(),
+		Now:       time.Now,
+		// KnownPeers intentionally nil.
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	if err := f.PublishPeerExchange(context.Background()); err != federation.ErrPeerExchangeDisabled {
+		t.Fatalf("PublishPeerExchange err=%v, want %v", err, federation.ErrPeerExchangeDisabled)
+	}
+}
+
+func TestFederation_PublishPeerExchange_WithStore_BumpsMetricAndForwards(t *testing.T) {
+	t.Parallel()
+	hub := federation.NewInprocHub()
+	srv := newPeerCfg(t)
+	tr := federation.NewInprocTransport(hub, "srv", srv.pub, srv.priv)
+	defer tr.Close()
+	srvID := ids.TrackerID(sha256.Sum256(srv.pub))
+
+	// Real *storage.Store satisfies KnownPeersArchive structurally.
+	store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer store.Close() //nolint:errcheck
+
+	metrics := federation.NewMetrics(prometheus.NewRegistry())
+	f, err := federation.Open(federation.Config{
+		MyTrackerID: srvID,
+		MyPriv:      srv.priv,
+	}, federation.Deps{
+		Transport:  tr,
+		RootSrc:    &fakeRootSrc{ok: false},
+		Archive:    newFakeArchive(),
+		Metrics:    metrics,
+		Logger:     zerolog.Nop(),
+		Now:        time.Now,
+		KnownPeers: store,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+
+	if err := f.PublishPeerExchange(context.Background()); err != nil {
+		t.Fatalf("PublishPeerExchange: %v", err)
+	}
+	if got := testutil.ToFloat64(metrics.PeerExchangeEmittedCounter()); got != 1 {
+		t.Fatalf("peer_exchange_emitted_total = %v, want 1", got)
+	}
 }

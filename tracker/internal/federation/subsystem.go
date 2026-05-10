@@ -11,6 +11,7 @@ import (
 
 	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -19,14 +20,15 @@ type Federation struct {
 	cfg Config
 	dep Deps
 
-	reg        *Registry
-	dedupe     *Dedupe
-	gossip     *Gossip
-	apply      *RootAttestApplier
-	equiv      *Equivocator
-	pub        *Publisher
-	transfer   *transferCoordinator
-	revocation *revocationCoordinator
+	reg          *Registry
+	dedupe       *Dedupe
+	gossip       *Gossip
+	apply        *RootAttestApplier
+	equiv        *Equivocator
+	pub          *Publisher
+	transfer     *transferCoordinator
+	revocation   *revocationCoordinator
+	peerExchange *peerExchangeCoordinator
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -121,15 +123,37 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		OnReceived: dep.Metrics.RevocationsReceived,
 	})
 
+	var peerExchange *peerExchangeCoordinator
+	if dep.KnownPeers != nil {
+		peerExchange = newPeerExchangeCoordinator(peerExchangeCoordinatorCfg{
+			MyTrackerID: cfg.MyTrackerID,
+			MyPriv:      cfg.MyPriv,
+			Archive:     dep.KnownPeers,
+			Forward:     forward,
+			Now:         dep.Now,
+			EmitCap:     defaultPeerExchangeEmitCap,
+			Invalid:     func(name string) { dep.Metrics.InvalidFrames(name) },
+			OnEmit:      dep.Metrics.PeerExchangeEmitted,
+			OnReceived:  dep.Metrics.PeerExchangeReceived,
+			// PeerConnected is patched on f below — registry is owned by f.
+		})
+	}
+
 	f := &Federation{
 		cfg: cfg, dep: dep,
 		reg: reg, dedupe: dedupe, gossip: gossip,
-		apply: apply, equiv: equiv, pub: pub, transfer: transfer, revocation: revocation,
+		apply: apply, equiv: equiv, pub: pub,
+		transfer: transfer, revocation: revocation, peerExchange: peerExchange,
 		peers: make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
 	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
 		return f.SendToPeer(ctx, peer, kind, payload)
+	}
+	if peerExchange != nil {
+		peerExchange.cfg.PeerConnected = func(id ids.TrackerID) bool {
+			return f.reg.IsActive(id)
+		}
 	}
 
 	// Add operator-allowlisted peers in pending state. Dialing them is
@@ -137,6 +161,26 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	// are visible via Peers().
 	for _, p := range cfg.Peers {
 		_ = reg.Add(PeerInfo{TrackerID: p.TrackerID, PubKey: p.PubKey, Addr: p.Addr, Region: p.Region, State: PeerStatePending})
+	}
+
+	// Seed allowlisted peers into the known_peers archive (slice 3).
+	// Idempotent: the SQL clause pins addr+region_hint for source='allowlist'
+	// rows, so an operator config refresh takes effect (allowlist→allowlist)
+	// while gossip echoes can never overwrite (gossip→allowlist blocked).
+	if dep.KnownPeers != nil {
+		seedCtx := context.Background()
+		seenAt := dep.Now()
+		for _, p := range cfg.Peers {
+			tid := p.TrackerID.Bytes()
+			_ = dep.KnownPeers.UpsertKnownPeer(seedCtx, storage.KnownPeer{
+				TrackerID:   tid[:],
+				Addr:        p.Addr,
+				LastSeen:    seenAt,
+				RegionHint:  p.Region,
+				HealthScore: 0.5,
+				Source:      "allowlist",
+			})
+		}
 	}
 
 	// Listen on the transport. The accept callback runs the listener-side
@@ -206,6 +250,19 @@ func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
 // PublishHour drives a single publisher tick.
 func (f *Federation) PublishHour(ctx context.Context, hour uint64) error {
 	return f.pub.PublishHour(ctx, hour)
+}
+
+// PublishPeerExchange snapshots the local known_peers archive and
+// broadcasts a KIND_PEER_EXCHANGE envelope to all active peers. v1
+// ships the on-demand entry point only; production cadence is operator-
+// driven (cron, admin endpoint, or future ticker driver in
+// tracker/cmd/). Returns ErrPeerExchangeDisabled if the subsystem was
+// opened without a KnownPeersArchive Dep.
+func (f *Federation) PublishPeerExchange(ctx context.Context) error {
+	if f == nil || f.peerExchange == nil {
+		return ErrPeerExchangeDisabled
+	}
+	return f.peerExchange.EmitNow(ctx)
 }
 
 // StartTransfer is the api-handler entry point for a destination-side
@@ -393,6 +450,22 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.revocation.OnIncoming(context.Background(), env, peerID)
+		case fed.Kind_KIND_PEER_EXCHANGE:
+			if f.peerExchange == nil {
+				f.dep.Metrics.InvalidFrames("peer_exchange_disabled")
+				f.dep.Metrics.PeerExchangeReceived("peer_exchange_disabled")
+				return
+			}
+			var msg fed.PeerExchange
+			if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+				f.dep.Metrics.InvalidFrames("peer_exchange_unmarshal")
+				return
+			}
+			if err := fed.ValidatePeerExchange(&msg); err != nil {
+				f.dep.Metrics.InvalidFrames("peer_exchange_shape")
+				return
+			}
+			f.peerExchange.OnIncoming(context.Background(), env, &msg)
 		default:
 			f.dep.Metrics.InvalidFrames(fmt.Sprintf("kind_%d", int(env.Kind)))
 		}
