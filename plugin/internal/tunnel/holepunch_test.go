@@ -135,3 +135,146 @@ func TestDial_RendezvousAllocateReflexiveError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, stubErr)
 }
+
+// blackholeUDPAddr returns a 127.0.0.1 UDP port that is bound but never
+// reads. QUIC packets sent there get queued in the kernel and never reply,
+// guaranteeing the consumer's hole-punch attempt times out.
+func blackholeUDPAddr(t *testing.T) (netip.AddrPort, func()) {
+	t.Helper()
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	addr := udp.LocalAddr().(*net.UDPAddr).AddrPort()
+	return addr, func() { _ = udp.Close() }
+}
+
+func TestDial_RendezvousFallsBackToRelay(t *testing.T) {
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	consumerPub, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	// Real seeder listening on a real address — what the relay "forwards
+	// to" in our test (we do not run an actual UDP relay).
+	seederAddr, ln, cleanupLn := holepunchListener(t, seederPriv, consumerPub)
+	defer cleanupLn()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		conn, err := ln.Accept(ctx)
+		if err != nil {
+			return
+		}
+		_, _ = conn.AcceptStream(ctx)
+		_ = conn.CloseWithError(0, "ok")
+	}()
+
+	// Hole-punch target: a black-hole that swallows packets so the QUIC
+	// handshake against it definitely times out.
+	blackhole, cleanupBh := blackholeUDPAddr(t)
+	defer cleanupBh()
+
+	rdv := &stubRendezvous{
+		reflexive: netip.MustParseAddrPort("127.0.0.1:0"),
+		relay: RelayCoords{
+			Endpoint: seederAddr, // production: real relay; test: real seeder
+			Token:    []byte("opaque-token"),
+		},
+	}
+
+	cfg := Config{
+		EphemeralPriv:    consumerPriv,
+		PeerPin:          seederPub,
+		Rendezvous:       rdv,
+		HolePunchTimeout: 250 * time.Millisecond, // tight; we want fast fallback
+		Now:              func() time.Time { return time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC) },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tun, err := Dial(ctx, blackhole, cfg)
+	require.NoError(t, err)
+	defer tun.Close()
+
+	assert.EqualValues(t, 1, rdv.allocCalls.Load(), "AllocateReflexive called once")
+	assert.EqualValues(t, 1, rdv.openCalls.Load(), "OpenRelay called exactly once after hole-punch failure")
+
+	wg.Wait()
+}
+
+func TestDial_RendezvousRelayPinMismatch(t *testing.T) {
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	wrongPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	consumerPub, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	_ = seederPub
+
+	seederAddr, ln, cleanupLn := holepunchListener(t, seederPriv, consumerPub)
+	defer cleanupLn()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := ln.Accept(ctx)
+		if err != nil {
+			return
+		}
+		_ = conn.CloseWithError(0, "ok")
+	}()
+
+	blackhole, cleanupBh := blackholeUDPAddr(t)
+	defer cleanupBh()
+
+	rdv := &stubRendezvous{
+		reflexive: netip.MustParseAddrPort("127.0.0.1:0"),
+		relay:     RelayCoords{Endpoint: seederAddr, Token: nil},
+	}
+	cfg := Config{
+		EphemeralPriv:    consumerPriv,
+		PeerPin:          wrongPub, // intentionally wrong
+		Rendezvous:       rdv,
+		HolePunchTimeout: 250 * time.Millisecond,
+		Now:              func() time.Time { return time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC) },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = Dial(ctx, blackhole, cfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPeerPinMismatch, "TLS pin must be enforced on the relay path")
+}
+
+func TestDial_RendezvousOpenRelayError(t *testing.T) {
+	seederPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	_, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	blackhole, cleanupBh := blackholeUDPAddr(t)
+	defer cleanupBh()
+
+	stubErr := errors.New("relay allocation refused")
+	rdv := &stubRendezvous{
+		reflexive: netip.MustParseAddrPort("127.0.0.1:0"),
+		openErr:   stubErr,
+	}
+	cfg := Config{
+		EphemeralPriv:    consumerPriv,
+		PeerPin:          seederPub,
+		Rendezvous:       rdv,
+		HolePunchTimeout: 250 * time.Millisecond,
+		Now:              func() time.Time { return time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC) },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = Dial(ctx, blackhole, cfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRelayFailed)
+	assert.ErrorIs(t, err, stubErr)
+}

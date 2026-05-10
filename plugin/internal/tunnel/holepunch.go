@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -64,12 +65,45 @@ func dialRendezvous(ctx context.Context, peerAddr netip.AddrPort, cfg Config) (*
 	if err == nil {
 		return tun, nil
 	}
+	hpErr := err
 
-	// Hole-punch attempt failed. Relay fallback lands in Task 4; for now
-	// surface ErrHolePunchFailed so the test driving this path is explicit
-	// about which failure mode it is observing.
-	_ = transport.Close()
-	return nil, fmt.Errorf("%w: %v", ErrHolePunchFailed, err)
+	// Hole-punch failed — fall back to TURN-style relay.
+	relay, err := cfg.Rendezvous.OpenRelay(ctx, cfg.SessionID)
+	if err != nil {
+		_ = transport.Close()
+		return nil, fmt.Errorf("%w: %w", ErrRelayFailed, err)
+	}
+	if !relay.Endpoint.IsValid() {
+		_ = transport.Close()
+		return nil, fmt.Errorf("%w: relay endpoint invalid (zero AddrPort)", ErrRelayFailed)
+	}
+
+	// Punch toward the relay endpoint to open the local NAT mapping toward
+	// the tracker (in production paths the relay is the tracker).
+	relayPunchTo := net.UDPAddrFromAddrPort(relay.Endpoint)
+	for range holePunchProbeCount {
+		_, _ = transport.WriteTo(holePunchProbeBytes, relayPunchTo)
+		select {
+		case <-time.After(holePunchProbeInterval):
+		case <-ctx.Done():
+			_ = transport.Close()
+			return nil, fmt.Errorf("%w: %v", ErrRelayFailed, ctx.Err())
+		}
+	}
+
+	tun, err = dialOverTransport(ctx, transport, relay.Endpoint, cfg, cfg.HandshakeTimeout)
+	if err != nil {
+		_ = transport.Close()
+		// Surface ErrPeerPinMismatch / ErrALPNMismatch verbatim — those
+		// are security signals and must not be hidden by the relay-fallback
+		// wrapper. Other errors get joined with the original hole-punch
+		// failure for diagnostic surface.
+		if errors.Is(err, ErrPeerPinMismatch) || errors.Is(err, ErrALPNMismatch) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: hole-punch: %v; relay: %v", ErrRelayFailed, hpErr, err)
+	}
+	return tun, nil
 }
 
 // dialOverTransport runs the QUIC + TLS handshake against addr using the
