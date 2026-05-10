@@ -65,7 +65,7 @@ func TestReadRequest_TruncatedBody(t *testing.T) {
 
 func TestWriteResponseStatus_OK(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, writeResponseStatus(&buf, statusOK))
+	require.NoError(t, writeResponseStatus(&buf, StatusOK))
 	assert.Equal(t, []byte{0x00}, buf.Bytes())
 }
 
@@ -80,7 +80,7 @@ func TestReadResponseStatus_OK(t *testing.T) {
 	r := bytes.NewReader([]byte{0x00, 'a', 'b', 'c'})
 	st, err := readResponseStatus(r)
 	require.NoError(t, err)
-	assert.Equal(t, statusOK, st)
+	assert.Equal(t, StatusOK, st)
 	rest, err := io.ReadAll(r)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("abc"), rest)
@@ -90,7 +90,7 @@ func TestReadResponseStatus_Error(t *testing.T) {
 	r := bytes.NewReader(append([]byte{0x01}, []byte("rate limited")...))
 	st, err := readResponseStatus(r)
 	require.NoError(t, err)
-	assert.Equal(t, statusError, st)
+	assert.Equal(t, StatusError, st)
 	rest, err := io.ReadAll(r)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("rate limited"), rest)

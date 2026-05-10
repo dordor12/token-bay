@@ -7,12 +7,16 @@ import (
 	"io"
 )
 
-// status enum on the seeder→consumer half of the bidi stream.
-type status byte
+// Status is the one-byte response framing on the seeder→consumer half
+// of the bidi stream. Callers outside this package (notably the
+// consumer-side ccproxy NetworkRouter) discriminate on these values
+// without re-encoding the wire bytes.
+type Status byte
 
+// Status enum values.
 const (
-	statusOK    status = 0x00
-	statusError status = 0x01
+	StatusOK    Status = 0x00
+	StatusError Status = 0x01
 )
 
 // requestHeaderLen is the wire-format length-prefix size in bytes.
@@ -60,7 +64,7 @@ func readRequest(r io.Reader, maxBytes int) ([]byte, error) {
 }
 
 // writeResponseStatus writes a single status byte (no payload).
-func writeResponseStatus(w io.Writer, s status) error {
+func writeResponseStatus(w io.Writer, s Status) error {
 	_, err := w.Write([]byte{byte(s)})
 	return err
 }
@@ -69,7 +73,7 @@ func writeResponseStatus(w io.Writer, s status) error {
 // truncated to maxErrorBytes. The caller is expected to close the
 // stream after writing.
 func writeResponseError(w io.Writer, msg string) error {
-	if _, err := w.Write([]byte{byte(statusError)}); err != nil {
+	if _, err := w.Write([]byte{byte(StatusError)}); err != nil {
 		return err
 	}
 	if msg == "" {
@@ -84,7 +88,7 @@ func writeResponseError(w io.Writer, msg string) error {
 
 // readErrorMessage drains up to maxErrorBytes from r and returns
 // the bytes. Used by consumer-side Receive after readResponseStatus
-// reports statusError. EOF is not an error — the peer closing write
+// reports StatusError. EOF is not an error — the peer closing write
 // signals end-of-message.
 func readErrorMessage(r io.Reader) ([]byte, error) {
 	limited := io.LimitReader(r, int64(maxErrorBytes))
@@ -94,7 +98,7 @@ func readErrorMessage(r io.Reader) ([]byte, error) {
 // readResponseStatus consumes the first byte of the seeder→consumer
 // half-stream and returns the typed status. Subsequent bytes are the
 // caller's to consume.
-func readResponseStatus(r io.Reader) (status, error) {
+func readResponseStatus(r io.Reader) (Status, error) {
 	var b [1]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -102,9 +106,9 @@ func readResponseStatus(r io.Reader) (status, error) {
 		}
 		return 0, fmt.Errorf("%w: read status: %v", ErrFramingViolation, err)
 	}
-	switch status(b[0]) {
-	case statusOK, statusError:
-		return status(b[0]), nil
+	switch Status(b[0]) {
+	case StatusOK, StatusError:
+		return Status(b[0]), nil
 	default:
 		return 0, fmt.Errorf("%w: unknown status byte 0x%02x", ErrFramingViolation, b[0])
 	}
