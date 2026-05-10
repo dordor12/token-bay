@@ -81,7 +81,7 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		}
 	}
 
-	health := NewPeerHealth(cfg.Health, dep.Now, nil)
+	health := NewPeerHealth(cfg.Health, dep.Now, dep.Metrics.HealthScoreComputed)
 
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
 	equiv := NewEquivocator(dep.Archive, forward, reg, health.OnEquivocation).WithSelf(cfg.MyTrackerID)

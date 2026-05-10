@@ -143,6 +143,26 @@ func TestPeerHealth_RevGossipSubScore_NegativeDelayClampedToZero(t *testing.T) {
 	require.InDelta(t, 1.0, h.Score(p, now), 0.0001)
 }
 
+func TestPeerHealth_OnComputedFires(t *testing.T) {
+	now := time.Unix(10000, 0)
+	var outcomes []string
+	h := NewPeerHealth(HealthConfig{
+		UptimeWindow: 2 * time.Hour, RevGossipWindow: 600 * time.Second,
+		RevGossipBufferSize: 16, UptimeWeight: 0.7, RevGossipWeight: 0.3,
+	}, func() time.Time { return now }, func(o string) { outcomes = append(outcomes, o) })
+
+	var p ids.TrackerID
+	p[0] = 0x42
+
+	_ = h.Score(p, now)
+	h.OnRootAttestation(p, now)
+	_ = h.Score(p, now)
+	h.OnEquivocation(p)
+	_ = h.Score(p, now)
+
+	require.Equal(t, []string{"no_data", "ok", "equivocated"}, outcomes)
+}
+
 func TestPeerHealth_Concurrent(t *testing.T) {
 	now := time.Unix(10000, 0)
 	h := NewPeerHealth(HealthConfig{

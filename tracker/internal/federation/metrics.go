@@ -21,6 +21,7 @@ type Metrics struct {
 	peerExchangeEmitted       prometheus.Counter
 	peerExchangeReceived      *prometheus.CounterVec
 	knownPeersSize            prometheus.Gauge
+	healthScoreComputations   *prometheus.CounterVec
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -39,8 +40,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		peerExchangeEmitted:       prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_peer_exchange_emitted_total"}),
 		peerExchangeReceived:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_peer_exchange_received_total"}, []string{"outcome"}),
 		knownPeersSize:            prometheus.NewGauge(prometheus.GaugeOpts{Name: "tokenbay_federation_known_peers_size"}),
+		healthScoreComputations:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_health_score_computations_total", Help: "Number of peer-health-score computations, by outcome."}, []string{"outcome"}),
 	}
-	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived, m.peerExchangeEmitted, m.peerExchangeReceived, m.knownPeersSize} {
+	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived, m.peerExchangeEmitted, m.peerExchangeReceived, m.knownPeersSize, m.healthScoreComputations} {
 		reg.MustRegister(c)
 	}
 	return m
@@ -98,4 +100,15 @@ func (m *Metrics) PeerExchangeReceivedVec() *prometheus.CounterVec {
 
 func (m *Metrics) KnownPeersSizeGauge() prometheus.Gauge {
 	return m.knownPeersSize
+}
+
+// HealthScoreComputed bumps the slice-5 health-score-computation
+// counter. outcome ∈ {ok, equivocated, no_data}.
+func (m *Metrics) HealthScoreComputed(outcome string) {
+	m.healthScoreComputations.WithLabelValues(outcome).Inc()
+}
+
+// HealthScoreComputationsCounter is a test-only accessor.
+func (m *Metrics) HealthScoreComputationsCounter() *prometheus.CounterVec {
+	return m.healthScoreComputations
 }

@@ -84,13 +84,23 @@ func (h *PeerHealth) OnEquivocation(peer ids.TrackerID) {
 }
 
 // Score computes the current health score for peer in [0, 1].
-// See spec §4.1 for the formula.
+// See spec §4.1 for the formula. Fires onComputed with one of
+// "ok" / "equivocated" / "no_data" so the metrics layer can count.
 func (h *PeerHealth) Score(peer ids.TrackerID, now time.Time) float64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if _, equiv := h.equivocated[peer]; equiv {
+		h.onComputed("equivocated")
 		return 0
+	}
+
+	_, hasRoot := h.lastRoot[peer]
+	rb, hasRing := h.revGossipDelays[peer]
+	if !hasRoot && (!hasRing || rb.n == 0) {
+		h.onComputed("no_data")
+	} else {
+		h.onComputed("ok")
 	}
 
 	uptimeSub := 0.0
