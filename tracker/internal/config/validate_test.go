@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -630,4 +631,136 @@ func TestValidate_Settlement_StaleTipRetriesRange(t *testing.T) {
 	require.ErrorContains(t, Validate(c), "stale_tip_retries")
 	c.Settlement.StaleTipRetries = 11
 	require.ErrorContains(t, Validate(c), "stale_tip_retries")
+}
+
+func TestValidate_Federation_HandshakeTimeoutBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.HandshakeTimeoutS = 0
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected error for handshake_timeout_s=0")
+	}
+	cfg = validConfig(t)
+	cfg.Federation.HandshakeTimeoutS = 61
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected error for handshake_timeout_s=61")
+	}
+}
+
+func TestValidate_Federation_GossipRateQPSBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.GossipRateQPS = 0
+	require.ErrorContains(t, Validate(cfg), "gossip_rate_qps")
+	cfg = validConfig(t)
+	cfg.Federation.GossipRateQPS = 10_001
+	require.ErrorContains(t, Validate(cfg), "gossip_rate_qps")
+}
+
+func TestValidate_Federation_SendQueueDepthBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.SendQueueDepth = 0
+	require.ErrorContains(t, Validate(cfg), "send_queue_depth")
+	cfg = validConfig(t)
+	cfg.Federation.SendQueueDepth = 1<<20 + 1
+	require.ErrorContains(t, Validate(cfg), "send_queue_depth")
+}
+
+func TestValidate_Federation_PublishCadenceBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.PublishCadenceS = 59
+	require.ErrorContains(t, Validate(cfg), "publish_cadence_s")
+	cfg = validConfig(t)
+	cfg.Federation.PublishCadenceS = 24*3600 + 1
+	require.ErrorContains(t, Validate(cfg), "publish_cadence_s")
+}
+
+func TestValidate_Federation_IdleTimeoutBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.IdleTimeoutS = 0
+	require.ErrorContains(t, Validate(cfg), "idle_timeout_s")
+	cfg = validConfig(t)
+	cfg.Federation.IdleTimeoutS = 601
+	require.ErrorContains(t, Validate(cfg), "idle_timeout_s")
+}
+
+func TestValidate_Federation_RedialMaxLowerBound(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.RedialBaseS = 5
+	cfg.Federation.RedialMaxS = 4
+	require.ErrorContains(t, Validate(cfg), "redial_max_s")
+}
+
+func TestValidate_Federation_RedialBaseBounds(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.RedialBaseS = 0
+	require.ErrorContains(t, Validate(cfg), "redial_base_s")
+	cfg = validConfig(t)
+	cfg.Federation.RedialBaseS = 61
+	require.ErrorContains(t, Validate(cfg), "redial_base_s")
+}
+
+func TestValidate_Federation_ListenAddr_Hostport(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.ListenAddr = "not-a-hostport"
+	require.ErrorContains(t, Validate(cfg), "listen_addr")
+	cfg = validConfig(t)
+	cfg.Federation.ListenAddr = ":7443"
+	require.NoError(t, Validate(cfg))
+	cfg = validConfig(t)
+	cfg.Federation.ListenAddr = ""
+	require.NoError(t, Validate(cfg))
+}
+
+func TestValidate_Federation_PeerHexLength(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Federation.Peers = []FederationPeer{{TrackerID: "deadbeef", PubKey: "cafebabe", Addr: "x"}}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected hex-len error")
+	}
+}
+
+func TestValidate_Federation_PeerDuplicateTrackerID(t *testing.T) {
+	t.Parallel()
+	hex64 := strings.Repeat("aa", 32)
+	cfg := validConfig(t)
+	cfg.Federation.Peers = []FederationPeer{
+		{TrackerID: hex64, PubKey: hex64, Addr: "x"},
+		{TrackerID: hex64, PubKey: hex64, Addr: "y"},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected duplicate-tracker_id error")
+	}
+}
+
+func TestValidate_Federation_PeerAddrEmpty(t *testing.T) {
+	t.Parallel()
+	hex64 := strings.Repeat("bb", 32)
+	hex64b := strings.Repeat("cc", 32)
+	cfg := validConfig(t)
+	cfg.Federation.Peers = []FederationPeer{
+		{TrackerID: hex64, PubKey: hex64b, Addr: ""},
+	}
+	require.ErrorContains(t, Validate(cfg), "addr")
+}
+
+func TestValidate_Federation_ValidPeers(t *testing.T) {
+	t.Parallel()
+	hex64a := strings.Repeat("aa", 32)
+	hex64b := strings.Repeat("bb", 32)
+	hex64c := strings.Repeat("cc", 32)
+	hex64d := strings.Repeat("dd", 32)
+	cfg := validConfig(t)
+	cfg.Federation.Peers = []FederationPeer{
+		{TrackerID: hex64a, PubKey: hex64b, Addr: "peer1.example.com:7777", Region: "us-east"},
+		{TrackerID: hex64c, PubKey: hex64d, Addr: "peer2.example.com:7777", Region: "eu-west"},
+	}
+	assert.NoError(t, Validate(cfg))
 }

@@ -70,12 +70,16 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// Status returns a snapshot of supervisor state.
+// Status returns a snapshot of supervisor state. Safe to call
+// concurrently with Start / Close.
 func (c *Client) Status() ConnectionState {
-	if c.sup == nil {
+	c.startedMu.Lock()
+	sup := c.sup
+	c.startedMu.Unlock()
+	if sup == nil {
 		return ConnectionState{Phase: PhaseDisconnected}
 	}
-	return c.sup.snapshot()
+	return sup.snapshot()
 }
 
 // WaitConnected blocks until the supervisor reports Connected, or ctx is done.

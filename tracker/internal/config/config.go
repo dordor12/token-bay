@@ -84,6 +84,24 @@ type FederationConfig struct {
 	GossipDedupeTTLS      int `yaml:"gossip_dedupe_ttl_s"`
 	TransferRetryWindowH  int `yaml:"transfer_retry_window_hours"`
 	EnrollRatePerMinPerIP int `yaml:"enroll_rate_per_min_per_ip"`
+
+	HandshakeTimeoutS int              `yaml:"handshake_timeout_s"`
+	GossipRateQPS     int              `yaml:"gossip_rate_qps"`
+	SendQueueDepth    int              `yaml:"send_queue_depth"`
+	PublishCadenceS   int              `yaml:"publish_cadence_s"`
+	ListenAddr        string           `yaml:"listen_addr"`
+	IdleTimeoutS      int              `yaml:"idle_timeout_s"`
+	RedialBaseS       int              `yaml:"redial_base_s"`
+	RedialMaxS        int              `yaml:"redial_max_s"`
+	Peers             []FederationPeer `yaml:"peers"`
+}
+
+// FederationPeer is one operator-configured allowlisted peer tracker.
+type FederationPeer struct {
+	TrackerID string `yaml:"tracker_id"` // hex 64 chars (32 bytes)
+	PubKey    string `yaml:"pubkey"`     // hex 64 chars (32 bytes Ed25519)
+	Addr      string `yaml:"addr"`
+	Region    string `yaml:"region"`
 }
 
 type ReputationConfig struct {
@@ -220,6 +238,15 @@ func DefaultConfig() *Config {
 			GossipDedupeTTLS:      3600,
 			TransferRetryWindowH:  24,
 			EnrollRatePerMinPerIP: 1,
+			HandshakeTimeoutS:     5,
+			GossipRateQPS:         100,
+			SendQueueDepth:        256,
+			PublishCadenceS:       3600,
+			ListenAddr:            "", // empty disables QUIC peering; in-process transport falls back
+			IdleTimeoutS:          60,
+			RedialBaseS:           1,
+			RedialMaxS:            30,
+			// Peers defaults to nil — operator-managed.
 		},
 		Reputation: ReputationConfig{
 			EvaluationIntervalS: 60,

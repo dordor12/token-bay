@@ -8,7 +8,7 @@ import (
 
 // StopFailurePayload mirrors Claude Code's StopFailureHookInput schema at
 // src/entrypoints/sdk/coreSchemas.ts:529-538 combined with BaseHookInputSchema
-// at :387-399. Optional fields are pointer-to-string so callers can
+// at :387-411. Optional fields are pointer-to-string so callers can
 // distinguish absent from empty.
 type StopFailurePayload struct {
 	SessionID            string  `json:"session_id"`
@@ -16,6 +16,7 @@ type StopFailurePayload struct {
 	CWD                  string  `json:"cwd"`
 	PermissionMode       *string `json:"permission_mode,omitempty"`
 	AgentID              *string `json:"agent_id,omitempty"`
+	AgentType            *string `json:"agent_type,omitempty"`
 	HookEventName        string  `json:"hook_event_name"`
 	Error                string  `json:"error"`
 	ErrorDetails         *string `json:"error_details,omitempty"`

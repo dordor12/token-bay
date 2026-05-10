@@ -3,6 +3,7 @@ package ccbridge
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"io"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var bridgeTestClientKey = ed25519.PublicKey(make([]byte, ed25519.PublicKeySize))
 
 // stubRunner is a fixture-driven Runner.
 type stubRunner struct {
@@ -34,25 +37,75 @@ func TestBridgeServe_HappyPath_StreamsAndExtractsUsage(t *testing.T) {
 	b := &Bridge{Runner: stub}
 
 	var sink bytes.Buffer
-	usage, err := b.Serve(context.Background(), Request{Prompt: "hi", Model: "claude-sonnet-4-6"}, &sink)
+	usage, err := b.Serve(context.Background(), Request{
+		Messages:     userOnly("hi"),
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
+	}, &sink)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(11), usage.InputTokens)
 	assert.Equal(t, uint64(22), usage.OutputTokens)
-	assert.Equal(t, "hi", stub.Got.Prompt)
+	require.Len(t, stub.Got.Messages, 1)
+	assert.JSONEq(t, `[{"type":"text","text":"hi"}]`, string(stub.Got.Messages[0].Content))
 	assert.Equal(t, "claude-sonnet-4-6", stub.Got.Model)
 	assert.Contains(t, sink.String(), `"type":"result"`)
 }
 
-func TestBridgeServe_RejectsEmptyPrompt(t *testing.T) {
+func TestBridgeServe_LastResultUsageWins_OnMultiTurn(t *testing.T) {
+	// Multi-turn: claude emits a result per user turn. ParseStreamJSON
+	// keeps the LAST one — that's the response to the final user turn,
+	// which is what the seeder cares about.
+	stub := &stubRunner{Stdout: []byte(
+		`{"type":"system","subtype":"init"}` + "\n" +
+			`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":1}}` + "\n" +
+			`{"type":"system","subtype":"init"}` + "\n" +
+			`{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":42,"output_tokens":99}}` + "\n",
+	)}
+	b := &Bridge{Runner: stub}
+
+	usage, err := b.Serve(context.Background(), Request{
+		Messages: []Message{
+			{Role: RoleUser, Content: TextContent("first")},
+			{Role: RoleAssistant, Content: TextContent("ack")},
+			{Role: RoleUser, Content: TextContent("second")},
+		},
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
+	}, io.Discard)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), usage.InputTokens)
+	assert.Equal(t, uint64(99), usage.OutputTokens)
+}
+
+func TestBridgeServe_RejectsEmptyMessages(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
-	_, err := b.Serve(context.Background(), Request{Prompt: "", Model: "claude-sonnet-4-6"}, io.Discard)
+	_, err := b.Serve(context.Background(), Request{Messages: nil, Model: "claude-sonnet-4-6", ClientPubkey: bridgeTestClientKey}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
+	assert.True(t, errors.Is(err, ErrEmptyMessages))
+}
+
+func TestBridgeServe_RejectsLastMessageNotUser(t *testing.T) {
+	b := &Bridge{Runner: &stubRunner{}}
+	_, err := b.Serve(context.Background(), Request{
+		Messages: []Message{
+			{Role: RoleUser, Content: TextContent("hi")},
+			{Role: RoleAssistant, Content: TextContent("hello")},
+		},
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
+	}, io.Discard)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrLastMessageNotUser))
 }
 
 func TestBridgeServe_RejectsEmptyModel(t *testing.T) {
 	b := &Bridge{Runner: &stubRunner{}}
-	_, err := b.Serve(context.Background(), Request{Prompt: "hi", Model: ""}, io.Discard)
+	_, err := b.Serve(context.Background(), Request{
+		Messages:     userOnly("hi"),
+		Model:        "",
+		ClientPubkey: bridgeTestClientKey,
+	}, io.Discard)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
 }
@@ -63,7 +116,11 @@ func TestBridgeServe_RunnerError_Propagates(t *testing.T) {
 	b := &Bridge{Runner: stub}
 
 	var sink bytes.Buffer
-	_, err := b.Serve(context.Background(), Request{Prompt: "hi", Model: "claude-sonnet-4-6"}, &sink)
+	_, err := b.Serve(context.Background(), Request{
+		Messages:     userOnly("hi"),
+		Model:        "claude-sonnet-4-6",
+		ClientPubkey: bridgeTestClientKey,
+	}, &sink)
 	require.Error(t, err)
 	var exit *ExitError
 	require.True(t, errors.As(err, &exit))
