@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -83,14 +82,67 @@ func newTwoTracker(t *testing.T) *twoTracker {
 	}
 }
 
-// twoTrackerWithKnownPeers is the slice-3 variant of twoTracker. It opens
-// real *storage.Store instances for KnownPeers and exposes them on
-// kpStoreA/kpStoreB so peer-exchange tests can inspect the merged state.
-// Lives separately from newTwoTracker so slice-2 revocation tests don't
-// pay the cost of two extra SQLite opens.
+// fakeKnownPeersArchiveExt is the package_test mirror of
+// peerexchange_test.go's internal fakeKnownPeersArchive. Duplicated to
+// avoid moving an internal-package fake or paying for a SQLite open per
+// integration test (which under -race + default parallelism caused
+// federation tests elsewhere in this package to time out).
+type fakeKnownPeersArchiveExt struct {
+	mu   sync.Mutex
+	rows []storage.KnownPeer
+}
+
+func newFakeKnownPeersArchiveExt() *fakeKnownPeersArchiveExt {
+	return &fakeKnownPeersArchiveExt{}
+}
+
+func (f *fakeKnownPeersArchiveExt) UpsertKnownPeer(_ context.Context, p storage.KnownPeer) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.rows {
+		if bytes.Equal(r.TrackerID, p.TrackerID) {
+			if p.LastSeen.After(r.LastSeen) || p.LastSeen.Equal(r.LastSeen) {
+				if r.Source == "allowlist" && p.Source == "gossip" {
+					p.Addr = r.Addr
+					p.RegionHint = r.RegionHint
+					p.Source = "allowlist"
+				}
+				f.rows[i] = p
+			}
+			return nil
+		}
+	}
+	f.rows = append(f.rows, p)
+	return nil
+}
+
+func (f *fakeKnownPeersArchiveExt) GetKnownPeer(_ context.Context, trackerID []byte) (storage.KnownPeer, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if bytes.Equal(r.TrackerID, trackerID) {
+			return r, true, nil
+		}
+	}
+	return storage.KnownPeer{}, false, nil
+}
+
+func (f *fakeKnownPeersArchiveExt) ListKnownPeers(_ context.Context, limit int, _ bool) ([]storage.KnownPeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit > len(f.rows) {
+		limit = len(f.rows)
+	}
+	return append([]storage.KnownPeer(nil), f.rows[:limit]...), nil
+}
+
+// twoTrackerWithKnownPeers is the slice-3 variant of twoTracker, with
+// in-memory KnownPeers archives wired so peer-exchange tests can inspect
+// merged state. Lives separately from newTwoTracker so slice-2
+// revocation tests don't change shape.
 type twoTrackerWithKnownPeers struct {
 	*twoTracker
-	kpStoreA, kpStoreB *storage.Store
+	kpA, kpB *fakeKnownPeersArchiveExt
 }
 
 func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
@@ -102,14 +154,8 @@ func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
 	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
 
 	archA, archB := newFakeArchive(), newFakeArchive()
-	kpA, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "kpA.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	kpB, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "kpB.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	kpA := newFakeKnownPeersArchiveExt()
+	kpB := newFakeKnownPeersArchiveExt()
 	srcA := &fakeRootSrc{ok: false}
 	srcB := &fakeRootSrc{ok: false}
 
@@ -135,8 +181,6 @@ func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
 	t.Cleanup(func() {
 		_ = aFed.Close()
 		_ = bFed.Close()
-		_ = kpA.Close()
-		_ = kpB.Close()
 	})
 	return &twoTrackerWithKnownPeers{
 		twoTracker: &twoTracker{
@@ -145,7 +189,7 @@ func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
 			srcA: srcA, srcB: srcB,
 			aID: aID, bID: bID,
 		},
-		kpStoreA: kpA, kpStoreB: kpB,
+		kpA: kpA, kpB: kpB,
 	}
 }
 
@@ -769,7 +813,7 @@ func TestIntegration_PeerExchange_AB(t *testing.T) {
 	// Inject a known_peers row for T in A's archive (simulates A having
 	// learned T from operator config or earlier gossip).
 	tID := bytes.Repeat([]byte{0xCC}, 32)
-	if err := tt.kpStoreA.UpsertKnownPeer(context.Background(), storage.KnownPeer{
+	if err := tt.kpA.UpsertKnownPeer(context.Background(), storage.KnownPeer{
 		TrackerID:   tID,
 		Addr:        "wss://t-not-dialed:443",
 		LastSeen:    time.Unix(1714000000, 0),
@@ -788,7 +832,7 @@ func TestIntegration_PeerExchange_AB(t *testing.T) {
 	deadline = time.Now().Add(2 * time.Second)
 	gotT := false
 	for time.Now().Before(deadline) {
-		got, ok, err := tt.kpStoreB.GetKnownPeer(context.Background(), tID)
+		got, ok, err := tt.kpB.GetKnownPeer(context.Background(), tID)
 		if err == nil && ok && got.Source == "gossip" && got.Addr == "wss://t-not-dialed:443" {
 			gotT = true
 			break
@@ -801,7 +845,7 @@ func TestIntegration_PeerExchange_AB(t *testing.T) {
 
 	// And B's row for A is allowlist-pinned.
 	aBytes := tt.aID.Bytes()
-	got, ok, err := tt.kpStoreB.GetKnownPeer(context.Background(), aBytes[:])
+	got, ok, err := tt.kpB.GetKnownPeer(context.Background(), aBytes[:])
 	if err != nil {
 		t.Fatalf("GetKnownPeer(A): %v", err)
 	}
@@ -834,19 +878,11 @@ func TestIntegration_PeerExchange_ThreeTracker_LineGraph(t *testing.T) {
 	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
 	trC := federation.NewInprocTransport(hub, "C", c.pub, c.priv)
 
-	mkStore := func(name string) *storage.Store {
-		s, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), name+".db"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
-		return s
-	}
-	kpA := mkStore("A")
-	kpB := mkStore("B")
-	kpC := mkStore("C")
+	kpA := newFakeKnownPeersArchiveExt()
+	kpB := newFakeKnownPeersArchiveExt()
+	kpC := newFakeKnownPeersArchiveExt()
 
-	open := func(myID ids.TrackerID, myPriv ed25519.PrivateKey, tr federation.Transport, peers []federation.AllowlistedPeer, kp *storage.Store) *federation.Federation {
+	open := func(myID ids.TrackerID, myPriv ed25519.PrivateKey, tr federation.Transport, peers []federation.AllowlistedPeer, kp *fakeKnownPeersArchiveExt) *federation.Federation {
 		f, err := federation.Open(federation.Config{MyTrackerID: myID, MyPriv: myPriv, Peers: peers},
 			federation.Deps{
 				Transport: tr, RootSrc: &fakeRootSrc{ok: false}, Archive: newFakeArchive(),
