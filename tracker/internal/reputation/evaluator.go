@@ -177,6 +177,7 @@ func (s *Subsystem) runOneCycle(ctx context.Context) error {
 				}
 				if err := s.store.transition(ctx, id, StateFrozen, reason, now); err == nil {
 					s.metrics.transitions.WithLabelValues("AUDIT", "FROZEN", "freeze_repeat").Inc()
+					s.notifyFreeze(ctx, id, "freeze_repeat", now)
 				}
 			} else if !lastAudit.IsZero() && lastAudit.Before(fortyEightHoursAgo) &&
 				!flaggedSet[idsKey(id)] {

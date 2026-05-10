@@ -32,6 +32,8 @@ type Subsystem struct { //nolint:revive // package name is reputation; Subsystem
 
 	metrics *metrics
 
+	freezeListener FreezeListener
+
 	closeMu sync.Mutex
 	closed  atomic.Bool
 	stop    chan struct{}
@@ -195,6 +197,21 @@ func (s *Subsystem) runEvaluator() {
 			t.Reset(interval)
 		}
 	}
+}
+
+// notifyFreeze invokes the configured FreezeListener with panic
+// recovery so a misbehaving listener cannot crash the evaluator
+// goroutine. No-op when no listener is configured.
+func (s *Subsystem) notifyFreeze(ctx context.Context, id ids.IdentityID, reason string, revokedAt time.Time) {
+	if s.freezeListener == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.metrics.evaluatorPanics.Inc()
+		}
+	}()
+	s.freezeListener.OnFreeze(ctx, id, reason, revokedAt)
 }
 
 // runOneCycleSafe wraps runOneCycle with panic recovery so a single
