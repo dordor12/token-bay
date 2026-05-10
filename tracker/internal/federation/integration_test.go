@@ -1,6 +1,7 @@
 package federation_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -20,11 +21,12 @@ import (
 
 // twoTracker spins up A and B sharing one InprocHub; A peers with B.
 type twoTracker struct {
-	hub          *federation.InprocHub
-	a, b         *federation.Federation
-	archA, archB *fakeArchive
-	srcA, srcB   *fakeRootSrc
-	aID, bID     ids.TrackerID
+	hub                *federation.InprocHub
+	a, b               *federation.Federation
+	archA, archB       *fakeArchive
+	revArchA, revArchB *fakeRevocationArchiveExt
+	srcA, srcB         *fakeRootSrc
+	aID, bID           ids.TrackerID
 }
 
 // flipReadyA mutates srcA to return (root, sig, true, nil) on the next
@@ -44,6 +46,7 @@ func newTwoTracker(t *testing.T) *twoTracker {
 	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
 
 	archA, archB := newFakeArchive(), newFakeArchive()
+	revArchA, revArchB := newFakeRevocationArchiveExt(), newFakeRevocationArchiveExt()
 	srcA := &fakeRootSrc{ok: false}
 	srcB := &fakeRootSrc{ok: false}
 
@@ -54,7 +57,7 @@ func newTwoTracker(t *testing.T) *twoTracker {
 		MyTrackerID: aID,
 		MyPriv:      a.priv,
 		Peers:       []federation.AllowlistedPeer{{TrackerID: bID, PubKey: b.pub, Addr: "B"}},
-	}, federation.Deps{Transport: trA, RootSrc: srcA, Archive: archA, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
+	}, federation.Deps{Transport: trA, RootSrc: srcA, Archive: archA, RevocationArchive: revArchA, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +65,7 @@ func newTwoTracker(t *testing.T) *twoTracker {
 		MyTrackerID: bID,
 		MyPriv:      b.priv,
 		Peers:       []federation.AllowlistedPeer{{TrackerID: aID, PubKey: a.pub, Addr: "A"}},
-	}, federation.Deps{Transport: trB, RootSrc: srcB, Archive: archB, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
+	}, federation.Deps{Transport: trB, RootSrc: srcB, Archive: archB, RevocationArchive: revArchB, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +73,13 @@ func newTwoTracker(t *testing.T) *twoTracker {
 		_ = aFed.Close()
 		_ = bFed.Close()
 	})
-	return &twoTracker{hub: hub, a: aFed, b: bFed, archA: archA, archB: archB, srcA: srcA, srcB: srcB, aID: aID, bID: bID}
+	return &twoTracker{
+		hub: hub, a: aFed, b: bFed,
+		archA: archA, archB: archB,
+		revArchA: revArchA, revArchB: revArchB,
+		srcA: srcA, srcB: srcB,
+		aID: aID, bID: bID,
+	}
 }
 
 func TestIntegration_RootAttestation_AB(t *testing.T) {
@@ -501,4 +510,165 @@ func b64(v byte) []byte {
 		out[i] = v
 	}
 	return out
+}
+
+// fakeRevocationArchiveExt is the package_test mirror of revocation_test.go's
+// fakeRevocationArchive. Duplicated to avoid moving an internal-package
+// fixture into an integration test file.
+type fakeRevocationArchiveExt struct {
+	mu   sync.Mutex
+	rows map[[64]byte]storage.PeerRevocation
+}
+
+func newFakeRevocationArchiveExt() *fakeRevocationArchiveExt {
+	return &fakeRevocationArchiveExt{rows: map[[64]byte]storage.PeerRevocation{}}
+}
+
+func (f *fakeRevocationArchiveExt) PutPeerRevocation(_ context.Context, r storage.PeerRevocation) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var k [64]byte
+	copy(k[0:32], r.TrackerID)
+	copy(k[32:64], r.IdentityID)
+	if _, ok := f.rows[k]; ok {
+		return nil
+	}
+	f.rows[k] = r
+	return nil
+}
+
+func (f *fakeRevocationArchiveExt) GetPeerRevocation(_ context.Context, tr, id []byte) (storage.PeerRevocation, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var k [64]byte
+	copy(k[0:32], tr)
+	copy(k[32:64], id)
+	r, ok := f.rows[k]
+	return r, ok, nil
+}
+
+func TestIntegration_Revocation_AB(t *testing.T) {
+	t.Parallel()
+	tt := newTwoTracker(t)
+
+	// Wait for steady-state peering A<->B.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		gotSteady := false
+		for _, p := range tt.a.Peers() {
+			if p.State == federation.PeerStateSteady {
+				gotSteady = true
+				break
+			}
+		}
+		if gotSteady {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	identity := ids.IdentityID(bytes.Repeat([]byte{0x44}, 32))
+	tt.a.OnFreeze(context.Background(), identity, "freeze_repeat", time.Unix(1714000100, 0))
+
+	aIDBytes := tt.aID.Bytes()
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, ok, _ := tt.revArchB.GetPeerRevocation(context.Background(), aIDBytes[:], identity[:])
+		if ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("B never archived A's revocation")
+}
+
+func TestIntegration_Revocation_ThreeTracker_LineGraph(t *testing.T) {
+	t.Parallel()
+	// Topology: A <-> B <-> C. C does not directly peer with A.
+	// A emits a revocation; B forwards to C; C archives.
+
+	hub := federation.NewInprocHub()
+	a := newPeerCfg(t)
+	b := newPeerCfg(t)
+	c := newPeerCfg(t)
+
+	aID := ids.TrackerID(sha256.Sum256(a.pub))
+	bID := ids.TrackerID(sha256.Sum256(b.pub))
+	cID := ids.TrackerID(sha256.Sum256(c.pub))
+
+	trA := federation.NewInprocTransport(hub, "A", a.pub, a.priv)
+	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
+	trC := federation.NewInprocTransport(hub, "C", c.pub, c.priv)
+
+	revArchA := newFakeRevocationArchiveExt()
+	revArchB := newFakeRevocationArchiveExt()
+	revArchC := newFakeRevocationArchiveExt()
+
+	open := func(myID ids.TrackerID, myPriv ed25519.PrivateKey, tr federation.Transport, peers []federation.AllowlistedPeer, revArch *fakeRevocationArchiveExt) *federation.Federation {
+		f, err := federation.Open(federation.Config{MyTrackerID: myID, MyPriv: myPriv, Peers: peers},
+			federation.Deps{
+				Transport: tr, RootSrc: &fakeRootSrc{ok: false}, Archive: newFakeArchive(),
+				RevocationArchive: revArch,
+				Metrics:           federation.NewMetrics(prometheus.NewRegistry()),
+				Logger:            zerolog.Nop(), Now: time.Now,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = f.Close() })
+		return f
+	}
+
+	// Line topology: A and C don't directly peer (no listener at the
+	// "no-direct" addr — dialer fails forever, but A and C still have
+	// each other's pubkeys in their registries for issuer verification.
+	// This models the real-world full-allowlist deployment where every
+	// region knows every other region's pubkey, but a partition keeps
+	// some pairs from establishing a direct QUIC tunnel.
+	aFed := open(aID, a.priv, trA, []federation.AllowlistedPeer{
+		{TrackerID: bID, PubKey: b.pub, Addr: "B"},
+		{TrackerID: cID, PubKey: c.pub, Addr: "no-direct-a-c"},
+	}, revArchA)
+	bFed := open(bID, b.priv, trB, []federation.AllowlistedPeer{
+		{TrackerID: aID, PubKey: a.pub, Addr: "A"},
+		{TrackerID: cID, PubKey: c.pub, Addr: "C"},
+	}, revArchB)
+	_ = open(cID, c.priv, trC, []federation.AllowlistedPeer{
+		{TrackerID: bID, PubKey: b.pub, Addr: "B"},
+		{TrackerID: aID, PubKey: a.pub, Addr: "no-direct-a-c"},
+	}, revArchC)
+
+	// Wait for B to be steady with both A and C.
+	waitSteadyPeers := func(f *federation.Federation, want int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			n := 0
+			for _, p := range f.Peers() {
+				if p.State == federation.PeerStateSteady {
+					n++
+				}
+			}
+			if n >= want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("federation never reached %d steady peers", want)
+	}
+	waitSteadyPeers(bFed, 2)
+
+	identity := ids.IdentityID(bytes.Repeat([]byte{0x99}, 32))
+	aFed.OnFreeze(context.Background(), identity, "freeze_repeat", time.Unix(1714000100, 0))
+
+	aIDBytes := aID.Bytes()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, ok, _ := revArchC.GetPeerRevocation(context.Background(), aIDBytes[:], identity[:])
+		if ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("C never archived A's revocation through B")
 }
