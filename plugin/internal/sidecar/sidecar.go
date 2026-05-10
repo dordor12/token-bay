@@ -33,17 +33,26 @@ func New(deps Deps) (*App, error) {
 		return nil, err
 	}
 
-	tcCfg := trackerclient.Config{
-		Endpoints: deps.TrackerEndpoints,
-		Identity:  deps.Signer,
-		Logger:    deps.Logger,
-	}
-	if deps.TrackerClientOverrides != nil {
-		deps.TrackerClientOverrides(&tcCfg)
-	}
-	tracker, err := trackerclient.New(tcCfg)
-	if err != nil {
-		return nil, fmt.Errorf("sidecar: build trackerclient: %w", err)
+	var tracker *trackerclient.Client
+	if deps.TrackerClient != nil {
+		tracker = deps.TrackerClient
+	} else {
+		tcCfg := trackerclient.Config{
+			Endpoints: deps.TrackerEndpoints,
+			Identity:  deps.Signer,
+			Logger:    deps.Logger,
+		}
+		if deps.SeederFlow != nil {
+			tcCfg.OfferHandler = deps.SeederFlow
+		}
+		if deps.TrackerClientOverrides != nil {
+			deps.TrackerClientOverrides(&tcCfg)
+		}
+		var err error
+		tracker, err = trackerclient.New(tcCfg)
+		if err != nil {
+			return nil, fmt.Errorf("sidecar: build trackerclient: %w", err)
+		}
 	}
 
 	proxy := ccproxy.New(ccproxy.WithAddr(deps.CCProxyAddr))
@@ -101,6 +110,17 @@ func (a *App) Run(ctx context.Context) error {
 		go func() { _ = a.deps.ConsumerFlow.Run(ctx) }()
 	}
 
+	// SeederFlow is optional. When set, run it in a background
+	// goroutine — it owns its own listener accept loop, advertise
+	// heartbeat, and conformance gate, all bounded by ctx.
+	if a.deps.SeederFlow != nil {
+		go func() {
+			if err := a.deps.SeederFlow.Run(ctx); err != nil {
+				a.deps.Logger.Warn().Err(err).Msg("sidecar: seederflow run")
+			}
+		}()
+	}
+
 	<-ctx.Done()
 
 	return a.shutdown()
@@ -113,6 +133,11 @@ func (a *App) shutdown() error {
 	}
 	if err := a.tracker.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("trackerclient close: %w", err))
+	}
+	if a.deps.SeederFlow != nil {
+		if err := a.deps.SeederFlow.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("seederflow close: %w", err))
+		}
 	}
 	if err := a.deps.AuditLog.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("auditlog close: %w", err))

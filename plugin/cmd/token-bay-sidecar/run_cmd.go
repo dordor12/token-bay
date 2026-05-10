@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/ed25519"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -21,6 +21,7 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/config"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
+	"github.com/token-bay/token-bay/plugin/internal/seederflow"
 	"github.com/token-bay/token-bay/plugin/internal/sidecar"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 )
@@ -69,21 +70,53 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
+			logger := zerolog.New(cmd.ErrOrStderr()).With().Timestamp().Logger()
+
 			seederRoot := filepath.Join(cfgDir, "seeder-sessions")
+			runner := &ccbridge.ExecRunner{
+				BinaryPath: cfg.CCBridge.ClaudeBin,
+				SeederRoot: seederRoot,
+			}
+
+			// Build the seeder coordinator first with a placeholder
+			// UsageReporter so its required-field check passes; the
+			// trackerclient is constructed next with the coordinator
+			// wired as OfferHandler, and we late-bind it via
+			// SetTracker before Run.
+			coord, err := buildSeederFlow(cfg, al, signer, runner, logger)
+			if err != nil {
+				_ = al.Close()
+				return fmt.Errorf("build seederflow: %w", err)
+			}
+
+			tracker, err := trackerclient.New(trackerclient.Config{
+				Endpoints:    endpoints,
+				Identity:     signer,
+				Logger:       logger,
+				OfferHandler: coord,
+			})
+			if err != nil {
+				_ = al.Close()
+				return fmt.Errorf("build trackerclient: %w", err)
+			}
+			coord.SetTracker(tracker)
+
 			janitor := &ccbridge.Janitor{
 				Root:     seederRoot,
-				Checker:  alwaysInactiveChecker{},
+				Checker:  coord,
 				Grace:    janitorGrace,
 				Interval: janitorInterval,
 			}
 
 			deps := sidecar.Deps{
-				Logger:           zerolog.New(cmd.ErrOrStderr()).With().Timestamp().Logger(),
+				Logger:           logger,
 				Signer:           signer,
 				AuditLog:         al,
 				CCProxyAddr:      defaultCCProxyAddr,
 				TrackerEndpoints: endpoints,
+				TrackerClient:    tracker,
 				Janitor:          janitor,
+				SeederFlow:       coord,
 			}
 
 			app, err := sidecar.New(deps)
@@ -134,15 +167,54 @@ func resolveTrackerEndpoints(spec string) ([]trackerclient.TrackerEndpoint, erro
 	}}, nil
 }
 
-// alwaysInactiveChecker reports every peer as inactive. Used as the
-// initial ccbridge.Janitor checker until a peer-tracker subsystem
-// lands and can supply real liveness state. With this stub, per-
-// client folders are reaped purely on the grace-window mtime check —
-// a folder fresher than janitorGrace survives, anything older gets
-// removed. Conservative: an active peer that goes idle for grace
-// loses its state, but the cost is one re-uploaded history on next
-// request.
-type alwaysInactiveChecker struct{}
+// buildSeederFlow constructs the seederflow.Coordinator from cfg with
+// every dependency wired. The Acceptor is the v1 NopAcceptor — see
+// seederflow/doc.go for the wire-format gap that prevents binding a
+// real tunnel.Listener at this layer.
+func buildSeederFlow(
+	cfg *config.Config,
+	al *auditlog.Logger,
+	signer *identity.Signer,
+	runner ccbridge.Runner,
+	logger zerolog.Logger,
+) (*seederflow.Coordinator, error) {
+	idle, err := seederflow.ParseIdlePolicy(cfg.IdlePolicy.Mode, cfg.IdlePolicy.Window)
+	if err != nil {
+		return nil, err
+	}
+	models := []string{"claude-sonnet-4-6", "claude-opus-4-7"}
+	scfg := seederflow.Config{
+		Logger:         logger,
+		Bridge:         ccbridge.NewBridge(runner),
+		AuditLog:       al,
+		Signer:         signer,
+		Acceptor:       seederflow.NopAcceptor{},
+		Runner:         runner,
+		ConformanceFn:  ccbridge.RunStartupConformance,
+		IdlePolicy:     idle,
+		ActivityGrace:  cfg.IdlePolicy.ActivityGrace.AsDuration(),
+		HeadroomWindow: cfg.Seeder.HeadroomWindow.AsDuration(),
+		Models:         models,
+	}
+	// Tracker is late-bound via SetTracker once the final
+	// trackerclient.Client is built with this coordinator wired as
+	// OfferHandler. Use a placeholder so seederflow.New's required-
+	// field check passes — the placeholder is replaced before Run.
+	scfg.Tracker = &deferredTracker{}
+	return seederflow.New(scfg)
+}
 
-func (alwaysInactiveChecker) IsActive(_ ed25519.PublicKey) bool { return false }
-func (alwaysInactiveChecker) IsActiveByHash(_ string) bool      { return false }
+// deferredTracker is a placeholder UsageReporter handed to seederflow
+// during construction so the Tracker required-field check passes; the
+// cmd layer replaces it via Coordinator.SetTracker once the final
+// trackerclient.Client is wired with the coordinator as OfferHandler.
+// Calling its methods before SetTracker indicates a wiring bug.
+type deferredTracker struct{}
+
+func (deferredTracker) UsageReport(_ context.Context, _ *trackerclient.UsageReport) error {
+	return errors.New("deferredTracker: SetTracker was not called before use")
+}
+
+func (deferredTracker) Advertise(_ context.Context, _ *trackerclient.Advertisement) error {
+	return errors.New("deferredTracker: SetTracker was not called before use")
+}

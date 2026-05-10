@@ -9,6 +9,7 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
+	"github.com/token-bay/token-bay/plugin/internal/seederflow"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 )
 
@@ -46,6 +47,15 @@ type Deps struct {
 	// fields (timeouts, backoff, etc.) before validation. Optional.
 	TrackerClientOverrides func(*trackerclient.Config)
 
+	// TrackerClient lets the cmd layer construct the trackerclient.Client
+	// itself and hand it in. The supervisor takes ownership in either
+	// case (closes it on shutdown). When non-nil it overrides
+	// TrackerEndpoints/TrackerClientOverrides; when nil the supervisor
+	// constructs one from those fields. Optional — set this when the
+	// cmd layer needs the *Client for additional wiring (e.g.
+	// constructing SeederFlow with the same Client as its tracker).
+	TrackerClient *trackerclient.Client
+
 	// Janitor reaps stale per-client session folders under
 	// ccbridge.ExecRunner.SeederRoot. Constructed by the cmd layer
 	// with a Root, ActiveClientChecker, Grace, and Interval. Run as
@@ -67,6 +77,13 @@ type Deps struct {
 	// failed and the cmd layer chose not to construct the
 	// orchestrator at all).
 	ConsumerFlow *consumerflow.Coordinator
+
+	// SeederFlow is the seeder-side flow coordinator. When present,
+	// the supervisor wires it as the trackerclient OfferHandler and
+	// runs it as a goroutine for the lifetime of ctx. Optional —
+	// nil disables the seeder role at this process. The cmd layer
+	// constructs it and registers its ActiveClientChecker on Janitor.
+	SeederFlow *seederflow.Coordinator
 }
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps
