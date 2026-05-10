@@ -11,6 +11,13 @@ import (
 const (
 	KindConsumer = "consumer"
 	KindSeeder   = "seeder"
+	KindTransfer = "transfer"
+)
+
+// Transfer outcome values. Carried as the Outcome field on TransferRecord.
+const (
+	TransferOutcomeSuccess  = "success"
+	TransferOutcomeRejected = "rejected"
 )
 
 // Record is the sealed sum type for audit-log entries. Implementations:
@@ -44,6 +51,24 @@ type SeederRecord struct {
 	TrackerEntryHash *[32]byte
 }
 
+// TransferRecord is appended on the consumer side after a cross-region
+// credit transfer attempt. Plugin spec §8 does not yet define a dedicated
+// kind for transfers; this record captures the federation-flow fields the
+// /token-bay logs viewer needs (federation spec §4.2 + §4.3) without
+// expanding ConsumerRecord. SourceChainTipHash and SourceSeq are unset on
+// rejected attempts (no proof was minted at the source).
+type TransferRecord struct {
+	RequestID          string
+	SourceRegion       string
+	DestRegion         string
+	Amount             uint64
+	Outcome            string // TransferOutcomeSuccess | TransferOutcomeRejected
+	OutcomeReason      string // empty on success
+	SourceChainTipHash *[32]byte
+	SourceSeq          uint64
+	Timestamp          time.Time
+}
+
 // UnknownRecord wraps a JSON line whose kind discriminator was not one
 // of the values this binary understands. Read yields one rather than
 // erroring so a newer plugin's audit log stays readable by older tooling.
@@ -54,6 +79,7 @@ type UnknownRecord struct {
 
 func (ConsumerRecord) isRecord() {}
 func (SeederRecord) isRecord()   {}
+func (TransferRecord) isRecord() {}
 func (UnknownRecord) isRecord()  {}
 
 // marshalRecord renders rec as a single-line JSON object — no trailing newline.
@@ -84,6 +110,27 @@ func marshalRecord(rec Record) ([]byte, error) {
 			StartedAt:        timeStr(r.StartedAt),
 			CompletedAt:      timeStr(r.CompletedAt),
 			TrackerEntryHash: trackerHash,
+		})
+	case TransferRecord:
+		var chainHash *string
+		var seq *uint64
+		if r.SourceChainTipHash != nil {
+			s := hex.EncodeToString(r.SourceChainTipHash[:])
+			chainHash = &s
+			v := r.SourceSeq
+			seq = &v
+		}
+		return json.Marshal(transferWire{
+			Kind:               KindTransfer,
+			RequestID:          r.RequestID,
+			SourceRegion:       r.SourceRegion,
+			DestRegion:         r.DestRegion,
+			Amount:             r.Amount,
+			Outcome:            r.Outcome,
+			OutcomeReason:      r.OutcomeReason,
+			SourceChainTipHash: chainHash,
+			SourceSeq:          seq,
+			Timestamp:          timeStr(r.Timestamp),
 		})
 	case UnknownRecord:
 		return nil, fmt.Errorf("auditlog: cannot marshal UnknownRecord (kind=%q)", r.Kind)
@@ -117,6 +164,38 @@ func unmarshalRecord(line []byte) (Record, error) {
 			SeederID:      w.SeederID,
 			CostCredits:   w.CostCredits,
 			Timestamp:     ts,
+		}, nil
+	case KindTransfer:
+		var w transferWire
+		if err := json.Unmarshal(line, &w); err != nil {
+			return nil, fmt.Errorf("auditlog: decode transfer: %w", err)
+		}
+		ts, err := time.Parse(time.RFC3339Nano, w.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("auditlog: parse timestamp: %w", err)
+		}
+		var chainPtr *[32]byte
+		if w.SourceChainTipHash != nil {
+			h, err := decodeHash32(*w.SourceChainTipHash)
+			if err != nil {
+				return nil, fmt.Errorf("auditlog: parse source_chain_tip_hash: %w", err)
+			}
+			chainPtr = &h
+		}
+		var seq uint64
+		if w.SourceSeq != nil {
+			seq = *w.SourceSeq
+		}
+		return TransferRecord{
+			RequestID:          w.RequestID,
+			SourceRegion:       w.SourceRegion,
+			DestRegion:         w.DestRegion,
+			Amount:             w.Amount,
+			Outcome:            w.Outcome,
+			OutcomeReason:      w.OutcomeReason,
+			SourceChainTipHash: chainPtr,
+			SourceSeq:          seq,
+			Timestamp:          ts,
 		}, nil
 	case KindSeeder:
 		var w seederWire
@@ -179,6 +258,19 @@ type seederWire struct {
 	StartedAt        string  `json:"started_at"`
 	CompletedAt      string  `json:"completed_at"`
 	TrackerEntryHash *string `json:"tracker_entry_hash,omitempty"`
+}
+
+type transferWire struct {
+	Kind               string  `json:"kind"`
+	RequestID          string  `json:"request_id"`
+	SourceRegion       string  `json:"source_region"`
+	DestRegion         string  `json:"dest_region"`
+	Amount             uint64  `json:"amount"`
+	Outcome            string  `json:"outcome"`
+	OutcomeReason      string  `json:"outcome_reason,omitempty"`
+	SourceChainTipHash *string `json:"source_chain_tip_hash,omitempty"`
+	SourceSeq          *uint64 `json:"source_seq,omitempty"`
+	Timestamp          string  `json:"timestamp"`
 }
 
 func timeStr(t time.Time) string {
