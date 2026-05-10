@@ -53,7 +53,7 @@ func New(opts ...Option) *Server {
 		Addr:        "127.0.0.1:0",
 		Store:       NewSessionModeStore(),
 		PassThrough: NewPassThroughRouter(),
-		Network:     &NetworkRouter{},
+		Network:     &NetworkRouter{Dialer: NewTunnelDialer()},
 	}
 	for _, o := range opts {
 		o(s)
