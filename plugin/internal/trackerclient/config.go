@@ -16,10 +16,13 @@ type OfferHandler interface {
 }
 
 // SettlementHandler is the consumer-side hook for server-pushed settlement
-// requests. Returns the consumer's signature over the preimage; an error
-// causes the supervisor to reject the settlement back to the tracker.
+// requests. The handler is responsible for verifying the preimage,
+// countersigning, and calling Client.Settle to deliver the signature back
+// to the tracker via the unary Settle RPC. Returning a non-nil error tells
+// the dispatcher to suppress the SettleAck on the push stream so the
+// tracker records a refusal rather than treating no-ack as deferred consent.
 type SettlementHandler interface {
-	HandleSettlement(ctx Ctx, r *SettlementRequest) (sig []byte, err error)
+	HandleSettlement(ctx Ctx, r *SettlementRequest) error
 }
 
 // PeerExchangeHandler is the plugin-side hook for inbound federation

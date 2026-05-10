@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/token-bay/token-bay/plugin/internal/ccproxy"
+	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 )
 
@@ -25,6 +26,37 @@ type App struct {
 	closed    bool
 	startedAt time.Time
 }
+
+// consumerSettlementAdapter bridges *consumerflow.Coordinator's
+// HandleSettlement (which takes a *consumerflow.SettlementRequest) to the
+// trackerclient.SettlementHandler interface (which takes a
+// *trackerclient.SettlementRequest). The two request structs are
+// structurally identical but live in separate packages per the
+// consumerflow CLAUDE.md "mirrored types" rule — this adapter is the
+// single seam.
+type consumerSettlementAdapter struct {
+	inner *consumerflow.Coordinator
+}
+
+func (a consumerSettlementAdapter) HandleSettlement(ctx trackerclient.Ctx, r *trackerclient.SettlementRequest) error {
+	cc, ok := ctx.(context.Context)
+	if !ok {
+		cc = ctxAdapter{Ctx: ctx}
+	}
+	return a.inner.HandleSettlement(cc, &consumerflow.SettlementRequest{
+		PreimageHash: r.PreimageHash,
+		PreimageBody: r.PreimageBody,
+	})
+}
+
+// ctxAdapter satisfies context.Context from a trackerclient.Ctx whose
+// concrete type is something other than context.Context (defensive — in
+// the production path trackerclient always passes a real context.Context,
+// but the adapter remains correct if that ever changes).
+type ctxAdapter struct{ trackerclient.Ctx }
+
+func (ctxAdapter) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (ctxAdapter) Value(any) any               { return nil }
 
 // New validates deps and constructs the trackerclient + ccproxy. The
 // returned App has not started any goroutines.
@@ -44,6 +76,9 @@ func New(deps Deps) (*App, error) {
 		}
 		if deps.SeederFlow != nil {
 			tcCfg.OfferHandler = deps.SeederFlow
+		}
+		if deps.ConsumerFlow != nil {
+			tcCfg.SettlementHandler = consumerSettlementAdapter{inner: deps.ConsumerFlow}
 		}
 		if deps.TrackerClientOverrides != nil {
 			deps.TrackerClientOverrides(&tcCfg)

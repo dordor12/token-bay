@@ -46,9 +46,6 @@ func dispatchPush(ctx context.Context, stream transport.Stream, off OfferHandler
 		}
 		handleOffer(ctx, stream, off, maxFrameSize)
 	case pushTagSettlement:
-		if set == nil {
-			return
-		}
 		handleSettlement(ctx, stream, set, maxFrameSize)
 	case pushTagPeerExchange:
 		// nil handler: drop silently — by-design backward compat.
@@ -66,14 +63,15 @@ func handleSettlement(ctx context.Context, stream transport.Stream, h Settlement
 	if err := tbproto.ValidateSettlementPush(&push); err != nil {
 		return
 	}
+	if h == nil {
+		return // no handler configured: drop silently, push reads completed
+	}
 	var hash [32]byte
 	copy(hash[:], push.PreimageHash)
-	sig, err := h.HandleSettlement(ctx, &SettlementRequest{PreimageHash: hash, PreimageBody: push.PreimageBody})
-	if err != nil || sig == nil {
-		return // tracker treats no-ack as deferred consent
+	if err := h.HandleSettlement(ctx, &SettlementRequest{PreimageHash: hash, PreimageBody: push.PreimageBody}); err != nil {
+		return // refusal: no SettleAck — tracker records a dispute on timeout
 	}
+	// The countersig itself flows back through the unary Settle RPC the
+	// handler invokes; this ack only confirms receipt + intent.
 	_ = wire.Write(stream, &tbproto.SettleAck{}, maxFrameSize)
-	// The actual signature flows through the Settle RPC method; this
-	// ack confirms the consumer received the push and intends to settle.
-	_ = sig
 }
