@@ -152,12 +152,15 @@ EOF
 
 ---
 
-## Task 2: Fixture loader + first golden case (text-only single cycle)
+## Task 2: Fixture loader + first golden case + minimal Writer (combined)
+
+> **NOTE — combined task.** The original plan split this into a TDD red commit (fixtures+test) followed by a green commit (Writer impl). The repo's lefthook pre-commit hook runs `golangci-lint` + `go vet` on staged Go files, which rejects a typecheck-failing test (undefined `NewWriter`). Rather than bypass hooks (`--no-verify` is forbidden by CLAUDE.md), this task lands fixtures + test + minimal Writer in **one commit** that compiles and passes. TDD discipline is preserved — the test is still authored before the implementation, just within the same commit.
 
 This task introduces:
 - The first stream-json input fixture and its expected SSE.
 - A `loadFixture` helper.
-- A failing test (`Writer` and `NewWriter` are not yet defined).
+- A test for the text-only single-cycle case.
+- A minimal `Writer` + state machine sufficient to make the test pass (the rest of the state-machine semantics — multi-block, multi-cycle, malformed-line tolerance, synthetic close — get added incrementally in Tasks 4–8 as additional fixtures arrive; the Task 3 listing below contains the **complete** implementation, so following Task 3 verbatim already covers those later cases).
 
 **Files:**
 - Create: `plugin/internal/ssetranslate/testdata/sj/text_only_single_cycle.jsonl`
@@ -256,26 +259,35 @@ func TestTranslate_TextOnlySingleCycle(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run the test, confirm FAIL**
+- [ ] **Step 4: Add the full `Writer` implementation in `plugin/internal/ssetranslate/translate.go` (Task 3 content, applied in this same commit)**
 
-Run: `cd /Users/dor.amid/.superset/worktrees/token-bay/plugin-sse/plugin && PATH="$HOME/.local/share/mise/shims:$PATH" go test ./internal/ssetranslate/...`
-Expected: build error like `undefined: NewWriter` and `undefined: Writer`.
+See Task 3 below for the verbatim listing — copy that file into place as the next step.
 
-- [ ] **Step 5: Commit fixtures + failing test**
+- [ ] **Step 5: Run the test, confirm PASS**
+
+Run: `cd /Users/dor.amid/.superset/worktrees/token-bay/plugin-sse/plugin && PATH="$HOME/.local/share/mise/shims:$PATH" go test -race ./internal/ssetranslate/...`
+Expected: `ok`.
+
+- [ ] **Step 6: Commit fixtures + test + impl together**
 
 ```bash
 cd /Users/dor.amid/.superset/worktrees/token-bay/plugin-sse
 git add plugin/internal/ssetranslate/testdata/sj/text_only_single_cycle.jsonl \
         plugin/internal/ssetranslate/testdata/sse/text_only_single_cycle.sse \
-        plugin/internal/ssetranslate/translate_test.go
+        plugin/internal/ssetranslate/translate_test.go \
+        plugin/internal/ssetranslate/translate.go
 git commit -m "$(cat <<'EOF'
-test(plugin/ssetranslate): text-only single-cycle golden fixture
+feat(plugin/ssetranslate): Writer + state machine for text-only path
 
-Failing test that pumps a stream-json fixture through a not-yet-built
-NewWriter and asserts byte-equal SSE output. Fixtures are the canonical
-shape of one /v1/messages turn: system/init dropped, single
-content_block_start/delta×2/stop, message_delta with usage from the
-terminal result event, message_stop.
+First golden-fixture pair (text-only single cycle), the loadPair test
+helper, and the minimal io.WriteCloser implementation that drives the
+3-state machine (IDLE → IN_MESSAGE → DONE) over line-delimited
+stream-json input. Emits message_start / content_block_start /
+content_block_delta / content_block_stop / message_delta / message_stop
+in Anthropic SSE shape. result.usage is folded into message_delta.
+
+Multi-block, tool_use, multi-cycle, and tolerance fixtures land in
+subsequent commits; the implementation already supports them.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -284,7 +296,9 @@ EOF
 
 ---
 
-## Task 3: Minimal `Writer` + state machine for text-only single cycle
+## Task 3: `Writer` implementation (file content for Task 2's commit)
+
+> **NOTE — folded into Task 2.** The Writer implementation here is committed as part of Task 2's combined commit (see Task 2 note above). This section keeps the verbatim file listing for reference; do **not** create a separate commit for it.
 
 **Files:**
 - Create: `plugin/internal/ssetranslate/translate.go`
@@ -710,25 +724,9 @@ Expected: `ok`. If a byte-mismatch error appears, the most likely cause is JSON 
 Run: `cd /Users/dor.amid/.superset/worktrees/token-bay/plugin-sse/plugin && PATH="$HOME/.local/share/mise/shims:$PATH" go vet ./internal/ssetranslate/...`
 Expected: no output, exit 0.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: (no separate commit — bundled into Task 2's commit)**
 
-```bash
-cd /Users/dor.amid/.superset/worktrees/token-bay/plugin-sse
-git add plugin/internal/ssetranslate/translate.go
-git commit -m "$(cat <<'EOF'
-feat(plugin/ssetranslate): Writer + state machine for text-only path
-
-Minimal io.WriteCloser implementation that drives a 3-state machine
-(IDLE → IN_MESSAGE → DONE) over line-delimited stream-json input.
-Emits message_start/content_block_start/content_block_delta/
-content_block_stop/message_delta/message_stop in Anthropic SSE shape.
-Single text block per turn; multi-block + tool_use + multi-cycle land
-in subsequent tasks. result.usage is folded into message_delta.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
-EOF
-)"
-```
+The Writer implementation lands in the same commit as Task 2's fixtures + test. See Task 2 Step 6.
 
 ---
 
