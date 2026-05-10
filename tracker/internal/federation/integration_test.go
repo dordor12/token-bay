@@ -136,6 +136,18 @@ func (f *fakeKnownPeersArchiveExt) ListKnownPeers(_ context.Context, limit int, 
 	return append([]storage.KnownPeer(nil), f.rows[:limit]...), nil
 }
 
+func (f *fakeKnownPeersArchiveExt) UpdateKnownPeerHealth(_ context.Context, trackerID []byte, score float64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.rows {
+		if bytes.Equal(r.TrackerID, trackerID) {
+			f.rows[i].HealthScore = score
+			return nil
+		}
+	}
+	return nil
+}
+
 // twoTrackerWithKnownPeers is the slice-3 variant of twoTracker, with
 // in-memory KnownPeers archives wired so peer-exchange tests can inspect
 // merged state. Lives separately from newTwoTracker so slice-2

@@ -57,6 +57,16 @@ func (f *fakeKnownPeersArchive) ListKnownPeers(_ context.Context, limit int, _ b
 	return append([]storage.KnownPeer(nil), f.rows[:limit]...), nil
 }
 
+func (f *fakeKnownPeersArchive) UpdateKnownPeerHealth(_ context.Context, trackerID []byte, score float64) error {
+	for i, r := range f.rows {
+		if bytes.Equal(r.TrackerID, trackerID) {
+			f.rows[i].HealthScore = score
+			return nil
+		}
+	}
+	return nil // no-op on missing row
+}
+
 func mustGenKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, ids.TrackerID) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
