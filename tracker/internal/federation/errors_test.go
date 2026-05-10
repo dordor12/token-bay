@@ -17,6 +17,9 @@ func TestErrSentinelsAreDistinct(t *testing.T) {
 		federation.ErrHandshakeFailed,
 		federation.ErrEquivocation,
 		federation.ErrPeerExists,
+		federation.ErrPeerNotConnected,
+		federation.ErrTransferTimeout,
+		federation.ErrTransferDisabled,
 	}
 	for i, a := range cases {
 		for j, b := range cases {

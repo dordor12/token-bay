@@ -163,3 +163,70 @@ func TestAppendTransferOut_InsufficientBalance(t *testing.T) {
 	_, err := l.AppendTransferOut(ctx, rec)
 	require.ErrorIs(t, err, ErrInsufficientBalance)
 }
+
+func TestAppendTransferIn_HappyPath(t *testing.T) {
+	l := openTempLedger(t)
+	ctx := context.Background()
+	identityID := bytes.Repeat([]byte{0x33}, 32)
+	transferRef := bytes.Repeat([]byte{0x44}, 32)
+
+	prev, seq := nextTipForTest(t, l)
+
+	e, err := l.AppendTransferIn(ctx, TransferInRecord{
+		PrevHash:    prev,
+		Seq:         seq,
+		IdentityID:  identityID,
+		Amount:      1500,
+		Timestamp:   1714000000 + seq,
+		TransferRef: transferRef,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, e)
+
+	assert.Equal(t, tbproto.EntryKind_ENTRY_KIND_TRANSFER_IN, e.Body.Kind)
+	assert.Empty(t, e.ConsumerSig, "transfer_in has no consumer sig")
+	assert.Empty(t, e.SeederSig, "transfer_in has no seeder sig")
+	assert.NotEmpty(t, e.TrackerSig)
+
+	bal, ok, err := l.store.Balance(ctx, identityID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(1500), bal.Credits)
+}
+
+func TestAppendTransferIn_RejectsZeroAmount(t *testing.T) {
+	l := openTempLedger(t)
+	prev, seq := nextTipForTest(t, l)
+	_, err := l.AppendTransferIn(context.Background(), TransferInRecord{
+		PrevHash:    prev,
+		Seq:         seq,
+		IdentityID:  bytes.Repeat([]byte{0x33}, 32),
+		Amount:      0,
+		Timestamp:   1714000000,
+		TransferRef: bytes.Repeat([]byte{0x44}, 32),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "amount must be > 0")
+}
+
+func TestAppendTransferIn_StaleTip(t *testing.T) {
+	l := openTempLedger(t)
+	ctx := context.Background()
+	identityID := bytes.Repeat([]byte{0x33}, 32)
+
+	prev, seq := nextTipForTest(t, l)
+	rec := TransferInRecord{
+		PrevHash:    prev,
+		Seq:         seq,
+		IdentityID:  identityID,
+		Amount:      100,
+		Timestamp:   1714000000,
+		TransferRef: bytes.Repeat([]byte{0x44}, 32),
+	}
+	other := bytes.Repeat([]byte{0x22}, 32)
+	_, err := l.IssueStarterGrant(ctx, other, 50)
+	require.NoError(t, err)
+
+	_, err = l.AppendTransferIn(ctx, rec)
+	require.ErrorIs(t, err, ErrStaleTip)
+}

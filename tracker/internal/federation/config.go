@@ -33,6 +33,8 @@ type Config struct {
 	IdleTimeout      time.Duration // default 60s; passed to QUIC MaxIdleTimeout
 	RedialBase       time.Duration // default 1s; per-peer redial initial backoff
 	RedialMax        time.Duration // default 30s; per-peer redial backoff cap
+	TransferTimeout  time.Duration // default 30s; cross-region StartTransfer wait
+	IssuedProofCap   int           // default 4096; source-side replay cache LRU cap
 	Peers            []AllowlistedPeer
 }
 
@@ -45,6 +47,11 @@ type Deps struct {
 	Metrics   *Metrics
 	Logger    zerolog.Logger
 	Now       func() time.Time
+
+	// Ledger is the cross-region credit transfer hook. May be nil; when
+	// nil, Federation.StartTransfer returns ErrTransferDisabled and
+	// inbound transfer kinds are rejected with the same.
+	Ledger LedgerHooks
 }
 
 func (c Config) withDefaults() Config {
@@ -77,6 +84,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.RedialMax < c.RedialBase {
 		c.RedialMax = c.RedialBase
+	}
+	if c.TransferTimeout == 0 {
+		c.TransferTimeout = 30 * time.Second
+	}
+	if c.IssuedProofCap == 0 {
+		c.IssuedProofCap = 4096
 	}
 	return c
 }
