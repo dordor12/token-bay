@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -102,7 +103,9 @@ func TestEnrollCmd_HappyPath_PersistsKeyFingerprintAndGrant(t *testing.T) {
 	// (a) keypair exists at expected path with 0600.
 	info, err := os.Stat(keyPath)
 	require.NoError(t, err)
-	assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm(), "key file perms")
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm(), "key file perms")
+	}
 	assert.Equal(t, int64(ed25519.SeedSize), info.Size(), "key file size")
 	signer, err := identity.LoadKey(keyPath)
 	require.NoError(t, err)
