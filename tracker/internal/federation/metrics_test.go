@@ -62,3 +62,40 @@ func TestMetrics_RevocationsReceivedLabels(t *testing.T) {
 		t.Fatalf("sig = %v, want 1", got)
 	}
 }
+
+func TestMetrics_PeerExchangeEmittedCounts(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m := federation.NewMetrics(reg)
+	m.PeerExchangeEmitted()
+	m.PeerExchangeEmitted()
+	if got := testutil.ToFloat64(m.PeerExchangeEmittedCounter()); got != 2 {
+		t.Fatalf("peer_exchange_emitted_total = %v, want 2", got)
+	}
+}
+
+func TestMetrics_PeerExchangeReceivedLabels(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m := federation.NewMetrics(reg)
+	m.PeerExchangeReceived("merged")
+	m.PeerExchangeReceived("merged")
+	m.PeerExchangeReceived("peer_exchange_disabled")
+	vec := m.PeerExchangeReceivedVec()
+	if got := testutil.ToFloat64(vec.WithLabelValues("merged")); got != 2 {
+		t.Fatalf("merged = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(vec.WithLabelValues("peer_exchange_disabled")); got != 1 {
+		t.Fatalf("peer_exchange_disabled = %v, want 1", got)
+	}
+}
+
+func TestMetrics_KnownPeersSize(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m := federation.NewMetrics(reg)
+	m.SetKnownPeersSize(7)
+	if got := testutil.ToFloat64(m.KnownPeersSizeGauge()); got != 7 {
+		t.Fatalf("known_peers_size = %v, want 7", got)
+	}
+}
