@@ -10,6 +10,16 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 )
 
+// ErrTransferRefExists means a transfer entry with the same TransferRef
+// is already on the chain. v1 callers MUST treat this as an idempotent
+// success at the federation layer; the ledger never returns it today
+// (the in-memory federation caches handle within-process retries).
+// v2 will detect on-chain duplicates by an indexed lookup once
+// tracker/internal/ledger/storage adds idx_entries_ref_kind. Reserved
+// here so federation code can prepare for the v2 contract without
+// a follow-up rebase.
+var ErrTransferRefExists = errors.New("ledger: transfer ref already on chain")
+
 // TransferOutRecord is the typed input to AppendTransferOut. The caller
 // has already collected ConsumerSig over the EntryBody bytes derived from
 // these fields plus PrevHash + Seq.
