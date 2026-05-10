@@ -64,3 +64,9 @@ func TestTranslate_MalformedMidStream_Tolerated(t *testing.T) {
 	got := runFixture(t, in)
 	assert.Equal(t, string(want), string(got))
 }
+
+func TestTranslate_NoResultEvent_CloseSynthesizes(t *testing.T) {
+	in, want := loadPair(t, "no_result_event")
+	got := runFixture(t, in)
+	assert.Equal(t, string(want), string(got))
+}
