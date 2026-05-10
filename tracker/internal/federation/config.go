@@ -36,6 +36,7 @@ type Config struct {
 	TransferTimeout  time.Duration // default 30s; cross-region StartTransfer wait
 	IssuedProofCap   int           // default 4096; source-side replay cache LRU cap
 	Peers            []AllowlistedPeer
+	Health           HealthConfig
 }
 
 // Deps is the wired-in collaborators (Transport, RootSource, archive,

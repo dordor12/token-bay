@@ -19,6 +19,37 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
+func TestUpdateKnownPeerHealth_UpdatesOnlyHealthScore(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	id := bytes.Repeat([]byte{0xAA}, 32)
+	require.NoError(t, s.UpsertKnownPeer(ctx, KnownPeer{
+		TrackerID: id, Addr: "wss://a:443", LastSeen: time.Unix(100, 0),
+		RegionHint: "eu", HealthScore: 0.5, Source: "allowlist",
+	}))
+
+	require.NoError(t, s.UpdateKnownPeerHealth(ctx, id, 0.9))
+
+	got, ok, err := s.GetKnownPeer(ctx, id)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.InDelta(t, 0.9, got.HealthScore, 0.0001)
+	require.Equal(t, "wss://a:443", got.Addr)
+	require.Equal(t, "eu", got.RegionHint)
+	require.Equal(t, "allowlist", got.Source)
+	require.Equal(t, time.Unix(100, 0), got.LastSeen)
+}
+
+func TestUpdateKnownPeerHealth_NoOpOnMissingRow(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	require.NoError(t, s.UpdateKnownPeerHealth(ctx, bytes.Repeat([]byte{0xFF}, 32), 0.42))
+	_, ok, err := s.GetKnownPeer(ctx, bytes.Repeat([]byte{0xFF}, 32))
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestKnownPeers_UpsertAndGet(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

@@ -17,18 +17,28 @@ type Equivocator struct {
 	forward Forwarder
 	reg     *Registry
 	self    *ids.TrackerID
+	onFlag  func(ids.TrackerID)
 
 	selfEquiv atomic.Int64
 }
 
-func NewEquivocator(arch PeerRootArchive, fwd Forwarder, reg *Registry) *Equivocator {
-	return &Equivocator{archive: arch, forward: fwd, reg: reg}
+// NewEquivocator constructs an Equivocator. onFlag may be nil; it is
+// fired with the offender's TrackerID after a Depeer call, on both
+// locally-detected conflicts and peer-broadcast evidence about a third
+// party. Self-evidence does NOT fire onFlag (the local equivocation is
+// already metric-tracked via SelfEquivocations).
+func NewEquivocator(arch PeerRootArchive, fwd Forwarder, reg *Registry, onFlag func(ids.TrackerID)) *Equivocator {
+	if onFlag == nil {
+		onFlag = func(ids.TrackerID) {}
+	}
+	return &Equivocator{archive: arch, forward: fwd, reg: reg, onFlag: onFlag}
 }
 
 // WithSelf returns a new *Equivocator sharing the same archive, forward,
-// and registry as e but with selfID set so the receive-path can detect
-// "evidence about us" and emit the critical alert metric.
-// A fresh allocation is used to avoid copying the embedded atomic.Int64.
+// registry, and onFlag callback as e but with selfID set so the
+// receive-path can detect "evidence about us" and emit the critical
+// alert metric. A fresh allocation is used to avoid copying the
+// embedded atomic.Int64.
 func (e *Equivocator) WithSelf(selfID ids.TrackerID) *Equivocator {
 	id := selfID // capture by value before taking address
 	return &Equivocator{
@@ -36,6 +46,7 @@ func (e *Equivocator) WithSelf(selfID ids.TrackerID) *Equivocator {
 		forward: e.forward,
 		reg:     e.reg,
 		self:    &id,
+		onFlag:  e.onFlag,
 	}
 }
 
@@ -69,6 +80,7 @@ func (e *Equivocator) OnLocalConflict(ctx context.Context, incoming *fed.RootAtt
 	var offender ids.TrackerID
 	copy(offender[:], incoming.TrackerId)
 	_ = e.reg.Depeer(offender, ReasonEquivocation)
+	e.onFlag(offender)
 }
 
 // OnIncomingEvidence is called by the recv dispatch on
@@ -94,4 +106,5 @@ func (e *Equivocator) OnIncomingEvidence(ctx context.Context, env *fed.Envelope,
 	var offender ids.TrackerID
 	copy(offender[:], evi.TrackerId)
 	_ = e.reg.Depeer(offender, ReasonEquivocation)
+	e.onFlag(offender)
 }

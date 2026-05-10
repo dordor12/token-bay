@@ -57,11 +57,29 @@ func (f *fakeKnownPeersArchive) ListKnownPeers(_ context.Context, limit int, _ b
 	return append([]storage.KnownPeer(nil), f.rows[:limit]...), nil
 }
 
+func (f *fakeKnownPeersArchive) UpdateKnownPeerHealth(_ context.Context, trackerID []byte, score float64) error {
+	for i, r := range f.rows {
+		if bytes.Equal(r.TrackerID, trackerID) {
+			f.rows[i].HealthScore = score
+			return nil
+		}
+	}
+	return nil // no-op on missing row
+}
+
 func mustGenKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, ids.TrackerID) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	return pub, priv, ids.TrackerID(sha256.Sum256(pub))
+}
+
+func newTestHealth(t *testing.T) *PeerHealth {
+	t.Helper()
+	return NewPeerHealth(HealthConfig{
+		UptimeWindow: 2 * time.Hour, RevGossipWindow: 600 * time.Second,
+		RevGossipBufferSize: 16, UptimeWeight: 0.7, RevGossipWeight: 0.3,
+	}, time.Now, nil)
 }
 
 func TestPeerExchange_EmitNow_BuildsPeerExchangeFromArchive(t *testing.T) {
@@ -74,6 +92,16 @@ func TestPeerExchange_EmitNow_BuildsPeerExchangeFromArchive(t *testing.T) {
 		{TrackerID: cID, Addr: "wss://c:443", LastSeen: time.Unix(50, 0), RegionHint: "us", HealthScore: 0.7, Source: "gossip"},
 	}}
 
+	now := time.Unix(1000, 0)
+	health := NewPeerHealth(HealthConfig{
+		UptimeWindow: 2 * time.Hour, RevGossipWindow: 600 * time.Second,
+		RevGossipBufferSize: 16, UptimeWeight: 1.0, RevGossipWeight: 0.0,
+	}, func() time.Time { return now }, nil)
+
+	var bTID ids.TrackerID
+	copy(bTID[:], bID)
+	health.OnRootAttestation(bTID, now) // peer b just attested → uptime=1.0
+
 	var (
 		gotKind    fed.Kind
 		gotPayload []byte
@@ -85,16 +113,16 @@ func TestPeerExchange_EmitNow_BuildsPeerExchangeFromArchive(t *testing.T) {
 
 	emitted := 0
 	pc := newPeerExchangeCoordinator(peerExchangeCoordinatorCfg{
-		MyTrackerID:   myID,
-		MyPriv:        myPriv,
-		Archive:       arch,
-		Forward:       forward,
-		PeerConnected: func(id ids.TrackerID) bool { return bytes.Equal(id[:], bID) },
-		Now:           func() time.Time { return time.Unix(1000, 0) },
-		EmitCap:       100,
-		Invalid:       func(string) {},
-		OnEmit:        func() { emitted++ },
-		OnReceived:    func(string) {},
+		MyTrackerID: myID,
+		MyPriv:      myPriv,
+		Archive:     arch,
+		Forward:     forward,
+		Health:      health,
+		Now:         func() time.Time { return now },
+		EmitCap:     100,
+		Invalid:     func(string) {},
+		OnEmit:      func() { emitted++ },
+		OnReceived:  func(string) {},
 	})
 
 	require.NoError(t, pc.EmitNow(context.Background()))
@@ -111,36 +139,17 @@ func TestPeerExchange_EmitNow_BuildsPeerExchangeFromArchive(t *testing.T) {
 	}
 	bEntry := byID[string(bID)]
 	require.NotNil(t, bEntry)
-	require.Equal(t, "wss://b:443", bEntry.Addr)
-	require.InDelta(t, 1.0, bEntry.HealthScore, 0.0001, "allowlist + connected → 1.0")
+	require.InDelta(t, 1.0, bEntry.HealthScore, 0.0001, "peer b just attested → 1.0")
 
 	cEntry := byID[string(cID)]
 	require.NotNil(t, cEntry)
-	require.Equal(t, "wss://c:443", cEntry.Addr)
-	require.InDelta(t, 0.7, cEntry.HealthScore, 0.0001, "gossip → verbatim")
-}
+	require.InDelta(t, 0.0, cEntry.HealthScore, 0.0001, "peer c never attested → 0.0")
 
-func TestPeerExchange_EmitNow_AllowlistDisconnectedScores0_5(t *testing.T) {
-	_, myPriv, myID := mustGenKeypair(t)
-	bID := bytes.Repeat([]byte{0xBB}, 32)
-	arch := &fakeKnownPeersArchive{rows: []storage.KnownPeer{
-		{TrackerID: bID, Addr: "wss://b:443", LastSeen: time.Unix(100, 0), HealthScore: 0.0, Source: "allowlist"},
-	}}
-	var gotPayload []byte
-	pc := newPeerExchangeCoordinator(peerExchangeCoordinatorCfg{
-		MyTrackerID:   myID,
-		MyPriv:        myPriv,
-		Archive:       arch,
-		Forward:       func(_ context.Context, _ fed.Kind, p []byte) { gotPayload = p },
-		PeerConnected: func(_ ids.TrackerID) bool { return false },
-		Now:           func() time.Time { return time.Unix(1000, 0) },
-		EmitCap:       100,
-		Invalid:       func(string) {}, OnEmit: func() {}, OnReceived: func(string) {},
-	})
-	require.NoError(t, pc.EmitNow(context.Background()))
-	var msg fed.PeerExchange
-	require.NoError(t, proto.Unmarshal(gotPayload, &msg))
-	require.InDelta(t, 0.5, msg.Peers[0].HealthScore, 0.0001)
+	// Write-through: archive row's health_score has been replaced.
+	bRow, _, _ := arch.GetKnownPeer(context.Background(), bID)
+	require.InDelta(t, 1.0, bRow.HealthScore, 0.0001)
+	cRow, _, _ := arch.GetKnownPeer(context.Background(), cID)
+	require.InDelta(t, 0.0, cRow.HealthScore, 0.0001)
 }
 
 func TestPeerExchange_OnIncoming_UpsertsAllAndForwards(t *testing.T) {
@@ -160,16 +169,16 @@ func TestPeerExchange_OnIncoming_UpsertsAllAndForwards(t *testing.T) {
 
 	forwardCalls := 0
 	pc := newPeerExchangeCoordinator(peerExchangeCoordinatorCfg{
-		MyTrackerID:   myID,
-		MyPriv:        myPriv,
-		Archive:       arch,
-		Forward:       func(_ context.Context, _ fed.Kind, _ []byte) { forwardCalls++ },
-		PeerConnected: func(_ ids.TrackerID) bool { return false },
-		Now:           func() time.Time { return time.Unix(1000, 0) },
-		EmitCap:       100,
-		Invalid:       func(string) {},
-		OnEmit:        func() {},
-		OnReceived:    func(_ string) {},
+		MyTrackerID: myID,
+		MyPriv:      myPriv,
+		Archive:     arch,
+		Forward:     func(_ context.Context, _ fed.Kind, _ []byte) { forwardCalls++ },
+		Health:      newTestHealth(t),
+		Now:         func() time.Time { return time.Unix(1000, 0) },
+		EmitCap:     100,
+		Invalid:     func(string) {},
+		OnEmit:      func() {},
+		OnReceived:  func(_ string) {},
 	})
 
 	env := &fed.Envelope{Kind: fed.Kind_KIND_PEER_EXCHANGE, Payload: payload}
@@ -195,14 +204,14 @@ func TestPeerExchange_OnIncoming_SkipsSelfEntry(t *testing.T) {
 	}
 	payload, _ := proto.Marshal(msg)
 	pc := newPeerExchangeCoordinator(peerExchangeCoordinatorCfg{
-		MyTrackerID:   myID,
-		MyPriv:        myPriv,
-		Archive:       arch,
-		Forward:       func(_ context.Context, _ fed.Kind, _ []byte) {},
-		PeerConnected: func(_ ids.TrackerID) bool { return false },
-		Now:           func() time.Time { return time.Unix(1000, 0) },
-		EmitCap:       100,
-		Invalid:       func(string) {}, OnEmit: func() {}, OnReceived: func(string) {},
+		MyTrackerID: myID,
+		MyPriv:      myPriv,
+		Archive:     arch,
+		Forward:     func(_ context.Context, _ fed.Kind, _ []byte) {},
+		Health:      newTestHealth(t),
+		Now:         func() time.Time { return time.Unix(1000, 0) },
+		EmitCap:     100,
+		Invalid:     func(string) {}, OnEmit: func() {}, OnReceived: func(string) {},
 	})
 	pc.OnIncoming(context.Background(), &fed.Envelope{Payload: payload}, msg)
 

@@ -38,6 +38,12 @@ type revocationCoordinatorCfg struct {
 	// OnReceived is bumped on every inbound resolution. outcome ∈
 	// {archived, sig, shape, unknown_issuer, disabled, storage_err, canonical}.
 	OnReceived func(outcome string)
+
+	// OnRevocationObserved is fired after an incoming revocation passes
+	// shape + issuer + sig + archive checks. The peer-health subsystem
+	// uses it to update the issuer's revocation-gossip-delay sample.
+	// May be nil; defaulted to a no-op.
+	OnRevocationObserved func(issuer ids.TrackerID, revokedAt, recvAt time.Time)
 }
 
 type revocationCoordinator struct {
@@ -56,6 +62,9 @@ func newRevocationCoordinator(cfg revocationCoordinatorCfg) *revocationCoordinat
 	}
 	if cfg.OnReceived == nil {
 		cfg.OnReceived = func(string) {}
+	}
+	if cfg.OnRevocationObserved == nil {
+		cfg.OnRevocationObserved = func(ids.TrackerID, time.Time, time.Time) {}
 	}
 	return &revocationCoordinator{cfg: cfg}
 }
@@ -182,6 +191,12 @@ func (rc *revocationCoordinator) OnIncoming(ctx context.Context, env *fed.Envelo
 		rc.cfg.OnReceived("storage_err")
 		return
 	}
+	var issuer ids.TrackerID
+	copy(issuer[:], rev.TrackerId)
+	rc.cfg.OnRevocationObserved(issuer,
+		time.Unix(int64(rev.RevokedAt), 0), //nolint:gosec // G115 — bounded by validator
+		rc.cfg.Now(),
+	)
 	rc.cfg.Forward(ctx, fed.Kind_KIND_REVOCATION, env.Payload)
 	rc.cfg.OnReceived("archived")
 }

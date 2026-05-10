@@ -148,6 +148,13 @@ func newRunCmd() *cobra.Command {
 				RedialBase:       time.Duration(cfg.Federation.RedialBaseS) * time.Second,
 				RedialMax:        time.Duration(cfg.Federation.RedialMaxS) * time.Second,
 				Peers:            fedPeers,
+				Health: federation.HealthConfig{
+					UptimeWindow:        time.Duration(cfg.Federation.Health.UptimeWindowS) * time.Second,
+					RevGossipWindow:     time.Duration(cfg.Federation.Health.RevGossipWindowS) * time.Second,
+					RevGossipBufferSize: cfg.Federation.Health.RevGossipBufferSize,
+					UptimeWeight:        cfg.Federation.Health.UptimeWeight,
+					RevGossipWeight:     cfg.Federation.Health.RevGossipWeight,
+				},
 			}, federation.Deps{
 				Transport:         fedTransport,
 				RootSrc:           ledgerRootSourceAdapter{led: led},

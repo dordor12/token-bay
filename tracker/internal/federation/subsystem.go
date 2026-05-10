@@ -29,6 +29,7 @@ type Federation struct {
 	transfer     *transferCoordinator
 	revocation   *revocationCoordinator
 	peerExchange *peerExchangeCoordinator
+	health       *PeerHealth
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -39,6 +40,13 @@ type Federation struct {
 	mu           sync.Mutex
 	peers        map[ids.TrackerID]*Peer // active recv goroutines
 	closed       bool
+
+	// inflightAttaches tracks attachPeerLocked calls that have passed the
+	// closed-check and are still running pe.Start. Close waits on this
+	// before iterating f.peers and calling p.Stop, which prevents
+	// p.Stop's stopOnce from racing p.Start's startOnce on memory that
+	// the race detector may have repurposed from a prior Peer.
+	inflightAttaches sync.WaitGroup
 }
 
 // Open constructs and starts the federation subsystem. It returns a ready
@@ -80,8 +88,10 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		}
 	}
 
+	health := NewPeerHealth(cfg.Health, dep.Now, dep.Metrics.HealthScoreComputed)
+
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
-	equiv := NewEquivocator(dep.Archive, forward, reg).WithSelf(cfg.MyTrackerID)
+	equiv := NewEquivocator(dep.Archive, forward, reg, health.OnEquivocation).WithSelf(cfg.MyTrackerID)
 	apply.RegisterEquivocator(equiv.OnLocalConflict)
 
 	pub := NewPublisher(dep.RootSrc, forward, cfg.MyTrackerID)
@@ -117,10 +127,11 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 			}
 			return info.PubKey, true
 		},
-		Now:        dep.Now,
-		Invalid:    func(name string) { dep.Metrics.InvalidFrames(name) },
-		OnEmit:     dep.Metrics.RevocationsEmitted,
-		OnReceived: dep.Metrics.RevocationsReceived,
+		Now:                  dep.Now,
+		Invalid:              func(name string) { dep.Metrics.InvalidFrames(name) },
+		OnEmit:               dep.Metrics.RevocationsEmitted,
+		OnReceived:           dep.Metrics.RevocationsReceived,
+		OnRevocationObserved: health.OnRevocation,
 	})
 
 	var peerExchange *peerExchangeCoordinator
@@ -130,12 +141,12 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 			MyPriv:      cfg.MyPriv,
 			Archive:     dep.KnownPeers,
 			Forward:     forward,
+			Health:      health,
 			Now:         dep.Now,
 			EmitCap:     defaultPeerExchangeEmitCap,
 			Invalid:     func(name string) { dep.Metrics.InvalidFrames(name) },
 			OnEmit:      dep.Metrics.PeerExchangeEmitted,
 			OnReceived:  dep.Metrics.PeerExchangeReceived,
-			// PeerConnected is patched on f below — registry is owned by f.
 		})
 	}
 
@@ -144,17 +155,16 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		reg: reg, dedupe: dedupe, gossip: gossip,
 		apply: apply, equiv: equiv, pub: pub,
 		transfer: transfer, revocation: revocation, peerExchange: peerExchange,
-		peers: make(map[ids.TrackerID]*Peer),
+		health: health,
+		peers:  make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
 	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
 		return f.SendToPeer(ctx, peer, kind, payload)
 	}
-	if peerExchange != nil {
-		peerExchange.cfg.PeerConnected = func(id ids.TrackerID) bool {
-			return f.reg.IsActive(id)
-		}
-	}
+	// PeerConnected closure removed in slice 5 — peer-exchange now uses
+	// *PeerHealth.Score (wired via cfg.Health below) instead of the
+	// allowlist-connected placeholder.
 
 	// Add operator-allowlisted peers in pending state. Dialing them is
 	// kicked off below; this slice initializes their entries so they
@@ -243,12 +253,18 @@ func (f *Federation) Peers() []PeerInfo { return f.reg.All() }
 
 // Depeer removes a peer from the active set.
 func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
+	// Snapshot + delete under f.mu, then Stop outside the lock: p.Stop
+	// blocks on wg.Wait, and recvLoop may need f.mu via ActivePeers, so
+	// holding f.mu through Stop deadlocks.
 	f.mu.Lock()
-	if p, ok := f.peers[id]; ok {
-		p.Stop()
+	p, ok := f.peers[id]
+	if ok {
 		delete(f.peers, id)
 	}
 	f.mu.Unlock()
+	if ok {
+		p.Stop()
+	}
 	return f.reg.Depeer(id, reason)
 }
 
@@ -348,6 +364,12 @@ func (f *Federation) AddPeer(p AllowlistedPeer) error {
 
 // Close shuts down the subsystem, stopping all peer goroutines and closing
 // the transport. Safe to call more than once.
+//
+// Lock discipline: p.Stop blocks on wg.Wait until recvLoop exits, and
+// recvLoop may itself need f.mu via gossip.Forward → ActivePeers. So
+// Close snapshots the peer set under the lock, releases the lock, then
+// iterates p.Stop. Without that, a recvLoop mid-dispatch deadlocks
+// against Close holding f.mu.
 func (f *Federation) Close() error {
 	f.mu.Lock()
 	if f.closed {
@@ -355,11 +377,17 @@ func (f *Federation) Close() error {
 		return nil
 	}
 	f.closed = true
-	for _, p := range f.peers {
-		p.Stop()
-	}
+	snap := f.peers
 	f.peers = nil
 	f.mu.Unlock()
+	// Wait for any attachPeerLocked that already passed the closed-check
+	// to finish pe.Start. This serializes startOnce before stopOnce so
+	// the race detector can't (mis)flag them as concurrent on memory
+	// recycled from a prior Peer.
+	f.inflightAttaches.Wait()
+	for _, p := range snap {
+		p.Stop()
+	}
 	if f.listenCancel != nil {
 		f.listenCancel()
 	}
@@ -397,6 +425,12 @@ func (f *Federation) attachPeer(res HandshakeResult, c PeerConn) {
 // recycled and concurrently accessed by Transport.Close's pair-Close
 // path during test teardown — the race detector flags this even though
 // the accesses are logically disjoint.
+//
+// pe.Start MUST stay outside f.mu: recvLoop fires synchronous dispatch
+// callbacks that re-enter the gossip→registry path which itself
+// acquires registry mutexes, and Close holds f.mu while calling
+// p.Stop → p.wg.Wait, so any cross-locking deadlocks if Start is
+// nested under f.mu.
 func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	f.mu.Lock()
 	if f.closed {
@@ -410,8 +444,14 @@ func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	pe := NewPeerForTest(c, dispatch)
 	f.peers[res.PeerTrackerID] = pe
 	_ = f.reg.Update(PeerInfo{TrackerID: res.PeerTrackerID, PubKey: res.PeerPubKey, Addr: c.RemoteAddr(), State: PeerStateSteady, Conn: c})
+	// Register the attach as in-flight before releasing the lock, so a
+	// concurrent Close() that observes closed=false here will wait on
+	// inflightAttaches before calling p.Stop on this pe. Done is fired
+	// after pe.Start completes spawning the recv goroutine.
+	f.inflightAttaches.Add(1)
 	f.mu.Unlock()
 	pe.Start(context.Background())
+	f.inflightAttaches.Done()
 	return pe
 }
 
@@ -441,6 +481,7 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.dep.Metrics.RootAttestationsReceived("archived")
+			f.health.OnRootAttestation(peerID, f.dep.Now())
 		case fed.Kind_KIND_EQUIVOCATION_EVIDENCE:
 			f.equiv.OnIncomingEvidence(context.Background(), env, peerID)
 		case fed.Kind_KIND_PING, fed.Kind_KIND_PONG:
