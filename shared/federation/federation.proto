@@ -70,3 +70,34 @@ message EquivocationEvidence {
 
 message Ping { uint64 nonce = 1; }
 message Pong { uint64 nonce = 1; }
+
+message TransferProofRequest {
+  bytes  source_tracker_id = 1;
+  bytes  dest_tracker_id   = 2;
+  bytes  identity_id       = 3;
+  uint64 amount            = 4;
+  bytes  nonce             = 5;
+  bytes  consumer_sig      = 6;
+  bytes  consumer_pub      = 7;
+  uint64 timestamp         = 8;
+}
+
+message TransferProof {
+  bytes  source_tracker_id     = 1;
+  bytes  dest_tracker_id       = 2;
+  bytes  identity_id           = 3;
+  uint64 amount                = 4;
+  bytes  nonce                 = 5;
+  bytes  source_chain_tip_hash = 6;
+  uint64 source_seq            = 7;
+  uint64 timestamp             = 8;
+  bytes  source_tracker_sig    = 9;
+}
+
+message TransferApplied {
+  bytes  source_tracker_id = 1;
+  bytes  dest_tracker_id   = 2;
+  bytes  nonce             = 3;
+  uint64 timestamp         = 4;
+  bytes  dest_tracker_sig  = 5;
+}

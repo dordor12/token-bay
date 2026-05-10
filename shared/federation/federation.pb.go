@@ -623,6 +623,290 @@ func (x *Pong) GetNonce() uint64 {
 	return 0
 }
 
+type TransferProofRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SourceTrackerId []byte                 `protobuf:"bytes,1,opt,name=source_tracker_id,json=sourceTrackerId,proto3" json:"source_tracker_id,omitempty"`
+	DestTrackerId   []byte                 `protobuf:"bytes,2,opt,name=dest_tracker_id,json=destTrackerId,proto3" json:"dest_tracker_id,omitempty"`
+	IdentityId      []byte                 `protobuf:"bytes,3,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"`
+	Amount          uint64                 `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	Nonce           []byte                 `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	ConsumerSig     []byte                 `protobuf:"bytes,6,opt,name=consumer_sig,json=consumerSig,proto3" json:"consumer_sig,omitempty"`
+	ConsumerPub     []byte                 `protobuf:"bytes,7,opt,name=consumer_pub,json=consumerPub,proto3" json:"consumer_pub,omitempty"`
+	Timestamp       uint64                 `protobuf:"varint,8,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *TransferProofRequest) Reset() {
+	*x = TransferProofRequest{}
+	mi := &file_federation_federation_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferProofRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferProofRequest) ProtoMessage() {}
+
+func (x *TransferProofRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferProofRequest.ProtoReflect.Descriptor instead.
+func (*TransferProofRequest) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *TransferProofRequest) GetSourceTrackerId() []byte {
+	if x != nil {
+		return x.SourceTrackerId
+	}
+	return nil
+}
+
+func (x *TransferProofRequest) GetDestTrackerId() []byte {
+	if x != nil {
+		return x.DestTrackerId
+	}
+	return nil
+}
+
+func (x *TransferProofRequest) GetIdentityId() []byte {
+	if x != nil {
+		return x.IdentityId
+	}
+	return nil
+}
+
+func (x *TransferProofRequest) GetAmount() uint64 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *TransferProofRequest) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *TransferProofRequest) GetConsumerSig() []byte {
+	if x != nil {
+		return x.ConsumerSig
+	}
+	return nil
+}
+
+func (x *TransferProofRequest) GetConsumerPub() []byte {
+	if x != nil {
+		return x.ConsumerPub
+	}
+	return nil
+}
+
+func (x *TransferProofRequest) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+type TransferProof struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	SourceTrackerId    []byte                 `protobuf:"bytes,1,opt,name=source_tracker_id,json=sourceTrackerId,proto3" json:"source_tracker_id,omitempty"`
+	DestTrackerId      []byte                 `protobuf:"bytes,2,opt,name=dest_tracker_id,json=destTrackerId,proto3" json:"dest_tracker_id,omitempty"`
+	IdentityId         []byte                 `protobuf:"bytes,3,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"`
+	Amount             uint64                 `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	Nonce              []byte                 `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	SourceChainTipHash []byte                 `protobuf:"bytes,6,opt,name=source_chain_tip_hash,json=sourceChainTipHash,proto3" json:"source_chain_tip_hash,omitempty"`
+	SourceSeq          uint64                 `protobuf:"varint,7,opt,name=source_seq,json=sourceSeq,proto3" json:"source_seq,omitempty"`
+	Timestamp          uint64                 `protobuf:"varint,8,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	SourceTrackerSig   []byte                 `protobuf:"bytes,9,opt,name=source_tracker_sig,json=sourceTrackerSig,proto3" json:"source_tracker_sig,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *TransferProof) Reset() {
+	*x = TransferProof{}
+	mi := &file_federation_federation_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferProof) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferProof) ProtoMessage() {}
+
+func (x *TransferProof) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferProof.ProtoReflect.Descriptor instead.
+func (*TransferProof) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *TransferProof) GetSourceTrackerId() []byte {
+	if x != nil {
+		return x.SourceTrackerId
+	}
+	return nil
+}
+
+func (x *TransferProof) GetDestTrackerId() []byte {
+	if x != nil {
+		return x.DestTrackerId
+	}
+	return nil
+}
+
+func (x *TransferProof) GetIdentityId() []byte {
+	if x != nil {
+		return x.IdentityId
+	}
+	return nil
+}
+
+func (x *TransferProof) GetAmount() uint64 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *TransferProof) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *TransferProof) GetSourceChainTipHash() []byte {
+	if x != nil {
+		return x.SourceChainTipHash
+	}
+	return nil
+}
+
+func (x *TransferProof) GetSourceSeq() uint64 {
+	if x != nil {
+		return x.SourceSeq
+	}
+	return 0
+}
+
+func (x *TransferProof) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *TransferProof) GetSourceTrackerSig() []byte {
+	if x != nil {
+		return x.SourceTrackerSig
+	}
+	return nil
+}
+
+type TransferApplied struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SourceTrackerId []byte                 `protobuf:"bytes,1,opt,name=source_tracker_id,json=sourceTrackerId,proto3" json:"source_tracker_id,omitempty"`
+	DestTrackerId   []byte                 `protobuf:"bytes,2,opt,name=dest_tracker_id,json=destTrackerId,proto3" json:"dest_tracker_id,omitempty"`
+	Nonce           []byte                 `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Timestamp       uint64                 `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	DestTrackerSig  []byte                 `protobuf:"bytes,5,opt,name=dest_tracker_sig,json=destTrackerSig,proto3" json:"dest_tracker_sig,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *TransferApplied) Reset() {
+	*x = TransferApplied{}
+	mi := &file_federation_federation_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferApplied) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferApplied) ProtoMessage() {}
+
+func (x *TransferApplied) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferApplied.ProtoReflect.Descriptor instead.
+func (*TransferApplied) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TransferApplied) GetSourceTrackerId() []byte {
+	if x != nil {
+		return x.SourceTrackerId
+	}
+	return nil
+}
+
+func (x *TransferApplied) GetDestTrackerId() []byte {
+	if x != nil {
+		return x.DestTrackerId
+	}
+	return nil
+}
+
+func (x *TransferApplied) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *TransferApplied) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *TransferApplied) GetDestTrackerSig() []byte {
+	if x != nil {
+		return x.DestTrackerSig
+	}
+	return nil
+}
+
 var File_federation_federation_proto protoreflect.FileDescriptor
 
 const file_federation_federation_proto_rawDesc = "" +
@@ -667,7 +951,35 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x04Ping\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\x1c\n" +
 	"\x04Pong\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\x04R\x05nonce*\xa0\x02\n" +
+	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\x9d\x02\n" +
+	"\x14TransferProofRequest\x12*\n" +
+	"\x11source_tracker_id\x18\x01 \x01(\fR\x0fsourceTrackerId\x12&\n" +
+	"\x0fdest_tracker_id\x18\x02 \x01(\fR\rdestTrackerId\x12\x1f\n" +
+	"\videntity_id\x18\x03 \x01(\fR\n" +
+	"identityId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\x04R\x06amount\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\fR\x05nonce\x12!\n" +
+	"\fconsumer_sig\x18\x06 \x01(\fR\vconsumerSig\x12!\n" +
+	"\fconsumer_pub\x18\a \x01(\fR\vconsumerPub\x12\x1c\n" +
+	"\ttimestamp\x18\b \x01(\x04R\ttimestamp\"\xd0\x02\n" +
+	"\rTransferProof\x12*\n" +
+	"\x11source_tracker_id\x18\x01 \x01(\fR\x0fsourceTrackerId\x12&\n" +
+	"\x0fdest_tracker_id\x18\x02 \x01(\fR\rdestTrackerId\x12\x1f\n" +
+	"\videntity_id\x18\x03 \x01(\fR\n" +
+	"identityId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\x04R\x06amount\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\fR\x05nonce\x121\n" +
+	"\x15source_chain_tip_hash\x18\x06 \x01(\fR\x12sourceChainTipHash\x12\x1d\n" +
+	"\n" +
+	"source_seq\x18\a \x01(\x04R\tsourceSeq\x12\x1c\n" +
+	"\ttimestamp\x18\b \x01(\x04R\ttimestamp\x12,\n" +
+	"\x12source_tracker_sig\x18\t \x01(\fR\x10sourceTrackerSig\"\xc3\x01\n" +
+	"\x0fTransferApplied\x12*\n" +
+	"\x11source_tracker_id\x18\x01 \x01(\fR\x0fsourceTrackerId\x12&\n" +
+	"\x0fdest_tracker_id\x18\x02 \x01(\fR\rdestTrackerId\x12\x14\n" +
+	"\x05nonce\x18\x03 \x01(\fR\x05nonce\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\x04R\ttimestamp\x12(\n" +
+	"\x10dest_tracker_sig\x18\x05 \x01(\fR\x0edestTrackerSig*\xa0\x02\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -698,7 +1010,7 @@ func file_federation_federation_proto_rawDescGZIP() []byte {
 
 var (
 	file_federation_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 9)
+	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 12)
 	file_federation_federation_proto_goTypes   = []any{
 		(Kind)(0),                    // 0: tokenbay.federation.v1.Kind
 		(*Envelope)(nil),             // 1: tokenbay.federation.v1.Envelope
@@ -710,6 +1022,9 @@ var (
 		(*EquivocationEvidence)(nil), // 7: tokenbay.federation.v1.EquivocationEvidence
 		(*Ping)(nil),                 // 8: tokenbay.federation.v1.Ping
 		(*Pong)(nil),                 // 9: tokenbay.federation.v1.Pong
+		(*TransferProofRequest)(nil), // 10: tokenbay.federation.v1.TransferProofRequest
+		(*TransferProof)(nil),        // 11: tokenbay.federation.v1.TransferProof
+		(*TransferApplied)(nil),      // 12: tokenbay.federation.v1.TransferApplied
 	}
 )
 var file_federation_federation_proto_depIdxs = []int32{
@@ -732,7 +1047,7 @@ func file_federation_federation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_federation_federation_proto_rawDesc), len(file_federation_federation_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
