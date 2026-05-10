@@ -94,6 +94,13 @@ func (a *App) Run(ctx context.Context) error {
 		go a.deps.Janitor.Run(ctx)
 	}
 
+	// ConsumerFlow is optional. When non-nil, run its periodic
+	// network-mode reaper alongside other subsystems. Run returns nil
+	// on ctx-cancel; we ignore the return for parity with Janitor.
+	if a.deps.ConsumerFlow != nil {
+		go func() { _ = a.deps.ConsumerFlow.Run(ctx) }()
+	}
+
 	<-ctx.Done()
 
 	return a.shutdown()

@@ -7,6 +7,7 @@ import (
 
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
+	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 )
@@ -55,6 +56,17 @@ type Deps struct {
 	// layer constructs it and wires it as the Checker so reaping
 	// follows live connection state.
 	Janitor *ccbridge.Janitor
+
+	// ConsumerFlow is the consumer-side fallback orchestrator (plugin
+	// spec §5). Implements hooks.Sink so the cmd layer can route
+	// StopFailure / SessionStart / SessionEnd / UserPromptSubmit
+	// events into it. When non-nil, sidecar.Run launches its periodic
+	// network-mode reaper as a goroutine. Optional — nil disables
+	// consumer fallback for this sidecar process (e.g. seeder-only
+	// deployments, or when the §5.3 runtime compatibility probe
+	// failed and the cmd layer chose not to construct the
+	// orchestrator at all).
+	ConsumerFlow *consumerflow.Coordinator
 }
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps
