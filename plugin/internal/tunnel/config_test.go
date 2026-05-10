@@ -83,3 +83,29 @@ func TestConfig_Validate_DefaultsNowToTimeNow(t *testing.T) {
 	}
 	assert.Less(t, gap, time.Second)
 }
+
+func TestConfig_RendezvousDefaults(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.Rendezvous = noopRendezvous{}
+	cfg.applyDefaults()
+	require.NoError(t, cfg.validate())
+	assert.Equal(t, defaultHolePunchTimeout, cfg.HolePunchTimeout)
+}
+
+func TestConfig_RendezvousNilSessionIDOK(t *testing.T) {
+	// SessionID is allowed to be all-zero; it is the caller's responsibility
+	// to set it to the brokered request id when relay fallback might fire.
+	cfg := validConfig(t)
+	cfg.Rendezvous = noopRendezvous{}
+	cfg.HolePunchTimeout = 1 * time.Second
+	cfg.applyDefaults()
+	require.NoError(t, cfg.validate())
+}
+
+func TestConfig_HolePunchTimeoutNegative(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.HolePunchTimeout = -1 * time.Second
+	err := cfg.validate()
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidConfig))
+}
