@@ -52,3 +52,9 @@ func TestTranslate_ToolUseThenText(t *testing.T) {
 	got := runFixture(t, in)
 	assert.Equal(t, string(want), string(got))
 }
+
+func TestTranslate_MultiCycle_Collapsed(t *testing.T) {
+	in, want := loadPair(t, "multi_cycle_collapsed")
+	got := runFixture(t, in)
+	assert.Equal(t, string(want), string(got))
+}
