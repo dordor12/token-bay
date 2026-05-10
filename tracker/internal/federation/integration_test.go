@@ -2,14 +2,17 @@ package federation_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 
+	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
@@ -259,6 +262,205 @@ func TestIntegration_QUIC_RootAttestation_AB(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("B never archived A's root over QUIC (steady state was reached)")
+}
+
+// fakeIntegrationLedger implements federation.LedgerHooks for end-to-end
+// integration tests. Records every call and returns the configured
+// outputs. Concurrency-safe; the source-side and destination-side test
+// fixtures hold their own instances.
+type fakeIntegrationLedger struct {
+	mu sync.Mutex
+
+	outCalls []federation.TransferOutHookIn
+	inCalls  []federation.TransferInHookIn
+
+	outResult federation.TransferOutHookOut
+	outErr    error
+	inErr     error
+}
+
+func (f *fakeIntegrationLedger) AppendTransferOut(_ context.Context, in federation.TransferOutHookIn) (federation.TransferOutHookOut, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.outCalls = append(f.outCalls, in)
+	return f.outResult, f.outErr
+}
+
+func (f *fakeIntegrationLedger) AppendTransferIn(_ context.Context, in federation.TransferInHookIn) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inCalls = append(f.inCalls, in)
+	return f.inErr
+}
+
+func (f *fakeIntegrationLedger) snapshotInCalls() []federation.TransferInHookIn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]federation.TransferInHookIn, len(f.inCalls))
+	copy(out, f.inCalls)
+	return out
+}
+
+func (f *fakeIntegrationLedger) snapshotOutCalls() []federation.TransferOutHookIn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]federation.TransferOutHookIn, len(f.outCalls))
+	copy(out, f.outCalls)
+	return out
+}
+
+// newTwoTrackerWithLedgers mirrors newTwoTracker but plumbs LedgerHooks
+// into both Federations' Deps.
+func newTwoTrackerWithLedgers(t *testing.T, aLedger, bLedger federation.LedgerHooks) *twoTracker {
+	t.Helper()
+	a := newPeerCfg(t)
+	b := newPeerCfg(t)
+	hub := federation.NewInprocHub()
+	trA := federation.NewInprocTransport(hub, "A", a.pub, a.priv)
+	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
+
+	archA, archB := newFakeArchive(), newFakeArchive()
+	srcA := &fakeRootSrc{ok: false}
+	srcB := &fakeRootSrc{ok: false}
+
+	aID := ids.TrackerID(sha256.Sum256(a.pub))
+	bID := ids.TrackerID(sha256.Sum256(b.pub))
+
+	aFed, err := federation.Open(federation.Config{
+		MyTrackerID: aID,
+		MyPriv:      a.priv,
+		Peers:       []federation.AllowlistedPeer{{TrackerID: bID, PubKey: b.pub, Addr: "B"}},
+	}, federation.Deps{
+		Transport: trA, RootSrc: srcA, Archive: archA, Ledger: aLedger,
+		Metrics: federation.NewMetrics(prometheus.NewRegistry()),
+		Logger:  zerolog.Nop(), Now: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bFed, err := federation.Open(federation.Config{
+		MyTrackerID: bID,
+		MyPriv:      b.priv,
+		Peers:       []federation.AllowlistedPeer{{TrackerID: aID, PubKey: a.pub, Addr: "A"}},
+	}, federation.Deps{
+		Transport: trB, RootSrc: srcB, Archive: archB, Ledger: bLedger,
+		Metrics: federation.NewMetrics(prometheus.NewRegistry()),
+		Logger:  zerolog.Nop(), Now: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = aFed.Close()
+		_ = bFed.Close()
+	})
+	return &twoTracker{
+		hub: hub, a: aFed, b: bFed,
+		archA: archA, archB: archB, srcA: srcA, srcB: srcB,
+		aID: aID, bID: bID,
+	}
+}
+
+func TestIntegration_CrossRegionTransfer_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	aLedger := &fakeIntegrationLedger{
+		outResult: federation.TransferOutHookOut{
+			ChainTipHash: [32]byte{
+				0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB,
+				0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB,
+				0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB,
+				0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB,
+			},
+			Seq: 11,
+		},
+	}
+	bLedger := &fakeIntegrationLedger{}
+
+	tt := newTwoTrackerWithLedgers(t, aLedger, bLedger)
+
+	// Wait until B sees A as steady (peering handshake completed).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ok := false
+		for _, p := range tt.b.Peers() {
+			if p.State == federation.PeerStateSteady {
+				ok = true
+				break
+			}
+		}
+		if ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	conPub, conPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityID := b(32, 0x44)
+	var nonce [32]byte
+	for i := range nonce {
+		nonce[i] = 0x55
+	}
+
+	aIDBytes := tt.aID.Bytes()
+	bIDBytes := tt.bID.Bytes()
+	req := &fed.TransferProofRequest{
+		SourceTrackerId: aIDBytes[:],
+		DestTrackerId:   bIDBytes[:],
+		IdentityId:      identityID,
+		Amount:          1500,
+		Nonce:           nonce[:],
+		ConsumerPub:     conPub,
+		Timestamp:       1714000000,
+	}
+	canonical, err := fed.CanonicalTransferProofRequestPreSig(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerSig := ed25519.Sign(conPriv, canonical)
+
+	// Issue StartTransfer on B (destination, asking A for the proof).
+	var idArr [32]byte
+	copy(idArr[:], identityID)
+	out, err := tt.b.StartTransfer(context.Background(), federation.StartTransferInput{
+		SourceTrackerID: tt.aID,
+		IdentityID:      ids.IdentityID(idArr),
+		Amount:          1500,
+		Nonce:           nonce,
+		ConsumerSig:     consumerSig,
+		ConsumerPub:     conPub,
+		Timestamp:       1714000000,
+	})
+	if err != nil {
+		t.Fatalf("StartTransfer: %v", err)
+	}
+	if out.SourceSeq != 11 {
+		t.Errorf("SourceSeq=%d, want 11", out.SourceSeq)
+	}
+
+	if got := aLedger.snapshotOutCalls(); len(got) != 1 {
+		t.Fatalf("aLedger.outCalls=%d, want 1", len(got))
+	} else if got[0].Amount != 1500 || got[0].TransferRef != nonce {
+		t.Errorf("outCall mismatch: amount=%d ref=%x", got[0].Amount, got[0].TransferRef)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(bLedger.snapshotInCalls()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	in := bLedger.snapshotInCalls()
+	if len(in) != 1 {
+		t.Fatalf("bLedger.inCalls=%d, want 1", len(in))
+	}
+	if in[0].IdentityID != idArr || in[0].TransferRef != nonce || in[0].Amount != 1500 {
+		t.Errorf("inCall mismatch: %+v", in[0])
+	}
 }
 
 func TestIntegration_StartTransfer_DisabledWithoutLedger(t *testing.T) {
