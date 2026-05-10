@@ -232,6 +232,7 @@ func newRunCmd() *cobra.Command {
 					maxPeers: cfg.Federation.Bootstrap.MaxPeers,
 					ttl:      time.Duration(cfg.Federation.Bootstrap.TTLSeconds) * time.Second,
 				},
+				BootstrapMetrics: api.NewPrometheusBootstrapMetrics(prometheus.DefaultRegisterer),
 			})
 			if err != nil {
 				return err

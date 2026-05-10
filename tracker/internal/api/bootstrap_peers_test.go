@@ -166,3 +166,56 @@ func TestBootstrapPeers_NilDeps(t *testing.T) {
 	require.NotNil(t, resp.Error)
 	require.Equal(t, "NOT_IMPLEMENTED", resp.Error.Code)
 }
+
+type fakeBootstrapMetrics struct {
+	served int
+	errors map[string]int
+	size   int
+}
+
+func newFakeBootstrapMetrics() *fakeBootstrapMetrics {
+	return &fakeBootstrapMetrics{errors: map[string]int{}}
+}
+
+func (m *fakeBootstrapMetrics) IncBootstrapServed()            { m.served++ }
+func (m *fakeBootstrapMetrics) IncBootstrapErrors(code string) { m.errors[code]++ }
+func (m *fakeBootstrapMetrics) SetBootstrapListSize(n int)     { m.size = n }
+
+func TestBootstrapPeers_MetricsOnSuccess(t *testing.T) {
+	svc := newFakeBootstrapService(t)
+	svc.rows = []storage.KnownPeer{
+		{TrackerID: bytes.Repeat([]byte{0x10}, 32), Addr: "a:1", RegionHint: "r", HealthScore: 0.5, LastSeen: time.Unix(1, 0), Source: "gossip"},
+	}
+	met := newFakeBootstrapMetrics()
+	r, err := NewRouter(Deps{
+		Logger:           zerolog.Nop(),
+		Now:              func() time.Time { return time.Unix(1714000000, 0) },
+		BootstrapPeers:   svc,
+		BootstrapMetrics: met,
+	})
+	require.NoError(t, err)
+	resp := r.Dispatch(context.Background(), &RequestCtx{Now: time.Unix(1714000000, 0)},
+		&tbproto.RpcRequest{Method: tbproto.RpcMethod_RPC_METHOD_BOOTSTRAP_PEERS})
+	require.Equal(t, tbproto.RpcStatus_RPC_STATUS_OK, resp.Status)
+	require.Equal(t, 1, met.served)
+	require.Equal(t, 1, met.size)
+	require.Empty(t, met.errors)
+}
+
+func TestBootstrapPeers_MetricsOnStorageError(t *testing.T) {
+	svc := newFakeBootstrapService(t)
+	svc.listErr = errors.New("disk on fire")
+	met := newFakeBootstrapMetrics()
+	r, err := NewRouter(Deps{
+		Logger:           zerolog.Nop(),
+		Now:              func() time.Time { return time.Unix(1714000000, 0) },
+		BootstrapPeers:   svc,
+		BootstrapMetrics: met,
+	})
+	require.NoError(t, err)
+	resp := r.Dispatch(context.Background(), &RequestCtx{Now: time.Unix(1714000000, 0)},
+		&tbproto.RpcRequest{Method: tbproto.RpcMethod_RPC_METHOD_BOOTSTRAP_PEERS})
+	require.Equal(t, tbproto.RpcStatus_RPC_STATUS_INTERNAL, resp.Status)
+	require.Equal(t, 0, met.served)
+	require.Equal(t, 1, met.errors["BOOTSTRAP_LIST_STORAGE"])
+}

@@ -29,11 +29,20 @@ type BootstrapPeersService interface {
 	TTL() time.Duration
 }
 
+// BootstrapPeersMetrics is the optional observability hook for the
+// bootstrap_peers handler. Nil-safe: handler skips metrics if absent.
+type BootstrapPeersMetrics interface {
+	IncBootstrapServed()
+	IncBootstrapErrors(code string)
+	SetBootstrapListSize(n int)
+}
+
 func (r *Router) installBootstrapPeers() handlerFunc {
 	if r.deps.BootstrapPeers == nil {
 		return notImpl("bootstrap_peers")
 	}
 	svc := r.deps.BootstrapPeers
+	met := r.deps.BootstrapMetrics
 	return func(ctx context.Context, rc *RequestCtx, _ []byte) (*tbproto.RpcResponse, error) {
 		max := svc.MaxPeers()
 		if max <= 0 {
@@ -41,6 +50,9 @@ func (r *Router) installBootstrapPeers() handlerFunc {
 		}
 		rows, err := svc.ListKnownPeers(ctx, max+1, true)
 		if err != nil {
+			if met != nil {
+				met.IncBootstrapErrors("BOOTSTRAP_LIST_STORAGE")
+			}
 			return &tbproto.RpcResponse{
 				Status: tbproto.RpcStatus_RPC_STATUS_INTERNAL,
 				Error:  &tbproto.RpcError{Code: "BOOTSTRAP_LIST_STORAGE", Message: err.Error()},
@@ -86,6 +98,9 @@ func (r *Router) installBootstrapPeers() handlerFunc {
 		}
 		sig, err := svc.Sign(cb)
 		if err != nil {
+			if met != nil {
+				met.IncBootstrapErrors("BOOTSTRAP_LIST_SIGN")
+			}
 			return &tbproto.RpcResponse{
 				Status: tbproto.RpcStatus_RPC_STATUS_INTERNAL,
 				Error:  &tbproto.RpcError{Code: "BOOTSTRAP_LIST_SIGN", Message: err.Error()},
@@ -95,6 +110,10 @@ func (r *Router) installBootstrapPeers() handlerFunc {
 		payload, err := proto.Marshal(list)
 		if err != nil {
 			return nil, fmt.Errorf("bootstrap_peers: marshal: %w", err)
+		}
+		if met != nil {
+			met.IncBootstrapServed()
+			met.SetBootstrapListSize(len(out))
 		}
 		return OkResponse(payload), nil
 	}

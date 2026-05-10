@@ -81,15 +81,16 @@ type Deps struct {
 	Now    func() time.Time
 	Debug  bool // surface internal-error messages on responses
 
-	Ledger         LedgerService
-	Registry       RegistryService
-	StunTurn       StunTurnService
-	Broker         BrokerService
-	Settlement     SettlementService
-	Admission      AdmissionService
-	Federation     FederationService
-	Reputation     ReputationRecorder
-	BootstrapPeers BootstrapPeersService
+	Ledger           LedgerService
+	Registry         RegistryService
+	StunTurn         StunTurnService
+	Broker           BrokerService
+	Settlement       SettlementService
+	Admission        AdmissionService
+	Federation       FederationService
+	Reputation       ReputationRecorder
+	BootstrapPeers   BootstrapPeersService
+	BootstrapMetrics BootstrapPeersMetrics // optional; nil → no observability
 }
 
 // RequestCtx carries per-call info every handler may need.
