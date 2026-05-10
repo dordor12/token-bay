@@ -1,6 +1,8 @@
 package ccproxy
 
 import (
+	"crypto/ed25519"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -22,6 +24,13 @@ type EntryMetadata struct {
 	StopFailurePayload *ratelimit.StopFailurePayload
 	UsageProbeBytes    []byte
 	UsageVerdict       ratelimit.UsageVerdict
+
+	// Seeder routing — populated by the StopFailure-hook orchestrator
+	// (separate plan) when activating ModeNetwork. NetworkRouter reads
+	// these via PeerDialer to dial the seeder.
+	SeederAddr    netip.AddrPort
+	SeederPubkey  ed25519.PublicKey
+	EphemeralPriv ed25519.PrivateKey
 }
 
 // SessionModeStore is a thread-safe in-memory map of session ID → entry.
