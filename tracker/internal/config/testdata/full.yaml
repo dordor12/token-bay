@@ -58,6 +58,9 @@ federation:
       pubkey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       addr: "peer1.example.com:7777"
       region: "us-east"
+  bootstrap:
+    max_peers: 50
+    ttl_seconds: 600
 
 reputation:
   evaluation_interval_s: 60
