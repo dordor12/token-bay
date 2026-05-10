@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
@@ -18,13 +19,14 @@ type Federation struct {
 	cfg Config
 	dep Deps
 
-	reg      *Registry
-	dedupe   *Dedupe
-	gossip   *Gossip
-	apply    *RootAttestApplier
-	equiv    *Equivocator
-	pub      *Publisher
-	transfer *transferCoordinator
+	reg        *Registry
+	dedupe     *Dedupe
+	gossip     *Gossip
+	apply      *RootAttestApplier
+	equiv      *Equivocator
+	pub        *Publisher
+	transfer   *transferCoordinator
+	revocation *revocationCoordinator
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -101,10 +103,28 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		MetricsCounter: func(name string) { dep.Metrics.InvalidFrames(name) },
 	})
 
+	revocation := newRevocationCoordinator(revocationCoordinatorCfg{
+		MyTrackerID: cfg.MyTrackerID,
+		MyPriv:      cfg.MyPriv,
+		Archive:     dep.RevocationArchive,
+		Forward:     forward,
+		PeerPubKey: func(id ids.TrackerID) (ed25519.PublicKey, bool) {
+			info, ok := reg.Get(id)
+			if !ok {
+				return nil, false
+			}
+			return info.PubKey, true
+		},
+		Now:        dep.Now,
+		Invalid:    func(name string) { dep.Metrics.InvalidFrames(name) },
+		OnEmit:     dep.Metrics.RevocationsEmitted,
+		OnReceived: dep.Metrics.RevocationsReceived,
+	})
+
 	f := &Federation{
 		cfg: cfg, dep: dep,
 		reg: reg, dedupe: dedupe, gossip: gossip,
-		apply: apply, equiv: equiv, pub: pub, transfer: transfer,
+		apply: apply, equiv: equiv, pub: pub, transfer: transfer, revocation: revocation,
 		peers: make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
@@ -210,6 +230,18 @@ func (f *Federation) StartTransfer(ctx context.Context, in StartTransferInput) (
 		return out, ErrTransferTimeout
 	}
 	return out, err
+}
+
+// OnFreeze implements reputation.FreezeListener via Go structural
+// typing. The reputation evaluator calls this synchronously on every
+// AUDIT->FROZEN transition; the call returns once the signed Revocation
+// is on per-peer send queues. With no RevocationArchive Dep, the call
+// is a no-op (revocation gossip is disabled at subsystem-open time).
+func (f *Federation) OnFreeze(ctx context.Context, id ids.IdentityID, reason string, revokedAt time.Time) {
+	if f == nil || f.revocation == nil {
+		return
+	}
+	f.revocation.OnFreeze(ctx, id, reason, revokedAt)
 }
 
 // ListenAddr returns the bound network address of the underlying
@@ -355,6 +387,12 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.transfer.OnApplied(context.Background(), env, peerID)
+		case fed.Kind_KIND_REVOCATION:
+			if f.revocation == nil {
+				f.dep.Metrics.InvalidFrames("revocation_disabled")
+				return
+			}
+			f.revocation.OnIncoming(context.Background(), env, peerID)
 		default:
 			f.dep.Metrics.InvalidFrames(fmt.Sprintf("kind_%d", int(env.Kind)))
 		}

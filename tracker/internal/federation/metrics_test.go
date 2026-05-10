@@ -35,3 +35,30 @@ tokenbay_federation_frames_in_total{kind="KIND_PING"} 2
 	}
 	_ = strings.TrimSpace // keep import use stable
 }
+
+func TestMetrics_RevocationsEmittedCounts(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m := federation.NewMetrics(reg)
+	m.RevocationsEmitted()
+	m.RevocationsEmitted()
+	if got := testutil.ToFloat64(m.RevocationsEmittedCounter()); got != 2 {
+		t.Fatalf("revocations_emitted_total = %v, want 2", got)
+	}
+}
+
+func TestMetrics_RevocationsReceivedLabels(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m := federation.NewMetrics(reg)
+	m.RevocationsReceived("archived")
+	m.RevocationsReceived("sig")
+	m.RevocationsReceived("archived")
+	vec := m.RevocationsReceivedVec()
+	if got := testutil.ToFloat64(vec.WithLabelValues("archived")); got != 2 {
+		t.Fatalf("archived = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(vec.WithLabelValues("sig")); got != 1 {
+		t.Fatalf("sig = %v, want 1", got)
+	}
+}

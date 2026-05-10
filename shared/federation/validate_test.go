@@ -281,3 +281,59 @@ func TestValidateTransferApplied_Errors(t *testing.T) {
 		t.Fatal("nil: err=nil, want error")
 	}
 }
+
+func validRevocation() *fed.Revocation {
+	return &fed.Revocation{
+		TrackerId:  b(32, 0x11),
+		IdentityId: b(32, 0x22),
+		Reason:     fed.RevocationReason_REVOCATION_REASON_ABUSE,
+		RevokedAt:  1714000000,
+		TrackerSig: b(64, 0x33),
+	}
+}
+
+func TestValidateRevocation_Valid(t *testing.T) {
+	t.Parallel()
+	if err := fed.ValidateRevocation(validRevocation()); err != nil {
+		t.Fatalf("err=%v, want nil", err)
+	}
+}
+
+func TestValidateRevocation_Errors(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(m *fed.Revocation){
+		"tracker_id_len":     func(m *fed.Revocation) { m.TrackerId = b(16, 1) },
+		"tracker_id_zero":    func(m *fed.Revocation) { m.TrackerId = make([]byte, 32) },
+		"identity_id_len":    func(m *fed.Revocation) { m.IdentityId = b(16, 1) },
+		"identity_id_zero":   func(m *fed.Revocation) { m.IdentityId = make([]byte, 32) },
+		"tracker_sig_len":    func(m *fed.Revocation) { m.TrackerSig = b(32, 1) },
+		"revoked_at_zero":    func(m *fed.Revocation) { m.RevokedAt = 0 },
+		"reason_unspecified": func(m *fed.Revocation) { m.Reason = fed.RevocationReason_REVOCATION_REASON_UNSPECIFIED },
+		"reason_oob":         func(m *fed.Revocation) { m.Reason = fed.RevocationReason(99) },
+	}
+	for name, mut := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := validRevocation()
+			mut(m)
+			if err := fed.ValidateRevocation(m); err == nil {
+				t.Fatalf("err=nil, want error")
+			}
+		})
+	}
+	if err := fed.ValidateRevocation(nil); err == nil {
+		t.Fatal("nil: err=nil, want error")
+	}
+}
+
+func TestValidateEnvelope_AcceptsKindRevocation(t *testing.T) {
+	t.Parallel()
+	env := &fed.Envelope{
+		SenderId:  b(32, 1),
+		Kind:      fed.Kind_KIND_REVOCATION,
+		Payload:   []byte{0xAA},
+		SenderSig: b(64, 2),
+	}
+	if err := fed.ValidateEnvelope(env); err != nil {
+		t.Fatalf("err=%v, want nil", err)
+	}
+}

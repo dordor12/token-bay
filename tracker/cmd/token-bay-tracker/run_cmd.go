@@ -94,45 +94,14 @@ func newRunCmd() *cobra.Command {
 			}
 			defer adm.Close() //nolint:errcheck
 
-			rep, err := reputation.Open(cmd.Context(), cfg.Reputation)
-			if err != nil {
-				return fmt.Errorf("reputation: %w", err)
-			}
-			defer rep.Close() //nolint:errcheck
-
-			var prices *broker.PriceTable
-			if cfg.Pricing.Models != nil {
-				prices = broker.NewPriceTableFromConfig(cfg.Pricing)
-			} else {
-				prices = broker.DefaultPriceTable()
-			}
-
-			// identityProxy satisfies broker.IdentityResolver before the
-			// server is constructed. Wire it to the live server via
-			// setSrv after server.New returns (same pattern as pushProxy).
-			ip := &identityProxy{}
-
-			brokerSubs, err := broker.Open(cfg.Broker, cfg.Settlement, broker.Deps{
-				Logger:     logger,
-				Now:        time.Now,
-				Registry:   reg,
-				Ledger:     led,
-				Admission:  adm,
-				Reputation: rep,
-				Pusher:     pp,
-				Pricing:    prices,
-				TrackerKey: trackerKey,
-				Identity:   ip,
-			})
-			if err != nil {
-				return fmt.Errorf("broker: %w", err)
-			}
-			defer brokerSubs.Close() //nolint:errcheck
-
 			// federation: select QUICTransport when ListenAddr is set, else
 			// fall back to the in-process transport (which keeps the
 			// subsystem dormant — no real network presence — when peers
 			// are not configured).
+			//
+			// Federation must open before reputation so we can pass the
+			// resulting *Federation as reputation's FreezeListener (it
+			// satisfies the interface via Go structural typing).
 			trackerPub := trackerKey.Public().(ed25519.PublicKey)
 			var fedTransport federation.Transport
 			if cfg.Federation.ListenAddr != "" {
@@ -180,18 +149,53 @@ func newRunCmd() *cobra.Command {
 				RedialMax:        time.Duration(cfg.Federation.RedialMaxS) * time.Second,
 				Peers:            fedPeers,
 			}, federation.Deps{
-				Transport: fedTransport,
-				RootSrc:   ledgerRootSourceAdapter{led: led},
-				Archive:   storeAsArchive{store: store},
-				Metrics:   federation.NewMetrics(prometheus.DefaultRegisterer),
-				Logger:    logger,
-				Now:       time.Now,
+				Transport:         fedTransport,
+				RootSrc:           ledgerRootSourceAdapter{led: led},
+				Archive:           storeAsArchive{store: store},
+				RevocationArchive: store, // *storage.Store satisfies PeerRevocationArchive
+				Metrics:           federation.NewMetrics(prometheus.DefaultRegisterer),
+				Logger:            logger,
+				Now:               time.Now,
 			})
 			if err != nil {
 				return fmt.Errorf("federation: %w", err)
 			}
 			defer fed.Close() //nolint:errcheck
-			_ = fed           // operator endpoints will use this in a follow-up
+
+			rep, err := reputation.Open(cmd.Context(), cfg.Reputation, reputation.WithFreezeListener(fed))
+			if err != nil {
+				return fmt.Errorf("reputation: %w", err)
+			}
+			defer rep.Close() //nolint:errcheck
+
+			var prices *broker.PriceTable
+			if cfg.Pricing.Models != nil {
+				prices = broker.NewPriceTableFromConfig(cfg.Pricing)
+			} else {
+				prices = broker.DefaultPriceTable()
+			}
+
+			// identityProxy satisfies broker.IdentityResolver before the
+			// server is constructed. Wire it to the live server via
+			// setSrv after server.New returns (same pattern as pushProxy).
+			ip := &identityProxy{}
+
+			brokerSubs, err := broker.Open(cfg.Broker, cfg.Settlement, broker.Deps{
+				Logger:     logger,
+				Now:        time.Now,
+				Registry:   reg,
+				Ledger:     led,
+				Admission:  adm,
+				Reputation: rep,
+				Pusher:     pp,
+				Pricing:    prices,
+				TrackerKey: trackerKey,
+				Identity:   ip,
+			})
+			if err != nil {
+				return fmt.Errorf("broker: %w", err)
+			}
+			defer brokerSubs.Close() //nolint:errcheck
 
 			alloc, err := stunturn.NewAllocator(stunturn.AllocatorConfig{
 				MaxKbpsPerSeeder: cfg.STUNTURN.TURNRelayMaxKbps,

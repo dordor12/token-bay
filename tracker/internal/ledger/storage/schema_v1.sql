@@ -54,3 +54,16 @@ CREATE TABLE IF NOT EXISTS peer_root_archive (
     received_at INTEGER NOT NULL,
     PRIMARY KEY (tracker_id, hour)
 );
+
+CREATE TABLE IF NOT EXISTS peer_revocations (
+    tracker_id  BLOB NOT NULL,         -- issuer
+    identity_id BLOB NOT NULL,         -- revoked identity
+    reason      INTEGER NOT NULL,      -- RevocationReason enum value
+    revoked_at  INTEGER NOT NULL,      -- unix seconds (issuer's clock)
+    tracker_sig BLOB NOT NULL,         -- 64 bytes
+    received_at INTEGER NOT NULL,      -- unix seconds (local clock)
+    PRIMARY KEY (tracker_id, identity_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_peer_revocations_identity
+    ON peer_revocations (identity_id);

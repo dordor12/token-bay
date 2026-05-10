@@ -16,6 +16,8 @@ type Metrics struct {
 	rootAttestationsReceived  *prometheus.CounterVec
 	equivocationsDetected     prometheus.Counter
 	equivocationsAboutSelf    prometheus.Counter
+	revocationsEmitted        prometheus.Counter
+	revocationsReceived       *prometheus.CounterVec
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -29,8 +31,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		rootAttestationsReceived:  prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_root_attestations_received_total"}, []string{"outcome"}),
 		equivocationsDetected:     prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_equivocations_detected_total"}),
 		equivocationsAboutSelf:    prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_equivocations_about_self_total"}),
+		revocationsEmitted:        prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_revocations_emitted_total"}),
+		revocationsReceived:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_revocations_received_total"}, []string{"outcome"}),
 	}
-	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf} {
+	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived} {
 		reg.MustRegister(c)
 	}
 	return m
@@ -47,6 +51,10 @@ func (m *Metrics) RootAttestationsReceived(outcome string) {
 }
 func (m *Metrics) EquivocationsDetected()  { m.equivocationsDetected.Inc() }
 func (m *Metrics) EquivocationsAboutSelf() { m.equivocationsAboutSelf.Inc() }
+func (m *Metrics) RevocationsEmitted()     { m.revocationsEmitted.Inc() }
+func (m *Metrics) RevocationsReceived(outcome string) {
+	m.revocationsReceived.WithLabelValues(outcome).Inc()
+}
 
 // Test-only accessors. Used by metrics_test.go via testutil.CollectAndCompare /
 // testutil.ToFloat64. Not part of the production surface.
@@ -58,4 +66,12 @@ func (m *Metrics) RootAttestationsPublishedCounter() prometheus.Counter {
 
 func (m *Metrics) EquivocationsDetectedCounter() prometheus.Counter {
 	return m.equivocationsDetected
+}
+
+func (m *Metrics) RevocationsEmittedCounter() prometheus.Counter {
+	return m.revocationsEmitted
+}
+
+func (m *Metrics) RevocationsReceivedVec() *prometheus.CounterVec {
+	return m.revocationsReceived
 }
