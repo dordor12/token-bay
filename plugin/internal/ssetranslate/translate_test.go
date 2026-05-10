@@ -58,3 +58,9 @@ func TestTranslate_MultiCycle_Collapsed(t *testing.T) {
 	got := runFixture(t, in)
 	assert.Equal(t, string(want), string(got))
 }
+
+func TestTranslate_MalformedMidStream_Tolerated(t *testing.T) {
+	in, want := loadPair(t, "malformed_mid_stream")
+	got := runFixture(t, in)
+	assert.Equal(t, string(want), string(got))
+}
