@@ -396,10 +396,12 @@ func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	pe := NewPeerForTest(c, dispatch)
 	f.mu.Lock()
 	if f.closed {
-		// Close() already nilled f.peers; dialing-late after Close is a
-		// race we resolve by dropping the connection here.
+		// Close() already nilled f.peers; a dialer arriving after Close
+		// drops the connection here. The transport's Close already
+		// initiated teardown of conns it tracks, so we don't double-
+		// close c (which would race the test-cleanup path's Close on
+		// the paired sync.Once); we just refuse to start the recv loop.
 		f.mu.Unlock()
-		_ = c.Close()
 		return nil
 	}
 	f.peers[res.PeerTrackerID] = pe
