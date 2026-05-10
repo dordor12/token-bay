@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
+	"github.com/token-bay/token-bay/plugin/internal/bootstrap"
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/config"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
@@ -37,6 +38,13 @@ const (
 	// disconnected peers from losing their state.
 	janitorGrace    = 30 * time.Minute
 	janitorInterval = 5 * time.Minute
+
+	// defaultAutoBootstrapMaxN caps the size of the endpoint slice
+	// fed to trackerclient on `tracker = "auto"`. Five mirrors the
+	// federation §7.2 guidance ("initial bootstrap list contains 3-5
+	// trackers") — picking the top-N by health_score from the signed
+	// list keeps the dial loop small while remaining diverse.
+	defaultAutoBootstrapMaxN = 5
 )
 
 func newRunCmd() *cobra.Command {
@@ -64,7 +72,7 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("open audit log: %w", err)
 			}
 
-			endpoints, err := resolveTrackerEndpoints(cfg.Tracker)
+			endpoints, err := resolveTrackerEndpoints(cfg.Tracker, cfgDir, time.Now())
 			if err != nil {
 				_ = al.Close()
 				return err
@@ -89,11 +97,21 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("build seederflow: %w", err)
 			}
 
+			knownPeers, err := bootstrap.LoadKnownPeers(
+				filepath.Join(cfgDir, "known_peers.json"),
+				time.Now,
+			)
+			if err != nil {
+				_ = al.Close()
+				return fmt.Errorf("load known-peers cache: %w", err)
+			}
+
 			tracker, err := trackerclient.New(trackerclient.Config{
-				Endpoints:    endpoints,
-				Identity:     signer,
-				Logger:       logger,
-				OfferHandler: coord,
+				Endpoints:           endpoints,
+				Identity:            signer,
+				Logger:              logger,
+				OfferHandler:        coord,
+				PeerExchangeHandler: knownPeers,
 			})
 			if err != nil {
 				_ = al.Close()
@@ -134,12 +152,18 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveTrackerEndpoints turns cfg.Tracker into a one-element bootstrap
-// list. v1 only supports an explicit URL — `auto` is rejected because no
-// resolver exists yet.
-func resolveTrackerEndpoints(spec string) ([]trackerclient.TrackerEndpoint, error) {
+// resolveTrackerEndpoints turns cfg.Tracker into a bootstrap list.
+//
+// `auto` reads $cfgDir/bootstrap.signed (a marshaled, Ed25519-signed
+// BootstrapPeerList per federation §7.2); on os.ErrNotExist it falls
+// back to the build-time-injected BuiltinBootstrapSignedHex. Any other
+// error from the on-disk file (bad sig, expired, corrupted) surfaces.
+//
+// An explicit URL spec keeps the v1 single-endpoint path, requiring
+// TOKEN_BAY_TRACKER_HASH for the SPKI pin.
+func resolveTrackerEndpoints(spec, cfgDir string, now time.Time) ([]trackerclient.TrackerEndpoint, error) {
 	if spec == "auto" {
-		return nil, errors.New("tracker: auto-bootstrap not yet implemented; configure an explicit tracker URL")
+		return resolveAutoTrackerEndpoints(cfgDir, now)
 	}
 	u, err := url.Parse(spec)
 	if err != nil {
@@ -165,6 +189,22 @@ func resolveTrackerEndpoints(spec string) ([]trackerclient.TrackerEndpoint, erro
 		IdentityHash: hash,
 		Region:       "configured",
 	}}, nil
+}
+
+// resolveAutoTrackerEndpoints loads the build-time signer pubkey and
+// delegates to bootstrap.ResolveAutoEndpoints.
+func resolveAutoTrackerEndpoints(cfgDir string, now time.Time) ([]trackerclient.TrackerEndpoint, error) {
+	signerPub, err := bootstrap.BuildTimeSignerPubkey()
+	if err != nil {
+		return nil, fmt.Errorf("tracker=auto requires a build-time signer pubkey: %w", err)
+	}
+	return bootstrap.ResolveAutoEndpoints(bootstrap.AutoResolveConfig{
+		CfgDir:        cfgDir,
+		SignerPubkey:  signerPub,
+		BuiltinSigned: bootstrap.BuiltinBootstrapSigned(),
+		Now:           now,
+		MaxEndpoints:  defaultAutoBootstrapMaxN,
+	})
 }
 
 // buildSeederFlow constructs the seederflow.Coordinator from cfg with

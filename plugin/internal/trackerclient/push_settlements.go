@@ -11,25 +11,26 @@ import (
 // Push-stream class tags: a single byte the server writes before the
 // first proto frame, telling the acceptor which handler to dispatch to.
 const (
-	pushTagOffer      = 0x01
-	pushTagSettlement = 0x02
+	pushTagOffer        = 0x01
+	pushTagSettlement   = 0x02
+	pushTagPeerExchange = 0x03
 )
 
 // runPushAcceptor accepts server-initiated streams and dispatches to
-// either the offer or settlement handler based on a 1-byte class tag.
-// Lifetime: this goroutine exits when conn drops, ctx is cancelled, or
-// AcceptStream returns a non-EOF error.
-func runPushAcceptor(ctx context.Context, conn transport.Conn, off OfferHandler, set SettlementHandler, maxFrameSize int) {
+// the offer, settlement, or peer-exchange handler based on a 1-byte
+// class tag. Lifetime: this goroutine exits when conn drops, ctx is
+// cancelled, or AcceptStream returns a non-EOF error.
+func runPushAcceptor(ctx context.Context, conn transport.Conn, off OfferHandler, set SettlementHandler, pex PeerExchangeHandler, maxFrameSize int) {
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
 			return
 		}
-		go dispatchPush(ctx, stream, off, set, maxFrameSize)
+		go dispatchPush(ctx, stream, off, set, pex, maxFrameSize)
 	}
 }
 
-func dispatchPush(ctx context.Context, stream transport.Stream, off OfferHandler, set SettlementHandler, maxFrameSize int) {
+func dispatchPush(ctx context.Context, stream transport.Stream, off OfferHandler, set SettlementHandler, pex PeerExchangeHandler, maxFrameSize int) {
 	defer stream.Close()
 	var tag [1]byte
 	if _, err := stream.Read(tag[:]); err != nil {
@@ -49,6 +50,9 @@ func dispatchPush(ctx context.Context, stream transport.Stream, off OfferHandler
 			return
 		}
 		handleSettlement(ctx, stream, set, maxFrameSize)
+	case pushTagPeerExchange:
+		// nil handler: drop silently — by-design backward compat.
+		handlePeerExchange(ctx, stream, pex, maxFrameSize)
 	default:
 		return
 	}

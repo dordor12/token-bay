@@ -22,6 +22,15 @@ type SettlementHandler interface {
 	HandleSettlement(ctx Ctx, r *SettlementRequest) (sig []byte, err error)
 }
 
+// PeerExchangeHandler is the plugin-side hook for inbound federation
+// peer-exchange pushes (federation §7.1). Implementations typically
+// merge the entries into the local known-peers cache. Errors are
+// logged by the dispatcher and otherwise ignored — peer-exchange is a
+// fire-and-forget gossip channel, not RPC.
+type PeerExchangeHandler interface {
+	HandlePeerExchange(ctx Ctx, peers []BootstrapPeer) error
+}
+
 // Ctx is an alias to keep handler signatures stable if we later swap to a
 // purpose-built request context.
 type Ctx = interface {
@@ -37,8 +46,9 @@ type Config struct {
 	Identity  Signer
 	Transport Transport // optional; defaults to QUIC
 
-	OfferHandler      OfferHandler
-	SettlementHandler SettlementHandler
+	OfferHandler        OfferHandler
+	SettlementHandler   SettlementHandler
+	PeerExchangeHandler PeerExchangeHandler
 
 	Logger zerolog.Logger
 	Clock  func() time.Time

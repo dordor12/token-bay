@@ -118,8 +118,8 @@ func (s *supervisor) run() {
 			}
 		})
 
-		if s.cfg.OfferHandler != nil || s.cfg.SettlementHandler != nil {
-			go runPushAcceptor(s.ctx, conn, s.cfg.OfferHandler, s.cfg.SettlementHandler, s.cfg.MaxFrameSize)
+		if s.cfg.OfferHandler != nil || s.cfg.SettlementHandler != nil || s.cfg.PeerExchangeHandler != nil {
+			go runPushAcceptor(s.ctx, conn, s.cfg.OfferHandler, s.cfg.SettlementHandler, s.cfg.PeerExchangeHandler, s.cfg.MaxFrameSize)
 		}
 
 		select {
