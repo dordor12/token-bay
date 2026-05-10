@@ -83,7 +83,7 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	health := NewPeerHealth(cfg.Health, dep.Now, nil)
 
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
-	equiv := NewEquivocator(dep.Archive, forward, reg).WithSelf(cfg.MyTrackerID)
+	equiv := NewEquivocator(dep.Archive, forward, reg, nil).WithSelf(cfg.MyTrackerID)
 	apply.RegisterEquivocator(equiv.OnLocalConflict)
 
 	pub := NewPublisher(dep.RootSrc, forward, cfg.MyTrackerID)
