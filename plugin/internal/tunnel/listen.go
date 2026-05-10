@@ -6,9 +6,16 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 )
+
+// defaultStunAllocateTimeout caps the rendezvous AllocateReflexive call
+// invoked by Listen on bind. The tracker round-trip is small (sub-100ms
+// in steady state); 5s gives generous headroom for retry-laden reconnect
+// paths inside trackerclient without blocking Listen indefinitely.
+const defaultStunAllocateTimeout = 5 * time.Second
 
 // Listener is the seeder-side accept loop. One Listener may produce
 // many *Tunnel via Accept. Accept is safe to call from multiple
@@ -20,6 +27,7 @@ type Listener struct {
 	udp       *net.UDPConn
 	ln        *quic.Listener
 	addr      netip.AddrPort
+	reflexive netip.AddrPort
 
 	mu     sync.Mutex
 	closed bool
@@ -62,14 +70,35 @@ func Listen(bind netip.AddrPort, cfg Config) (*Listener, error) {
 
 	resolved := udp.LocalAddr().(*net.UDPAddr).AddrPort()
 
+	var reflexive netip.AddrPort
+	if cfg.Rendezvous != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultStunAllocateTimeout)
+		defer cancel()
+		addr, err := cfg.Rendezvous.AllocateReflexive(ctx)
+		if err != nil {
+			_ = ln.Close()
+			_ = tr.Close()
+			_ = udp.Close()
+			return nil, fmt.Errorf("rendezvous: allocate reflexive: %w", err)
+		}
+		reflexive = addr
+	}
+
 	return &Listener{
 		cfg:       cfg,
 		transport: tr,
 		udp:       udp,
 		ln:        ln,
 		addr:      resolved,
+		reflexive: reflexive,
 	}, nil
 }
+
+// ReflexiveAddr returns the address the configured Rendezvous reported when
+// Listen called AllocateReflexive. Zero AddrPort if Listen was invoked
+// without a Rendezvous; the caller (orchestration layer) advertises this
+// address through the broker so consumers can dial it during hole-punch.
+func (l *Listener) ReflexiveAddr() netip.AddrPort { return l.reflexive }
 
 // LocalAddr returns the bound address.
 func (l *Listener) LocalAddr() netip.AddrPort { return l.addr }
