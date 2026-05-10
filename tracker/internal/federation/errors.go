@@ -26,4 +26,11 @@ var (
 	// without a LedgerHooks dependency, so cross-region transfer is off.
 	// Returned by StartTransfer and rejected on inbound transfer kinds.
 	ErrTransferDisabled = errors.New("federation: transfer disabled (no LedgerHooks)")
+
+	// ErrPeerExchangeDisabled means the federation subsystem was
+	// constructed without a KnownPeersArchive dependency, so
+	// PEER_EXCHANGE gossip is off. Returned by
+	// Federation.PublishPeerExchange and rejected on inbound
+	// KIND_PEER_EXCHANGE.
+	ErrPeerExchangeDisabled = errors.New("federation: peer exchange disabled (no KnownPeersArchive)")
 )

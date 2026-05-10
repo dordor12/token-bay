@@ -82,6 +82,117 @@ func newTwoTracker(t *testing.T) *twoTracker {
 	}
 }
 
+// fakeKnownPeersArchiveExt is the package_test mirror of
+// peerexchange_test.go's internal fakeKnownPeersArchive. Duplicated to
+// avoid moving an internal-package fake or paying for a SQLite open per
+// integration test (which under -race + default parallelism caused
+// federation tests elsewhere in this package to time out).
+type fakeKnownPeersArchiveExt struct {
+	mu   sync.Mutex
+	rows []storage.KnownPeer
+}
+
+func newFakeKnownPeersArchiveExt() *fakeKnownPeersArchiveExt {
+	return &fakeKnownPeersArchiveExt{}
+}
+
+func (f *fakeKnownPeersArchiveExt) UpsertKnownPeer(_ context.Context, p storage.KnownPeer) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.rows {
+		if bytes.Equal(r.TrackerID, p.TrackerID) {
+			if p.LastSeen.After(r.LastSeen) || p.LastSeen.Equal(r.LastSeen) {
+				if r.Source == "allowlist" && p.Source == "gossip" {
+					p.Addr = r.Addr
+					p.RegionHint = r.RegionHint
+					p.Source = "allowlist"
+				}
+				f.rows[i] = p
+			}
+			return nil
+		}
+	}
+	f.rows = append(f.rows, p)
+	return nil
+}
+
+func (f *fakeKnownPeersArchiveExt) GetKnownPeer(_ context.Context, trackerID []byte) (storage.KnownPeer, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if bytes.Equal(r.TrackerID, trackerID) {
+			return r, true, nil
+		}
+	}
+	return storage.KnownPeer{}, false, nil
+}
+
+func (f *fakeKnownPeersArchiveExt) ListKnownPeers(_ context.Context, limit int, _ bool) ([]storage.KnownPeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit > len(f.rows) {
+		limit = len(f.rows)
+	}
+	return append([]storage.KnownPeer(nil), f.rows[:limit]...), nil
+}
+
+// twoTrackerWithKnownPeers is the slice-3 variant of twoTracker, with
+// in-memory KnownPeers archives wired so peer-exchange tests can inspect
+// merged state. Lives separately from newTwoTracker so slice-2
+// revocation tests don't change shape.
+type twoTrackerWithKnownPeers struct {
+	*twoTracker
+	kpA, kpB *fakeKnownPeersArchiveExt
+}
+
+func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
+	t.Helper()
+	a := newPeerCfg(t)
+	b := newPeerCfg(t)
+	hub := federation.NewInprocHub()
+	trA := federation.NewInprocTransport(hub, "A", a.pub, a.priv)
+	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
+
+	archA, archB := newFakeArchive(), newFakeArchive()
+	kpA := newFakeKnownPeersArchiveExt()
+	kpB := newFakeKnownPeersArchiveExt()
+	srcA := &fakeRootSrc{ok: false}
+	srcB := &fakeRootSrc{ok: false}
+
+	aID := ids.TrackerID(sha256.Sum256(a.pub))
+	bID := ids.TrackerID(sha256.Sum256(b.pub))
+
+	aFed, err := federation.Open(federation.Config{
+		MyTrackerID: aID,
+		MyPriv:      a.priv,
+		Peers:       []federation.AllowlistedPeer{{TrackerID: bID, PubKey: b.pub, Addr: "B"}},
+	}, federation.Deps{Transport: trA, RootSrc: srcA, Archive: archA, KnownPeers: kpA, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bFed, err := federation.Open(federation.Config{
+		MyTrackerID: bID,
+		MyPriv:      b.priv,
+		Peers:       []federation.AllowlistedPeer{{TrackerID: aID, PubKey: a.pub, Addr: "A"}},
+	}, federation.Deps{Transport: trB, RootSrc: srcB, Archive: archB, KnownPeers: kpB, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = aFed.Close()
+		_ = bFed.Close()
+	})
+	return &twoTrackerWithKnownPeers{
+		twoTracker: &twoTracker{
+			hub: hub, a: aFed, b: bFed,
+			archA: archA, archB: archB,
+			srcA: srcA, srcB: srcB,
+			aID: aID, bID: bID,
+		},
+		kpA: kpA, kpB: kpB,
+	}
+}
+
 func TestIntegration_RootAttestation_AB(t *testing.T) {
 	t.Parallel()
 	tt := newTwoTracker(t)
@@ -671,4 +782,185 @@ func TestIntegration_Revocation_ThreeTracker_LineGraph(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("C never archived A's revocation through B")
+}
+
+func TestIntegration_PeerExchange_AB(t *testing.T) {
+	t.Parallel()
+	// A and B peer on the in-process transport. A's allowlist contains B
+	// (via newTwoTrackerWithKnownPeers); A also has a non-live entry T
+	// (no transport for T). After aFed.PublishPeerExchange(ctx), B's
+	// known_peers table contains a gossip-sourced row for T, and B's row
+	// for A remains 'allowlist' with addr unchanged.
+	tt := newTwoTrackerWithKnownPeers(t)
+
+	// Wait for B to be steady from A's perspective so the gossip frame
+	// actually flows.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		gotSteady := false
+		for _, p := range tt.a.Peers() {
+			if p.State == federation.PeerStateSteady {
+				gotSteady = true
+				break
+			}
+		}
+		if gotSteady {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Inject a known_peers row for T in A's archive (simulates A having
+	// learned T from operator config or earlier gossip).
+	tID := bytes.Repeat([]byte{0xCC}, 32)
+	if err := tt.kpA.UpsertKnownPeer(context.Background(), storage.KnownPeer{
+		TrackerID:   tID,
+		Addr:        "wss://t-not-dialed:443",
+		LastSeen:    time.Unix(1714000000, 0),
+		RegionHint:  "asia",
+		HealthScore: 0.5,
+		Source:      "allowlist",
+	}); err != nil {
+		t.Fatalf("seed T: %v", err)
+	}
+
+	if err := tt.a.PublishPeerExchange(context.Background()); err != nil {
+		t.Fatalf("PublishPeerExchange: %v", err)
+	}
+
+	// B should eventually have a 'gossip' row for T.
+	deadline = time.Now().Add(2 * time.Second)
+	gotT := false
+	for time.Now().Before(deadline) {
+		got, ok, err := tt.kpB.GetKnownPeer(context.Background(), tID)
+		if err == nil && ok && got.Source == "gossip" && got.Addr == "wss://t-not-dialed:443" {
+			gotT = true
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !gotT {
+		t.Fatal("B never archived T from A's PEER_EXCHANGE")
+	}
+
+	// And B's row for A is allowlist-pinned.
+	aBytes := tt.aID.Bytes()
+	got, ok, err := tt.kpB.GetKnownPeer(context.Background(), aBytes[:])
+	if err != nil {
+		t.Fatalf("GetKnownPeer(A): %v", err)
+	}
+	if !ok {
+		t.Fatal("B has no row for A")
+	}
+	if got.Source != "allowlist" {
+		t.Fatalf("B's row for A: source=%q, want allowlist", got.Source)
+	}
+	if got.Addr != "A" {
+		t.Fatalf("B's row for A: addr=%q, want \"A\" (allowlist-pinned)", got.Addr)
+	}
+}
+
+func TestIntegration_PeerExchange_ThreeTracker_LineGraph(t *testing.T) {
+	t.Parallel()
+	// Topology: A <-> B <-> C. C does not directly peer with A.
+	// A injects a known_peers row for D (non-live), publishes peer-exchange,
+	// B forwards onward, C archives D.
+	hub := federation.NewInprocHub()
+	a := newPeerCfg(t)
+	b := newPeerCfg(t)
+	c := newPeerCfg(t)
+
+	aID := ids.TrackerID(sha256.Sum256(a.pub))
+	bID := ids.TrackerID(sha256.Sum256(b.pub))
+	cID := ids.TrackerID(sha256.Sum256(c.pub))
+
+	trA := federation.NewInprocTransport(hub, "A", a.pub, a.priv)
+	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
+	trC := federation.NewInprocTransport(hub, "C", c.pub, c.priv)
+
+	kpA := newFakeKnownPeersArchiveExt()
+	kpB := newFakeKnownPeersArchiveExt()
+	kpC := newFakeKnownPeersArchiveExt()
+
+	open := func(myID ids.TrackerID, myPriv ed25519.PrivateKey, tr federation.Transport, peers []federation.AllowlistedPeer, kp *fakeKnownPeersArchiveExt) *federation.Federation {
+		f, err := federation.Open(federation.Config{MyTrackerID: myID, MyPriv: myPriv, Peers: peers},
+			federation.Deps{
+				Transport: tr, RootSrc: &fakeRootSrc{ok: false}, Archive: newFakeArchive(),
+				KnownPeers: kp,
+				Metrics:    federation.NewMetrics(prometheus.NewRegistry()),
+				Logger:     zerolog.Nop(), Now: time.Now,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = f.Close() })
+		return f
+	}
+
+	// Line topology: A and C don't directly peer (no listener at the
+	// "no-direct" addr — dialer fails forever, but A and C still have
+	// each other's pubkeys in their registries for sender-sig
+	// verification, mirroring the slice-2 test pattern).
+	aFed := open(aID, a.priv, trA, []federation.AllowlistedPeer{
+		{TrackerID: bID, PubKey: b.pub, Addr: "B"},
+		{TrackerID: cID, PubKey: c.pub, Addr: "no-direct-a-c"},
+	}, kpA)
+	bFed := open(bID, b.priv, trB, []federation.AllowlistedPeer{
+		{TrackerID: aID, PubKey: a.pub, Addr: "A"},
+		{TrackerID: cID, PubKey: c.pub, Addr: "C"},
+	}, kpB)
+	_ = open(cID, c.priv, trC, []federation.AllowlistedPeer{
+		{TrackerID: bID, PubKey: b.pub, Addr: "B"},
+		{TrackerID: aID, PubKey: a.pub, Addr: "no-direct-a-c"},
+	}, kpC)
+
+	waitSteadyPeers := func(f *federation.Federation, want int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			n := 0
+			for _, p := range f.Peers() {
+				if p.State == federation.PeerStateSteady {
+					n++
+				}
+			}
+			if n >= want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("federation never reached %d steady peers", want)
+	}
+	waitSteadyPeers(bFed, 2)
+
+	// Inject D into A's known_peers, publish from A; B forwards to C.
+	dID := bytes.Repeat([]byte{0xDD}, 32)
+	if err := kpA.UpsertKnownPeer(context.Background(), storage.KnownPeer{
+		TrackerID:   dID,
+		Addr:        "wss://d-not-dialed:443",
+		LastSeen:    time.Unix(1714000000, 0),
+		RegionHint:  "south",
+		HealthScore: 0.5,
+		Source:      "allowlist",
+	}); err != nil {
+		t.Fatalf("seed D: %v", err)
+	}
+
+	if err := aFed.PublishPeerExchange(context.Background()); err != nil {
+		t.Fatalf("aFed.PublishPeerExchange: %v", err)
+	}
+	// B's dispatcher upserts and then forwards; force B to also republish
+	// so the row reaches C deterministically — alternatively, the inbound
+	// forward from B is the path; both are exercised. We rely on the
+	// dispatcher forward.
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok, err := kpC.GetKnownPeer(context.Background(), dID)
+		if err == nil && ok && got.Source == "gossip" {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("C never archived D through B")
 }

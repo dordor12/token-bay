@@ -57,7 +57,10 @@ func (t *InprocTransport) Listen(ctx context.Context, accept func(PeerConn)) err
 }
 
 func (t *InprocTransport) Dial(ctx context.Context, addr string, expectedPeer ed25519.PublicKey) (PeerConn, error) {
-	// Lock order: srv.mu then t.mu (dialer side). Never invert.
+	// Lock discipline: srv.mu and t.mu are acquired sequentially, never
+	// nested. Holding srv.mu while taking t.mu produced an AB-BA deadlock
+	// when A and B dialed each other concurrently (each holds its own
+	// .mu as srv, waits for the other's .mu as t).
 	t.hub.mu.Lock()
 	srv, ok := t.hub.listeners[addr]
 	t.hub.mu.Unlock()
@@ -84,10 +87,17 @@ func (t *InprocTransport) Dial(ctx context.Context, addr string, expectedPeer ed
 	}
 	pair := newInprocPair(t.pub, srv.pub)
 	srv.conns = append(srv.conns, pair.right)
+	srv.mu.Unlock()
+
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = pair.left.Close()
+		return nil, fmt.Errorf("%w: dialer closed", ErrHandshakeFailed)
+	}
 	t.conns = append(t.conns, pair.left)
 	t.mu.Unlock()
-	srv.mu.Unlock()
+
 	go fn(pair.right)
 	return pair.left, nil
 }

@@ -67,3 +67,15 @@ CREATE TABLE IF NOT EXISTS peer_revocations (
 
 CREATE INDEX IF NOT EXISTS idx_peer_revocations_identity
     ON peer_revocations (identity_id);
+
+CREATE TABLE IF NOT EXISTS known_peers (
+    tracker_id   BLOB    NOT NULL PRIMARY KEY,
+    addr         TEXT    NOT NULL,
+    last_seen    INTEGER NOT NULL,           -- unix seconds
+    region_hint  TEXT    NOT NULL DEFAULT '',
+    health_score REAL    NOT NULL DEFAULT 0.0,
+    source       TEXT    NOT NULL CHECK (source IN ('allowlist','gossip'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_known_peers_health
+    ON known_peers (health_score DESC);

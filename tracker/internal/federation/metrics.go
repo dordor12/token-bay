@@ -18,6 +18,9 @@ type Metrics struct {
 	equivocationsAboutSelf    prometheus.Counter
 	revocationsEmitted        prometheus.Counter
 	revocationsReceived       *prometheus.CounterVec
+	peerExchangeEmitted       prometheus.Counter
+	peerExchangeReceived      *prometheus.CounterVec
+	knownPeersSize            prometheus.Gauge
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -33,8 +36,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		equivocationsAboutSelf:    prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_equivocations_about_self_total"}),
 		revocationsEmitted:        prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_revocations_emitted_total"}),
 		revocationsReceived:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_revocations_received_total"}, []string{"outcome"}),
+		peerExchangeEmitted:       prometheus.NewCounter(prometheus.CounterOpts{Name: "tokenbay_federation_peer_exchange_emitted_total"}),
+		peerExchangeReceived:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_peer_exchange_received_total"}, []string{"outcome"}),
+		knownPeersSize:            prometheus.NewGauge(prometheus.GaugeOpts{Name: "tokenbay_federation_known_peers_size"}),
 	}
-	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived} {
+	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived, m.peerExchangeEmitted, m.peerExchangeReceived, m.knownPeersSize} {
 		reg.MustRegister(c)
 	}
 	return m
@@ -74,4 +80,22 @@ func (m *Metrics) RevocationsEmittedCounter() prometheus.Counter {
 
 func (m *Metrics) RevocationsReceivedVec() *prometheus.CounterVec {
 	return m.revocationsReceived
+}
+
+func (m *Metrics) PeerExchangeEmitted() { m.peerExchangeEmitted.Inc() }
+func (m *Metrics) PeerExchangeReceived(outcome string) {
+	m.peerExchangeReceived.WithLabelValues(outcome).Inc()
+}
+func (m *Metrics) SetKnownPeersSize(n int) { m.knownPeersSize.Set(float64(n)) }
+
+func (m *Metrics) PeerExchangeEmittedCounter() prometheus.Counter {
+	return m.peerExchangeEmitted
+}
+
+func (m *Metrics) PeerExchangeReceivedVec() *prometheus.CounterVec {
+	return m.peerExchangeReceived
+}
+
+func (m *Metrics) KnownPeersSizeGauge() prometheus.Gauge {
+	return m.knownPeersSize
 }

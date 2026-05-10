@@ -58,6 +58,12 @@ type Deps struct {
 	// no-op and inbound KIND_REVOCATION is rejected with metric
 	// reason "revocation_disabled".
 	RevocationArchive PeerRevocationArchive
+
+	// KnownPeers is the federation→storage hook for peer-exchange
+	// (slice 3). May be nil; when nil, Federation.PublishPeerExchange
+	// returns ErrPeerExchangeDisabled and inbound KIND_PEER_EXCHANGE is
+	// rejected with metric reason "peer_exchange_disabled".
+	KnownPeers KnownPeersArchive
 }
 
 func (c Config) withDefaults() Config {

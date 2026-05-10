@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
+	"unicode/utf8"
 )
 
 const (
@@ -24,7 +26,7 @@ func ValidateEnvelope(e *Envelope) error {
 	if len(e.SenderId) != TrackerIDLen {
 		return fmt.Errorf("federation: sender_id len %d != %d", len(e.SenderId), TrackerIDLen)
 	}
-	if e.Kind <= Kind_KIND_UNSPECIFIED || e.Kind > Kind_KIND_REVOCATION {
+	if e.Kind <= Kind_KIND_UNSPECIFIED || e.Kind > Kind_KIND_PEER_EXCHANGE {
 		return fmt.Errorf("federation: kind %d out of range", int32(e.Kind))
 	}
 	if len(e.Payload) == 0 {
@@ -252,6 +254,61 @@ func ValidateTransferApplied(m *TransferApplied) error {
 	}
 	if m.Timestamp == 0 {
 		return errors.New("federation: transfer_applied.timestamp must be > 0")
+	}
+	return nil
+}
+
+// MaxPeerExchangeEntries caps the number of KnownPeer entries inside a
+// single PeerExchange message at the validator boundary. The emitter
+// caps itself lower (defaultPeerExchangeEmitCap = 256 in
+// tracker/internal/federation); the validator allows headroom for
+// future growth without DoS.
+const MaxPeerExchangeEntries = 1024
+
+// MaxKnownPeerAddrLen and MaxKnownPeerRegionHintLen are byte-length
+// caps on the corresponding string fields.
+const (
+	MaxKnownPeerAddrLen       = 256
+	MaxKnownPeerRegionHintLen = 64
+)
+
+// ValidatePeerExchange enforces shape invariants on a PeerExchange.
+// Entries are advisory hints; this only checks shape, never trust.
+func ValidatePeerExchange(m *PeerExchange) error {
+	if m == nil {
+		return errors.New("federation: nil PeerExchange")
+	}
+	if len(m.Peers) > MaxPeerExchangeEntries {
+		return fmt.Errorf("federation: peer_exchange.peers len %d > %d", len(m.Peers), MaxPeerExchangeEntries)
+	}
+	for i, p := range m.Peers {
+		if p == nil {
+			return fmt.Errorf("federation: peer_exchange.peers[%d] is nil", i)
+		}
+		if len(p.TrackerId) != TrackerIDLen {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].tracker_id len %d != %d", i, len(p.TrackerId), TrackerIDLen)
+		}
+		if allZero(p.TrackerId) {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].tracker_id is all zero", i)
+		}
+		if len(p.Addr) == 0 {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].addr empty", i)
+		}
+		if len(p.Addr) > MaxKnownPeerAddrLen {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].addr len %d > %d", i, len(p.Addr), MaxKnownPeerAddrLen)
+		}
+		if !utf8.ValidString(p.Addr) {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].addr invalid utf-8", i)
+		}
+		if len(p.RegionHint) > MaxKnownPeerRegionHintLen {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].region_hint len %d > %d", i, len(p.RegionHint), MaxKnownPeerRegionHintLen)
+		}
+		if !utf8.ValidString(p.RegionHint) {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].region_hint invalid utf-8", i)
+		}
+		if math.IsNaN(p.HealthScore) || p.HealthScore < 0.0 || p.HealthScore > 1.0 {
+			return fmt.Errorf("federation: peer_exchange.peers[%d].health_score %f out of [0,1]", i, p.HealthScore)
+		}
 	}
 	return nil
 }

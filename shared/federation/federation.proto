@@ -19,6 +19,7 @@ enum Kind {
   KIND_TRANSFER_PROOF         = 10;
   KIND_TRANSFER_APPLIED       = 11;
   KIND_REVOCATION             = 12;
+  KIND_PEER_EXCHANGE          = 13;
 }
 
 // Envelope wraps every steady-state and handshake message (including
@@ -116,4 +117,16 @@ message Revocation {
   RevocationReason reason      = 3;
   uint64           revoked_at  = 4;  // unix seconds
   bytes            tracker_sig = 5;  // 64 bytes — Ed25519(canonical) by issuer
+}
+
+message KnownPeer {
+  bytes  tracker_id   = 1;  // 32 bytes
+  string addr         = 2;  // e.g. "wss://tracker.example.org:443"; len ≤ 256
+  uint64 last_seen    = 3;  // unix seconds; 0 = never
+  string region_hint  = 4;  // human-friendly; len ≤ 64
+  double health_score = 5;  // 0..1 (clamped on validate)
+}
+
+message PeerExchange {
+  repeated KnownPeer peers = 1;  // ≤ 1024 entries (validator)
 }

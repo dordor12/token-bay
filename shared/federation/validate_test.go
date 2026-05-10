@@ -1,6 +1,7 @@
 package federation_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -330,6 +331,82 @@ func TestValidateEnvelope_AcceptsKindRevocation(t *testing.T) {
 	env := &fed.Envelope{
 		SenderId:  b(32, 1),
 		Kind:      fed.Kind_KIND_REVOCATION,
+		Payload:   []byte{0xAA},
+		SenderSig: b(64, 2),
+	}
+	if err := fed.ValidateEnvelope(env); err != nil {
+		t.Fatalf("err=%v, want nil", err)
+	}
+}
+
+func validKnownPeer() *fed.KnownPeer {
+	return &fed.KnownPeer{
+		TrackerId:   b(32, 0x44),
+		Addr:        "wss://tracker.example.org:443",
+		LastSeen:    1714000000,
+		RegionHint:  "eu-central-1",
+		HealthScore: 0.9,
+	}
+}
+
+func validPeerExchange() *fed.PeerExchange {
+	return &fed.PeerExchange{Peers: []*fed.KnownPeer{validKnownPeer()}}
+}
+
+func TestValidatePeerExchange_Valid(t *testing.T) {
+	t.Parallel()
+	if err := fed.ValidatePeerExchange(validPeerExchange()); err != nil {
+		t.Fatalf("err=%v, want nil", err)
+	}
+}
+
+func TestValidatePeerExchange_EmptyPeersOK(t *testing.T) {
+	t.Parallel()
+	if err := fed.ValidatePeerExchange(&fed.PeerExchange{}); err != nil {
+		t.Fatalf("err=%v, want nil for empty peers", err)
+	}
+}
+
+func TestValidatePeerExchange_Errors(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(m *fed.PeerExchange){
+		"too_many_entries": func(m *fed.PeerExchange) {
+			m.Peers = make([]*fed.KnownPeer, 1025)
+			for i := range m.Peers {
+				m.Peers[i] = validKnownPeer()
+			}
+		},
+		"nil_entry":              func(m *fed.PeerExchange) { m.Peers = []*fed.KnownPeer{nil} },
+		"tracker_id_len":         func(m *fed.PeerExchange) { m.Peers[0].TrackerId = b(16, 1) },
+		"tracker_id_zero":        func(m *fed.PeerExchange) { m.Peers[0].TrackerId = make([]byte, 32) },
+		"addr_empty":             func(m *fed.PeerExchange) { m.Peers[0].Addr = "" },
+		"addr_too_long":          func(m *fed.PeerExchange) { m.Peers[0].Addr = strings.Repeat("a", 257) },
+		"addr_invalid_utf8":      func(m *fed.PeerExchange) { m.Peers[0].Addr = "\xff\xfe" },
+		"region_hint_too_long":   func(m *fed.PeerExchange) { m.Peers[0].RegionHint = strings.Repeat("r", 65) },
+		"region_hint_invalid":    func(m *fed.PeerExchange) { m.Peers[0].RegionHint = "\xff" },
+		"health_score_negative":  func(m *fed.PeerExchange) { m.Peers[0].HealthScore = -0.1 },
+		"health_score_above_one": func(m *fed.PeerExchange) { m.Peers[0].HealthScore = 1.1 },
+		"health_score_nan":       func(m *fed.PeerExchange) { m.Peers[0].HealthScore = math.NaN() },
+	}
+	for name, mut := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := validPeerExchange()
+			mut(m)
+			if err := fed.ValidatePeerExchange(m); err == nil {
+				t.Fatalf("err=nil, want error")
+			}
+		})
+	}
+	if err := fed.ValidatePeerExchange(nil); err == nil {
+		t.Fatal("nil: err=nil, want error")
+	}
+}
+
+func TestValidateEnvelope_AcceptsKindPeerExchange(t *testing.T) {
+	t.Parallel()
+	env := &fed.Envelope{
+		SenderId:  b(32, 1),
+		Kind:      fed.Kind_KIND_PEER_EXCHANGE,
 		Payload:   []byte{0xAA},
 		SenderSig: b(64, 2),
 	}
