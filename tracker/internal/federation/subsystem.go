@@ -391,19 +391,23 @@ func (f *Federation) attachPeer(res HandshakeResult, c PeerConn) {
 // OnConnected hook. Returns the *Peer so callers can Wait() on its
 // recvLoop, or nil if the subsystem is already closed. Lock order:
 // f.mu > reg.mu (see Registry).
+//
+// The early closed-check is intentional: building the dispatcher and
+// Peer first would create a fresh sync.Once whose memory could be
+// recycled and concurrently accessed by Transport.Close's pair-Close
+// path during test teardown — the race detector flags this even though
+// the accesses are logically disjoint.
 func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
-	dispatch := f.makeDispatcher(c, res.PeerTrackerID)
-	pe := NewPeerForTest(c, dispatch)
 	f.mu.Lock()
 	if f.closed {
 		// Close() already nilled f.peers; a dialer arriving after Close
-		// drops the connection here. The transport's Close already
-		// initiated teardown of conns it tracks, so we don't double-
-		// close c (which would race the test-cleanup path's Close on
-		// the paired sync.Once); we just refuse to start the recv loop.
+		// drops the connection here. Don't start the recv loop; the
+		// transport's own Close path tears the conn down.
 		f.mu.Unlock()
 		return nil
 	}
+	dispatch := f.makeDispatcher(c, res.PeerTrackerID)
+	pe := NewPeerForTest(c, dispatch)
 	f.peers[res.PeerTrackerID] = pe
 	_ = f.reg.Update(PeerInfo{TrackerID: res.PeerTrackerID, PubKey: res.PeerPubKey, Addr: c.RemoteAddr(), State: PeerStateSteady, Conn: c})
 	f.mu.Unlock()
