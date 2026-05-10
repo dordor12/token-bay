@@ -5,8 +5,10 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
@@ -57,8 +59,34 @@ func hexToPubKey(s string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(b), nil
 }
 
+// bootstrapPeersAdapter implements api.BootstrapPeersService against the
+// SQLite store + the tracker's identity Ed25519 key. The composition
+// root passes the *storage.Store, the tracker pubkey hash (= IssuerID),
+// the priv key, and the cfg-derived MaxPeers / TTL.
+type bootstrapPeersAdapter struct {
+	store    *storage.Store
+	issuer   ids.IdentityID
+	priv     ed25519.PrivateKey
+	maxPeers int
+	ttl      time.Duration
+}
+
+func (a bootstrapPeersAdapter) ListKnownPeers(ctx context.Context, limit int, byHealthDesc bool) ([]storage.KnownPeer, error) {
+	return a.store.ListKnownPeers(ctx, limit, byHealthDesc)
+}
+
+func (a bootstrapPeersAdapter) IssuerID() ids.IdentityID { return a.issuer }
+
+func (a bootstrapPeersAdapter) Sign(canonical []byte) ([]byte, error) {
+	return ed25519.Sign(a.priv, canonical), nil
+}
+
+func (a bootstrapPeersAdapter) MaxPeers() int      { return a.maxPeers }
+func (a bootstrapPeersAdapter) TTL() time.Duration { return a.ttl }
+
 // silence unused warnings if any helper goes briefly unused.
 var (
 	_ federation.RootSource      = ledgerRootSourceAdapter{}
 	_ federation.PeerRootArchive = storeAsArchive{}
+	_ api.BootstrapPeersService  = bootstrapPeersAdapter{}
 )
