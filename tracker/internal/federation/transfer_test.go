@@ -283,3 +283,133 @@ func TestTransferCoordinator_OnRequest_DuplicateNonceReplaysProof(t *testing.T) 
 	require.Len(t, sentPayloads, 2)
 	assert.Equal(t, sentPayloads[0], sentPayloads[1], "replayed proof bytes must equal first proof")
 }
+
+func TestTransferCoordinator_StartTransfer_HappyPath(t *testing.T) {
+	t.Parallel()
+	srcPub, srcPriv := keypairFromSeed(0x11)
+	dstPub, dstPriv := keypairFromSeed(0x22)
+	conPub, conPriv := keypairFromSeed(0x33)
+
+	srcID := trackerID(srcPub)
+	dstID := trackerID(dstPub)
+
+	ledger := &fakeLedger{}
+
+	type sent struct {
+		Peer    ids.TrackerID
+		Kind    fed.Kind
+		Payload []byte
+	}
+	sendCh := make(chan sent, 4)
+	send := func(_ context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
+		sendCh <- sent{peer, kind, append([]byte(nil), payload...)}
+		return nil
+	}
+
+	tc := newTransferCoordinator(transferCoordinatorCfg{
+		MyTrackerID: dstID,
+		MyPriv:      dstPriv,
+		Ledger:      ledger,
+		IssuedCap:   16,
+		Now:         func() time.Time { return time.Unix(1714000000, 0) },
+		PeerPubKey: func(id ids.TrackerID) (ed25519.PublicKey, bool) {
+			if id == srcID {
+				return srcPub, true
+			}
+			return nil, false
+		},
+		Send: send,
+	})
+
+	identityID := bytes32(0x44)
+	nonce := bytes32(0x55)
+
+	in := StartTransferInput{
+		SourceTrackerID: srcID,
+		IdentityID:      ids.IdentityID(identityID),
+		Amount:          1500,
+		Nonce:           nonce,
+		ConsumerPub:     conPub,
+		Timestamp:       1714000000,
+	}
+
+	srcIDBytes := srcID.Bytes()
+	dstIDBytes := dstID.Bytes()
+	canonReq := &fed.TransferProofRequest{
+		SourceTrackerId: srcIDBytes[:],
+		DestTrackerId:   dstIDBytes[:],
+		IdentityId:      identityID[:],
+		Amount:          1500,
+		Nonce:           nonce[:],
+		ConsumerPub:     conPub,
+		Timestamp:       1714000000,
+	}
+	canonical, err := fed.CanonicalTransferProofRequestPreSig(canonReq)
+	require.NoError(t, err)
+	in.ConsumerSig = ed25519.Sign(conPriv, canonical)
+
+	type result struct {
+		out StartTransferOutput
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		out, err := tc.StartTransfer(context.Background(), in)
+		resultCh <- result{out, err}
+	}()
+
+	var requestSent sent
+	select {
+	case requestSent = <-sendCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartTransfer did not Send within 2s")
+	}
+	assert.Equal(t, srcID, requestSent.Peer)
+	assert.Equal(t, fed.Kind_KIND_TRANSFER_PROOF_REQUEST, requestSent.Kind)
+
+	proof := &fed.TransferProof{
+		SourceTrackerId:    srcIDBytes[:],
+		DestTrackerId:      dstIDBytes[:],
+		IdentityId:         identityID[:],
+		Amount:             1500,
+		Nonce:              nonce[:],
+		SourceChainTipHash: bytes.Repeat([]byte{0xCC}, 32),
+		SourceSeq:          7,
+		Timestamp:          1714000000,
+	}
+	cb, err := fed.CanonicalTransferProofPreSig(proof)
+	require.NoError(t, err)
+	proof.SourceTrackerSig = ed25519.Sign(srcPriv, cb)
+	payload, err := proto.Marshal(proof)
+	require.NoError(t, err)
+	env, err := SignEnvelope(srcPriv, srcIDBytes[:], fed.Kind_KIND_TRANSFER_PROOF, payload)
+	require.NoError(t, err)
+	tc.OnProof(context.Background(), env, srcID)
+
+	select {
+	case r := <-resultCh:
+		require.NoError(t, r.err)
+		assert.Equal(t, uint64(7), r.out.SourceSeq)
+		assert.Equal(t, []byte(proof.SourceTrackerSig), r.out.SourceTrackerSig)
+		var hashArr [32]byte
+		copy(hashArr[:], proof.SourceChainTipHash)
+		assert.Equal(t, hashArr, r.out.SourceChainTipHash)
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartTransfer did not return within 2s")
+	}
+
+	ledger.mu.Lock()
+	require.Len(t, ledger.inCalls, 1)
+	assert.Equal(t, identityID, ledger.inCalls[0].IdentityID)
+	assert.Equal(t, uint64(1500), ledger.inCalls[0].Amount)
+	assert.Equal(t, nonce, ledger.inCalls[0].TransferRef)
+	ledger.mu.Unlock()
+
+	select {
+	case applied := <-sendCh:
+		assert.Equal(t, srcID, applied.Peer)
+		assert.Equal(t, fed.Kind_KIND_TRANSFER_APPLIED, applied.Kind)
+	case <-time.After(2 * time.Second):
+		t.Fatal("TransferApplied not sent within 2s")
+	}
+}

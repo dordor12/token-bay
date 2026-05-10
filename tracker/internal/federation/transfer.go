@@ -38,14 +38,18 @@ type issuedProof struct {
 	at      time.Time
 }
 
+type pendingResp struct {
+	ch chan *fed.TransferProof
+}
+
 // transferCoordinator is constructed by Federation.Open and lives for
-// the federation subsystem's lifetime. The pending and completed maps
-// land in the destination-side StartTransfer follow-up.
+// the federation subsystem's lifetime.
 type transferCoordinator struct {
 	cfg transferCoordinatorCfg
 
-	mu     sync.Mutex
-	issued map[[32]byte]issuedProof // source-side replay cache
+	mu      sync.Mutex
+	issued  map[[32]byte]issuedProof // source-side replay cache
+	pending map[[32]byte]pendingResp // dest-side in-flight
 }
 
 func newTransferCoordinator(cfg transferCoordinatorCfg) *transferCoordinator {
@@ -59,8 +63,9 @@ func newTransferCoordinator(cfg transferCoordinatorCfg) *transferCoordinator {
 		cfg.Now = time.Now
 	}
 	return &transferCoordinator{
-		cfg:    cfg,
-		issued: make(map[[32]byte]issuedProof),
+		cfg:     cfg,
+		issued:  make(map[[32]byte]issuedProof),
+		pending: make(map[[32]byte]pendingResp),
 	}
 }
 
@@ -213,8 +218,167 @@ func equalID(a, b []byte) bool {
 	return true
 }
 
-// keep imports stable across follow-up tasks.
-var (
-	_ = fmt.Errorf
-	_ = errors.New
-)
+// StartTransfer is the destination-side entry point. The api handler
+// (or its test stub) calls it after collecting the consumer-signed
+// request. Blocks until the source peer responds with a TRANSFER_PROOF,
+// ctx is canceled, or — when the upper Federation.StartTransfer wrapper
+// applies a TransferTimeout — the deadline elapses.
+//
+// On success: appends a transfer_in to the local ledger, sends a
+// signed TRANSFER_APPLIED back to the source (best-effort), and returns
+// the proof.
+func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransferInput) (StartTransferOutput, error) {
+	if tc.cfg.Ledger == nil {
+		return StartTransferOutput{}, ErrTransferDisabled
+	}
+	myID := tc.cfg.MyTrackerID.Bytes()
+	srcID := in.SourceTrackerID.Bytes()
+	idArr := [32]byte(in.IdentityID)
+
+	req := &fed.TransferProofRequest{
+		SourceTrackerId: srcID[:],
+		DestTrackerId:   myID[:],
+		IdentityId:      idArr[:],
+		Amount:          in.Amount,
+		Nonce:           in.Nonce[:],
+		ConsumerSig:     in.ConsumerSig,
+		ConsumerPub:     in.ConsumerPub,
+		Timestamp:       in.Timestamp,
+	}
+	if err := fed.ValidateTransferProofRequest(req); err != nil {
+		return StartTransferOutput{}, fmt.Errorf("federation: %w", err)
+	}
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return StartTransferOutput{}, fmt.Errorf("federation: marshal request: %w", err)
+	}
+
+	ch := make(chan *fed.TransferProof, 1)
+	tc.mu.Lock()
+	if _, exists := tc.pending[in.Nonce]; exists {
+		tc.mu.Unlock()
+		return StartTransferOutput{}, errors.New("federation: duplicate StartTransfer nonce in flight")
+	}
+	tc.pending[in.Nonce] = pendingResp{ch: ch}
+	tc.mu.Unlock()
+	defer func() {
+		tc.mu.Lock()
+		delete(tc.pending, in.Nonce)
+		tc.mu.Unlock()
+	}()
+
+	if err := tc.cfg.Send(ctx, in.SourceTrackerID, fed.Kind_KIND_TRANSFER_PROOF_REQUEST, payload); err != nil {
+		return StartTransferOutput{}, err
+	}
+	tc.cfg.MetricsCounter("transfer_request_sent")
+
+	var proof *fed.TransferProof
+	select {
+	case proof = <-ch:
+	case <-ctx.Done():
+		return StartTransferOutput{}, ctx.Err()
+	}
+
+	srcPub, ok := tc.cfg.PeerPubKey(in.SourceTrackerID)
+	if !ok {
+		return StartTransferOutput{}, fmt.Errorf("%w: source pubkey unknown", ErrPeerNotConnected)
+	}
+	cb, err := fed.CanonicalTransferProofPreSig(proof)
+	if err != nil {
+		return StartTransferOutput{}, fmt.Errorf("federation: canonical proof: %w", err)
+	}
+	if !ed25519.Verify(srcPub, cb, proof.SourceTrackerSig) {
+		return StartTransferOutput{}, errors.New("federation: source_tracker_sig invalid")
+	}
+
+	if err := tc.cfg.Ledger.AppendTransferIn(ctx, TransferInHookIn{
+		IdentityID:  idArr,
+		Amount:      proof.Amount,
+		Timestamp:   proof.Timestamp,
+		TransferRef: in.Nonce,
+	}); err != nil {
+		// ErrTransferRefExists is treated as success: the credit is already
+		// booked. v1 ledger never returns it, but the contract is in place.
+		if !isLedgerTransferRefExists(err) {
+			return StartTransferOutput{}, fmt.Errorf("federation: append transfer_in: %w", err)
+		}
+	}
+
+	// Send TransferApplied back to source. Best-effort; failures here are
+	// metric+log only since the credit is already booked locally.
+	applied := &fed.TransferApplied{
+		SourceTrackerId: srcID[:],
+		DestTrackerId:   myID[:],
+		Nonce:           in.Nonce[:],
+		Timestamp:       uint64(tc.cfg.Now().Unix()), //nolint:gosec // G115 — Unix() ≥ 0 for any post-epoch timestamp
+	}
+	ab, abErr := fed.CanonicalTransferAppliedPreSig(applied)
+	if abErr == nil {
+		applied.DestTrackerSig = ed25519.Sign(tc.cfg.MyPriv, ab)
+		if appliedPayload, mErr := proto.Marshal(applied); mErr == nil {
+			_ = tc.cfg.Send(ctx, in.SourceTrackerID, fed.Kind_KIND_TRANSFER_APPLIED, appliedPayload)
+		}
+	}
+
+	var hashArr [32]byte
+	copy(hashArr[:], proof.SourceChainTipHash)
+	tc.cfg.MetricsCounter("transfer_completed")
+	return StartTransferOutput{
+		SourceChainTipHash: hashArr,
+		SourceSeq:          proof.SourceSeq,
+		SourceTrackerSig:   proof.SourceTrackerSig,
+	}, nil
+}
+
+// OnProof is the dispatcher hook for KIND_TRANSFER_PROOF.
+func (tc *transferCoordinator) OnProof(_ context.Context, env *fed.Envelope, fromPeer ids.TrackerID) {
+	proof := &fed.TransferProof{}
+	if err := proto.Unmarshal(env.Payload, proof); err != nil {
+		tc.cfg.MetricsCounter("transfer_proof_shape")
+		return
+	}
+	if err := fed.ValidateTransferProof(proof); err != nil {
+		tc.cfg.MetricsCounter("transfer_proof_shape")
+		return
+	}
+	myID := tc.cfg.MyTrackerID.Bytes()
+	if !equalID(proof.DestTrackerId, myID[:]) {
+		tc.cfg.MetricsCounter("transfer_proof_misrouted")
+		return
+	}
+	srcID := fromPeer.Bytes()
+	if !equalID(proof.SourceTrackerId, srcID[:]) {
+		tc.cfg.MetricsCounter("transfer_proof_source_mismatch")
+		return
+	}
+	var nonceArr [32]byte
+	copy(nonceArr[:], proof.Nonce)
+
+	tc.mu.Lock()
+	pending, ok := tc.pending[nonceArr]
+	tc.mu.Unlock()
+	if !ok {
+		tc.cfg.MetricsCounter("transfer_proof_orphan")
+		return
+	}
+	select {
+	case pending.ch <- proof:
+		tc.cfg.MetricsCounter("transfer_proof_delivered")
+	default:
+		tc.cfg.MetricsCounter("transfer_proof_buffer_full")
+	}
+}
+
+// isLedgerTransferRefExists is the federation-internal indirection
+// for the ledger's ErrTransferRefExists sentinel. The ledger package
+// is not imported here to keep federation's dependency surface
+// independent of ledger-package identifier renames; the api wiring
+// site can plug a typed predicate if needed. v1 ledger never returns
+// the sentinel, so this returns false in production.
+func isLedgerTransferRefExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	const sentinelMsg = "ledger: transfer ref already on chain"
+	return err.Error() == sentinelMsg
+}
