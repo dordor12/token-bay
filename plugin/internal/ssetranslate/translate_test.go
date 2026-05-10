@@ -40,3 +40,9 @@ func TestTranslate_TextOnlySingleCycle(t *testing.T) {
 	got := runFixture(t, in)
 	assert.Equal(t, string(want), string(got))
 }
+
+func TestTranslate_MultiBlock_TextThenToolUse(t *testing.T) {
+	in, want := loadPair(t, "multi_block_text_text")
+	got := runFixture(t, in)
+	assert.Equal(t, string(want), string(got))
+}
