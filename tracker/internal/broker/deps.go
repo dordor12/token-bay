@@ -56,6 +56,19 @@ type PushService interface {
 	PushSettlementTo(ids.IdentityID, *tbproto.SettlementPush) (<-chan *tbproto.SettleAck, bool)
 }
 
+// RevocationLookup is the slice of the federation peer-revocation
+// archive the broker consults before assigning a seeder. A non-nil
+// implementation makes broker.Submit honour cross-region revocations:
+// any identity present in the archive is rejected with
+// ErrIdentityFrozen regardless of the originating tracker. nil
+// disables the check (legacy single-region trackers).
+//
+// Backed by *ledger/storage.Store in production; tests substitute an
+// in-memory stub.
+type RevocationLookup interface {
+	IsIdentityRevoked(ctx context.Context, identityID []byte) (bool, error)
+}
+
 // IdentityResolver maps an IdentityID to its Ed25519 public key.
 // Settlement uses it to verify the consumer's counter-signature before
 // appending a USAGE entry to the ledger. Returns ok=false when the peer
@@ -84,6 +97,10 @@ type Deps struct {
 	// mTLS connection table. Optional in v1: nil falls through to
 	// ConsumerSigMissing=true on every settlement.
 	Identity IdentityResolver
+	// RevocationArchive is consulted by Submit before reservation; nil
+	// disables the cross-region revocation pre-check (federation §6,
+	// reputation §12).
+	RevocationArchive RevocationLookup
 }
 
 // fallbackReputation is the v1 default when no reputation subsystem is wired.

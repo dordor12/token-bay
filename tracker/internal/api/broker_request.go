@@ -104,6 +104,9 @@ func (r *Router) installBrokerRequest() handlerFunc {
 				if errors.Is(err, broker.ErrUnknownModel) {
 					return nil, ErrInvalid("UNKNOWN_MODEL")
 				}
+				if errors.Is(err, broker.ErrIdentityFrozen) {
+					return nil, ErrFrozen("identity revoked by peer tracker")
+				}
 				return nil, err
 			}
 			return brokerResultToResponse(res)

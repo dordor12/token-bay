@@ -182,16 +182,17 @@ func newRunCmd() *cobra.Command {
 			ip := &identityProxy{}
 
 			brokerSubs, err := broker.Open(cfg.Broker, cfg.Settlement, broker.Deps{
-				Logger:     logger,
-				Now:        time.Now,
-				Registry:   reg,
-				Ledger:     led,
-				Admission:  adm,
-				Reputation: rep,
-				Pusher:     pp,
-				Pricing:    prices,
-				TrackerKey: trackerKey,
-				Identity:   ip,
+				Logger:            logger,
+				Now:               time.Now,
+				Registry:          reg,
+				Ledger:            led,
+				Admission:         adm,
+				Reputation:        rep,
+				Pusher:            pp,
+				Pricing:           prices,
+				TrackerKey:        trackerKey,
+				Identity:          ip,
+				RevocationArchive: store, // *storage.Store satisfies broker.RevocationLookup
 			})
 			if err != nil {
 				return fmt.Errorf("broker: %w", err)

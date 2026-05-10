@@ -110,6 +110,21 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 	var consumer ids.IdentityID
 	copy(consumer[:], body.ConsumerId)
 
+	// Cross-region revocation pre-check (federation §6, reputation §12).
+	// The federation revocation gossip path archives REVOCATIONs from
+	// peer trackers; an identity FROZEN at any peer must not get
+	// brokered locally. Local FROZEN state is enforced by reputation;
+	// this closes the cross-region case.
+	if b.deps.RevocationArchive != nil {
+		revoked, rerr := b.deps.RevocationArchive.IsIdentityRevoked(ctx, consumer[:])
+		if rerr != nil {
+			return nil, rerr
+		}
+		if revoked {
+			return nil, ErrIdentityFrozen
+		}
+	}
+
 	cost, err := b.deps.Pricing.MaxCost(body)
 	if err != nil {
 		return nil, err

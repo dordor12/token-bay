@@ -275,6 +275,23 @@ func TestBrokerRequest_RecordsReputationSignal(t *testing.T) {
 	}
 }
 
+func TestBrokerRequest_BrokerErrIdentityFrozen_MapsToFROZEN(t *testing.T) {
+	svc := &fakeBrokerService{submitErr: broker.ErrIdentityFrozen}
+	adm := &fakeAdmissionForBroker{decideResult: admission.Result{Outcome: admission.OutcomeAdmit}}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm})
+
+	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerID32()),
+	})
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_FROZEN {
+		t.Fatalf("status=%v error=%+v want FROZEN", resp.Status, resp.Error)
+	}
+	if resp.Error == nil || resp.Error.Code != "FROZEN" {
+		t.Fatalf("err=%+v want code=FROZEN", resp.Error)
+	}
+}
+
 func TestBrokerRequest_NilReputation_DoesNotPanic(t *testing.T) {
 	// Reputation == nil should be silently skipped — no panic.
 	svc := &fakeBrokerService{

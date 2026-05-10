@@ -39,6 +39,25 @@ func (s *Store) PutPeerRevocation(ctx context.Context, r PeerRevocation) error {
 	return nil
 }
 
+// IsIdentityRevoked reports whether any peer tracker has gossiped a
+// REVOCATION for identityID. The broker pre-check uses this to refuse
+// a broker_request from an identity FROZEN at any peer regardless of
+// the originating region — see federation §6.1, reputation §12.
+func (s *Store) IsIdentityRevoked(ctx context.Context, identityID []byte) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT 1 FROM peer_revocations WHERE identity_id = ? LIMIT 1`,
+		identityID,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("storage: IsIdentityRevoked: %w", err)
+	}
+	return true, nil
+}
+
 // GetPeerRevocation returns the row for (trackerID, identityID), or
 // ok=false on miss.
 func (s *Store) GetPeerRevocation(ctx context.Context, trackerID, identityID []byte) (PeerRevocation, bool, error) {
