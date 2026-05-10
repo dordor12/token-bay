@@ -67,6 +67,13 @@ type FederationService interface {
 	federationStartTransfer
 }
 
+// ReputationRecorder is the slice of reputation used by the
+// broker_request handler. *reputation.Subsystem satisfies it
+// structurally.
+type ReputationRecorder interface {
+	RecordBrokerRequest(consumer ids.IdentityID, decision string) error
+}
+
 // Deps lists the subsystems an api handler may depend on. Fields left
 // nil cause the matching RPCs to register as ErrNotImplemented stubs.
 type Deps struct {
@@ -81,6 +88,7 @@ type Deps struct {
 	Settlement SettlementService
 	Admission  AdmissionService
 	Federation FederationService
+	Reputation ReputationRecorder
 }
 
 // RequestCtx carries per-call info every handler may need.

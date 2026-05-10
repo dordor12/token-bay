@@ -436,6 +436,24 @@ func TestValidate_ReputationFreezeListCacheTTLPositive(t *testing.T) {
 	assertOneFieldError(t, err, "reputation.freeze_list_cache_ttl_s")
 }
 
+func TestValidate_ReputationMinPopulationForZScorePositive(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.MinPopulationForZScore = 0
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "reputation.min_population_for_z_score")
+}
+
+func TestValidate_ReputationStoragePathNonEmpty(t *testing.T) {
+	c := validConfig(t)
+	c.Reputation.StoragePath = ""
+
+	err := Validate(c)
+
+	assertOneFieldError(t, err, "reputation.storage_path")
+}
+
 func TestValidate_AdmissionPressureOrdering(t *testing.T) {
 	c := validConfig(t)
 	c.Admission.PressureAdmitThreshold = 1.5

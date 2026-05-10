@@ -188,19 +188,20 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		}
 		if oerr != nil {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)
-			b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "unreachable")
+			_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "unreachable")
 			tried = append(tried, seeder.IdentityID)
 			triedAny = true
 			continue
 		}
 		if !accepted {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)
-			b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "reject")
+			_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "reject")
 			tried = append(tried, seeder.IdentityID)
 			triedAny = true
 			continue
 		}
 
+		_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "accept")
 		// Accepted — load stays incremented; settlement releases on terminal.
 		_ = b.mgr.Inflight.MarkSeeder(req.RequestID, seeder.IdentityID, ephPub)
 		if terr := b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateAssigned); terr != nil {

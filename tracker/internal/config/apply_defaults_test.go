@@ -133,6 +133,18 @@ func TestApplyDefaults_BlocklistStaysNilWhenNotSet(t *testing.T) {
 	require.Nil(t, c.Admission.AttestationPeerBlocklist)
 }
 
+func TestApplyDefaults_ReputationMinPopulationAndStoragePath(t *testing.T) {
+	c := &Config{DataDir: "/var/lib/token-bay"}
+	ApplyDefaults(c)
+	if c.Reputation.MinPopulationForZScore != 100 {
+		t.Errorf("MinPopulationForZScore = %d, want 100", c.Reputation.MinPopulationForZScore)
+	}
+	if c.Reputation.StoragePath != "/var/lib/token-bay/reputation.sqlite" {
+		t.Errorf("StoragePath = %q, want %q",
+			c.Reputation.StoragePath, "/var/lib/token-bay/reputation.sqlite")
+	}
+}
+
 func TestApplyDefaults_FederationNewFieldsGetDefaults(t *testing.T) {
 	c := &Config{}
 

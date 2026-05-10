@@ -29,6 +29,7 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
+	"github.com/token-bay/token-bay/tracker/internal/reputation"
 	"github.com/token-bay/token-bay/tracker/internal/server"
 	"github.com/token-bay/token-bay/tracker/internal/stunturn"
 )
@@ -93,6 +94,12 @@ func newRunCmd() *cobra.Command {
 			}
 			defer adm.Close() //nolint:errcheck
 
+			rep, err := reputation.Open(cmd.Context(), cfg.Reputation)
+			if err != nil {
+				return fmt.Errorf("reputation: %w", err)
+			}
+			defer rep.Close() //nolint:errcheck
+
 			var prices *broker.PriceTable
 			if cfg.Pricing.Models != nil {
 				prices = broker.NewPriceTableFromConfig(cfg.Pricing)
@@ -111,6 +118,7 @@ func newRunCmd() *cobra.Command {
 				Registry:   reg,
 				Ledger:     led,
 				Admission:  adm,
+				Reputation: rep,
 				Pusher:     pp,
 				Pricing:    prices,
 				TrackerKey: trackerKey,
@@ -211,6 +219,7 @@ func newRunCmd() *cobra.Command {
 				Broker:     brokerSubs.Broker,
 				Settlement: brokerSubs.Settlement,
 				Admission:  admissionAdapter{adm},
+				Reputation: rep,
 			})
 			if err != nil {
 				return err

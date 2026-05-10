@@ -11,6 +11,7 @@ import (
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/shared/signing"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
@@ -265,6 +266,16 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 	_, _, _ = s.mgr.Reservations.Release(req.RequestID)
 	_, _ = s.deps.Registry.DecLoad(req.AssignedSeeder)
 	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted)
+	if s.deps.Reputation != nil {
+		s.deps.Reputation.OnLedgerEvent(admission.LedgerEvent{
+			Kind:        admission.LedgerEventSettlement,
+			ConsumerID:  req.ConsumerID,
+			SeederID:    req.AssignedSeeder,
+			CostCredits: rec.CostCredits,
+			Flags:       1,                                  // bit 0 = consumer_sig_missing; v1 limitation per T17.5 follow-up
+			Timestamp:   time.Unix(int64(rec.Timestamp), 0), //nolint:gosec // G115: always positive
+		})
+	}
 }
 
 // HandleSettle accepts the consumer's counter-signature for a settled usage

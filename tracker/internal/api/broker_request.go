@@ -45,6 +45,10 @@ func (r *Router) installBrokerRequest() handlerFunc {
 		var consumer ids.IdentityID
 		copy(consumer[:], env.Body.ConsumerId)
 
+		if r.deps.Reputation != nil {
+			_ = r.deps.Reputation.RecordBrokerRequest(consumer, "submitted")
+		}
+
 		// TODO(broker-followup): verify consumer sig + balance proof + exhaustion proof.
 		// v1 trusts the mTLS-authenticated channel + admission gating.
 

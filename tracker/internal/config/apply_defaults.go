@@ -148,6 +148,12 @@ func ApplyDefaults(c *Config) {
 	if c.Reputation.FreezeListCacheTTLS == 0 {
 		c.Reputation.FreezeListCacheTTLS = d.Reputation.FreezeListCacheTTLS
 	}
+	if c.Reputation.MinPopulationForZScore == 0 {
+		c.Reputation.MinPopulationForZScore = d.Reputation.MinPopulationForZScore
+	}
+	if c.Reputation.StoragePath == "" && c.DataDir != "" {
+		c.Reputation.StoragePath = c.DataDir + "/reputation.sqlite"
+	}
 
 	// Admission — non-path fields
 	if c.Admission.PressureAdmitThreshold == 0 {

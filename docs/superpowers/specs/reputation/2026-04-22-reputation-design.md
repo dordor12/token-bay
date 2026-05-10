@@ -125,8 +125,10 @@ Scores refresh every minute; cached for tracker broker queries.
 
 ```
 z = (sample - population_median) / population_mad
-if |z| > 4: trigger audit
+if |z| > cfg.Reputation.ZScoreThreshold: trigger audit
 ```
+
+The default in `tracker/internal/config/config.go` is 2.5; the |z|>4 figure was an early sketch and is documented for reference only.
 
 Using median + MAD (median absolute deviation) instead of mean + stddev for robustness against the very outliers we're trying to detect.
 

@@ -110,6 +110,16 @@ type ReputationConfig struct {
 	ZScoreThreshold     float64                 `yaml:"z_score_threshold"`
 	DefaultScore        float64                 `yaml:"default_score"`
 	FreezeListCacheTTLS int                     `yaml:"freeze_list_cache_ttl_s"`
+
+	// MinPopulationForZScore is the bootstrap gate from spec open-question 10.1:
+	// the evaluator skips §6.1 z-score detection until the population for a
+	// signal's role meets this threshold. Categorical breaches (§6.2) still
+	// fire below the threshold.
+	MinPopulationForZScore int `yaml:"min_population_for_z_score"`
+
+	// StoragePath is the SQLite DB path. Empty falls through to
+	// "${data_dir}/reputation.sqlite" via ApplyDefaults.
+	StoragePath string `yaml:"storage_path"`
 }
 
 type ReputationSignalWindows struct {
@@ -245,9 +255,11 @@ func DefaultConfig() *Config {
 				MediumS: 86400,
 				LongS:   604800,
 			},
-			ZScoreThreshold:     2.5,
-			DefaultScore:        0.5,
-			FreezeListCacheTTLS: 600,
+			ZScoreThreshold:        2.5,
+			DefaultScore:           0.5,
+			FreezeListCacheTTLS:    600,
+			MinPopulationForZScore: 100,
+			// StoragePath stays empty; ApplyDefaults derives it from DataDir.
 		},
 		Admission: AdmissionConfig{
 			PressureAdmitThreshold:  0.85,
