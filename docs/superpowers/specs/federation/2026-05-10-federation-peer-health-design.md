@@ -7,7 +7,7 @@
 Replace `tracker/internal/federation/peerexchange.go:66-75` with a real per-peer health computation that reflects three of the four signals named in `docs/superpowers/specs/federation/2026-04-22-federation-design.md` §7.3:
 
 - **Uptime** — time since the most recent successful `KIND_ROOT_ATTESTATION` from the peer.
-- **Revocation-gossip delay** — average `received_at − signed_at` for revocations whose issuer is the peer itself.
+- **Revocation-gossip delay** — average `received_at − revoked_at` for revocations whose issuer is the peer itself (using the `Revocation.revoked_at` proto field).
 - **Equivocation incidents** — sticky disqualification once detected.
 
 The fourth signal — peering latency — is explicitly deferred to a follow-up slice (see §3 Non-goals).
@@ -35,7 +35,7 @@ A new `*PeerHealth` value lives on the `Federation` struct. It owns three pieces
 | Field | Type | Updated by | Read by |
 |---|---|---|---|
 | `lastRoot` | `map[ids.TrackerID]time.Time` | `OnRootAttestation(peer, now)` | `Score` |
-| `revGossipDelays` | `map[ids.TrackerID]*ringBuf16` | `OnRevocation(issuer, signedAt, now)` (only when `issuer == peer` for that peer's own ring) | `Score` |
+| `revGossipDelays` | `map[ids.TrackerID]*ringBuf16` | `OnRevocation(issuer, revokedAt, now)` (only when `issuer == peer` for that peer's own ring) | `Score` |
 | `equivocated` | `map[ids.TrackerID]struct{}` (sticky) | `OnEquivocation(peer)` | `Score` |
 
 No background goroutines. Score is computed on demand. Observe* methods are O(1); Score is O(buffer-size) = O(16) under the lock.
@@ -88,7 +88,7 @@ Five integration points in existing code, all minimal:
 
 1. **`subsystem.go` constructor** — build `health := NewPeerHealth(cfg.Health, dep.Now)` alongside the existing coordinators; store on `*Federation` as `f.health`.
 2. **`subsystem.go:436-443` (ROOT_ATTESTATION receive)** — after `f.dep.Metrics.RootAttestationsReceived("archived")`, call `f.health.OnRootAttestation(peerID, f.dep.Now())`. Only on the success branch — the equivocation-detected branch already returns before we'd want to credit uptime.
-3. **`revocation.go:OnIncoming`** — after canonical sig and archive verify succeed, fire a new `OnRevocationObserved(issuer, signedAt, recvAt)` callback in `revocationCoordinatorCfg`. Subsystem wires the callback to `health.OnRevocation`. Keeps the `health` import out of `revocation.go`.
+3. **`revocation.go:OnIncoming`** — after canonical sig and archive verify succeed, fire a new `OnRevocationObserved(issuer, revokedAt, recvAt)` callback in `revocationCoordinatorCfg`. Subsystem wires the callback to `health.OnRevocation`. Keeps the `health` import out of `revocation.go`.
 4. **`equivocation.go` (`Equivocator`)** — gains an optional `onFlag func(ids.TrackerID)` field set by a new `NewEquivocator(...)` parameter; both `OnLocalConflict` and `OnIncomingEvidence` fire it after their existing `Depeer` call. The subsystem passes `health.OnEquivocation` as that callback. No new hook is needed at `subsystem.go:498` — the locally-detected-conflict path already routes through `Equivocator.OnLocalConflict` via the slice-3 `apply.RegisterEquivocator` wiring, and that now fans out to `health`. See §10.
 5. **`peerexchange.go:EmitNow`** — replace the placeholder block (`peerexchange.go:66-75`) with a `Score()` call followed by `archive.UpdateKnownPeerHealth(...)` write-through, then emit the proto with the fresh score. The `PeerConnected` callback drops out entirely.
 
@@ -153,7 +153,7 @@ A `-race` test exercises concurrent Observe* + Score; see §12.
 |---|---|
 | `tracker/internal/federation/health_test.go` (new) | Unit. Score values at t=0, t=1h, t=2h, t=3h after a ROOT_ATTESTATION. Empty-ring → 1.0, single 0s → 1.0, single 600s → 0.0, averaged samples, capacity wrap-around. Equivocation sticks and overrides max signals. Revgossip ignores revocations whose issuer ≠ peer. Concurrent Observe* + Score under `-race`. |
 | `tracker/internal/federation/peerexchange_test.go` (modify) | Existing tests update: the hardcoded 0.5/1.0 expectations become values driven by an injected `*PeerHealth` with synthetic observations. Verify `UpdateKnownPeerHealth` is called per row before the emit. |
-| `tracker/internal/federation/integration_test.go` (extend two-peer scenario) | Peer A receives `ROOT_ATTESTATION` at t=0, peer B never does; at t=2h, A's persisted score > B's. Add a revocation issued by A with `signedAt = now-30s`; revgossip subscore drops accordingly. Equivocation detection on B flips B's persisted score to 0 on the next emit. |
+| `tracker/internal/federation/integration_test.go` (extend two-peer scenario) | Peer A receives `ROOT_ATTESTATION` at t=0, peer B never does; at t=2h, A's persisted score > B's. Add a revocation issued by A with `revokedAt = now-30s`; revgossip subscore drops accordingly. Equivocation detection on B flips B's persisted score to 0 on the next emit. |
 | `tracker/internal/ledger/storage/known_peers_test.go` (modify) | New test for `UpdateKnownPeerHealth`: updates existing row, no-op on missing row, no other column touched. |
 | `tracker/internal/federation/metrics_test.go` (modify) | Counter labels exercised end-to-end via `Score`. |
 
@@ -161,7 +161,7 @@ A `-race` test exercises concurrent Observe* + Score; see §12.
 
 - **`UpdateKnownPeerHealth` returns an error mid-emit.** Logged via `pc.cfg.Invalid("health_persist")` and the score is still emitted on the wire (in-memory `health` value used). The emit does not abort. This matches the slice-3 idiom: a single-row persistence failure should not block the whole gossip cycle.
 - **`PeerHealth` map grows unboundedly?** Bounded by the number of distinct `tracker_id`s observed in this process's lifetime — same envelope as the federation registry, which is operator-allowlist-bounded plus gossip-discovered peers (also capped by `peer_exchange` validators in `shared/federation/validate.go`). No GC needed for slice 5.
-- **Clock skew / negative deltas.** `now - signedAt` may be negative if a peer signs in the future relative to our wall clock. Treat as zero-delay (best case for the peer); `clamp(...)` handles the corresponding score endpoint. The validator on `Revocation.signed_at` already caps absolute weirdness.
+- **Clock skew / negative deltas.** `now - revokedAt` may be negative if a peer signs in the future relative to our wall clock. Treat as zero-delay (best case for the peer); `clamp(...)` handles the corresponding score endpoint. The validator on `Revocation.revoked_at` already caps absolute weirdness.
 
 ## 14. Migration / rollout
 
