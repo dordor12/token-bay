@@ -15,6 +15,9 @@ enum Kind {
   KIND_EQUIVOCATION_EVIDENCE = 6;
   KIND_PING                  = 7;
   KIND_PONG                  = 8;
+  KIND_TRANSFER_PROOF_REQUEST = 9;
+  KIND_TRANSFER_PROOF         = 10;
+  KIND_TRANSFER_APPLIED       = 11;
 }
 
 // Envelope wraps every steady-state and handshake message (including

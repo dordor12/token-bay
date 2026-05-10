@@ -27,40 +27,49 @@ const (
 type Kind int32
 
 const (
-	Kind_KIND_UNSPECIFIED           Kind = 0
-	Kind_KIND_HELLO                 Kind = 1
-	Kind_KIND_PEER_AUTH             Kind = 2
-	Kind_KIND_PEERING_ACCEPT        Kind = 3
-	Kind_KIND_PEERING_REJECT        Kind = 4
-	Kind_KIND_ROOT_ATTESTATION      Kind = 5
-	Kind_KIND_EQUIVOCATION_EVIDENCE Kind = 6
-	Kind_KIND_PING                  Kind = 7
-	Kind_KIND_PONG                  Kind = 8
+	Kind_KIND_UNSPECIFIED            Kind = 0
+	Kind_KIND_HELLO                  Kind = 1
+	Kind_KIND_PEER_AUTH              Kind = 2
+	Kind_KIND_PEERING_ACCEPT         Kind = 3
+	Kind_KIND_PEERING_REJECT         Kind = 4
+	Kind_KIND_ROOT_ATTESTATION       Kind = 5
+	Kind_KIND_EQUIVOCATION_EVIDENCE  Kind = 6
+	Kind_KIND_PING                   Kind = 7
+	Kind_KIND_PONG                   Kind = 8
+	Kind_KIND_TRANSFER_PROOF_REQUEST Kind = 9
+	Kind_KIND_TRANSFER_PROOF         Kind = 10
+	Kind_KIND_TRANSFER_APPLIED       Kind = 11
 )
 
 // Enum value maps for Kind.
 var (
 	Kind_name = map[int32]string{
-		0: "KIND_UNSPECIFIED",
-		1: "KIND_HELLO",
-		2: "KIND_PEER_AUTH",
-		3: "KIND_PEERING_ACCEPT",
-		4: "KIND_PEERING_REJECT",
-		5: "KIND_ROOT_ATTESTATION",
-		6: "KIND_EQUIVOCATION_EVIDENCE",
-		7: "KIND_PING",
-		8: "KIND_PONG",
+		0:  "KIND_UNSPECIFIED",
+		1:  "KIND_HELLO",
+		2:  "KIND_PEER_AUTH",
+		3:  "KIND_PEERING_ACCEPT",
+		4:  "KIND_PEERING_REJECT",
+		5:  "KIND_ROOT_ATTESTATION",
+		6:  "KIND_EQUIVOCATION_EVIDENCE",
+		7:  "KIND_PING",
+		8:  "KIND_PONG",
+		9:  "KIND_TRANSFER_PROOF_REQUEST",
+		10: "KIND_TRANSFER_PROOF",
+		11: "KIND_TRANSFER_APPLIED",
 	}
 	Kind_value = map[string]int32{
-		"KIND_UNSPECIFIED":           0,
-		"KIND_HELLO":                 1,
-		"KIND_PEER_AUTH":             2,
-		"KIND_PEERING_ACCEPT":        3,
-		"KIND_PEERING_REJECT":        4,
-		"KIND_ROOT_ATTESTATION":      5,
-		"KIND_EQUIVOCATION_EVIDENCE": 6,
-		"KIND_PING":                  7,
-		"KIND_PONG":                  8,
+		"KIND_UNSPECIFIED":            0,
+		"KIND_HELLO":                  1,
+		"KIND_PEER_AUTH":              2,
+		"KIND_PEERING_ACCEPT":         3,
+		"KIND_PEERING_REJECT":         4,
+		"KIND_ROOT_ATTESTATION":       5,
+		"KIND_EQUIVOCATION_EVIDENCE":  6,
+		"KIND_PING":                   7,
+		"KIND_PONG":                   8,
+		"KIND_TRANSFER_PROOF_REQUEST": 9,
+		"KIND_TRANSFER_PROOF":         10,
+		"KIND_TRANSFER_APPLIED":       11,
 	}
 )
 
@@ -658,7 +667,7 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x04Ping\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\x1c\n" +
 	"\x04Pong\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\x04R\x05nonce*\xcb\x01\n" +
+	"\x05nonce\x18\x01 \x01(\x04R\x05nonce*\xa0\x02\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -669,7 +678,11 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x15KIND_ROOT_ATTESTATION\x10\x05\x12\x1e\n" +
 	"\x1aKIND_EQUIVOCATION_EVIDENCE\x10\x06\x12\r\n" +
 	"\tKIND_PING\x10\a\x12\r\n" +
-	"\tKIND_PONG\x10\bB2Z0github.com/token-bay/token-bay/shared/federationb\x06proto3"
+	"\tKIND_PONG\x10\b\x12\x1f\n" +
+	"\x1bKIND_TRANSFER_PROOF_REQUEST\x10\t\x12\x17\n" +
+	"\x13KIND_TRANSFER_PROOF\x10\n" +
+	"\x12\x19\n" +
+	"\x15KIND_TRANSFER_APPLIED\x10\vB2Z0github.com/token-bay/token-bay/shared/federationb\x06proto3"
 
 var (
 	file_federation_federation_proto_rawDescOnce sync.Once

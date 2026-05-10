@@ -123,3 +123,21 @@ func TestValidateHelloAndPeerAuth(t *testing.T) {
 		t.Fatal("expected sig-len error")
 	}
 }
+
+func TestValidateEnvelope_AcceptsTransferKinds(t *testing.T) {
+	t.Parallel()
+	for _, k := range []fed.Kind{
+		fed.Kind_KIND_TRANSFER_PROOF_REQUEST,
+		fed.Kind_KIND_TRANSFER_PROOF,
+		fed.Kind_KIND_TRANSFER_APPLIED,
+	} {
+		if err := fed.ValidateEnvelope(&fed.Envelope{
+			SenderId:  b(32, 1),
+			Kind:      k,
+			Payload:   []byte{0x01},
+			SenderSig: b(64, 2),
+		}); err != nil {
+			t.Fatalf("kind=%v: ValidateEnvelope err=%v, want nil", k, err)
+		}
+	}
+}
