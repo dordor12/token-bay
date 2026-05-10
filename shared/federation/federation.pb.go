@@ -40,6 +40,7 @@ const (
 	Kind_KIND_TRANSFER_PROOF         Kind = 10
 	Kind_KIND_TRANSFER_APPLIED       Kind = 11
 	Kind_KIND_REVOCATION             Kind = 12
+	Kind_KIND_PEER_EXCHANGE          Kind = 13
 )
 
 // Enum value maps for Kind.
@@ -58,6 +59,7 @@ var (
 		10: "KIND_TRANSFER_PROOF",
 		11: "KIND_TRANSFER_APPLIED",
 		12: "KIND_REVOCATION",
+		13: "KIND_PEER_EXCHANGE",
 	}
 	Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":            0,
@@ -73,6 +75,7 @@ var (
 		"KIND_TRANSFER_PROOF":         10,
 		"KIND_TRANSFER_APPLIED":       11,
 		"KIND_REVOCATION":             12,
+		"KIND_PEER_EXCHANGE":          13,
 	}
 )
 
@@ -1038,6 +1041,126 @@ func (x *Revocation) GetTrackerSig() []byte {
 	return nil
 }
 
+type KnownPeer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TrackerId     []byte                 `protobuf:"bytes,1,opt,name=tracker_id,json=trackerId,proto3" json:"tracker_id,omitempty"`         // 32 bytes
+	Addr          string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`                                    // e.g. "wss://tracker.example.org:443"; len ≤ 256
+	LastSeen      uint64                 `protobuf:"varint,3,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`           // unix seconds; 0 = never
+	RegionHint    string                 `protobuf:"bytes,4,opt,name=region_hint,json=regionHint,proto3" json:"region_hint,omitempty"`      // human-friendly; len ≤ 64
+	HealthScore   float64                `protobuf:"fixed64,5,opt,name=health_score,json=healthScore,proto3" json:"health_score,omitempty"` // 0..1 (clamped on validate)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KnownPeer) Reset() {
+	*x = KnownPeer{}
+	mi := &file_federation_federation_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnownPeer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnownPeer) ProtoMessage() {}
+
+func (x *KnownPeer) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnownPeer.ProtoReflect.Descriptor instead.
+func (*KnownPeer) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *KnownPeer) GetTrackerId() []byte {
+	if x != nil {
+		return x.TrackerId
+	}
+	return nil
+}
+
+func (x *KnownPeer) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *KnownPeer) GetLastSeen() uint64 {
+	if x != nil {
+		return x.LastSeen
+	}
+	return 0
+}
+
+func (x *KnownPeer) GetRegionHint() string {
+	if x != nil {
+		return x.RegionHint
+	}
+	return ""
+}
+
+func (x *KnownPeer) GetHealthScore() float64 {
+	if x != nil {
+		return x.HealthScore
+	}
+	return 0
+}
+
+type PeerExchange struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Peers         []*KnownPeer           `protobuf:"bytes,1,rep,name=peers,proto3" json:"peers,omitempty"` // ≤ 1024 entries (validator)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PeerExchange) Reset() {
+	*x = PeerExchange{}
+	mi := &file_federation_federation_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PeerExchange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PeerExchange) ProtoMessage() {}
+
+func (x *PeerExchange) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PeerExchange.ProtoReflect.Descriptor instead.
+func (*PeerExchange) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *PeerExchange) GetPeers() []*KnownPeer {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
 var File_federation_federation_proto protoreflect.FileDescriptor
 
 const file_federation_federation_proto_rawDesc = "" +
@@ -1121,7 +1244,17 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\n" +
 	"revoked_at\x18\x04 \x01(\x04R\trevokedAt\x12\x1f\n" +
 	"\vtracker_sig\x18\x05 \x01(\fR\n" +
-	"trackerSig*\xb5\x02\n" +
+	"trackerSig\"\x9f\x01\n" +
+	"\tKnownPeer\x12\x1d\n" +
+	"\n" +
+	"tracker_id\x18\x01 \x01(\fR\ttrackerId\x12\x12\n" +
+	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1b\n" +
+	"\tlast_seen\x18\x03 \x01(\x04R\blastSeen\x12\x1f\n" +
+	"\vregion_hint\x18\x04 \x01(\tR\n" +
+	"regionHint\x12!\n" +
+	"\fhealth_score\x18\x05 \x01(\x01R\vhealthScore\"G\n" +
+	"\fPeerExchange\x127\n" +
+	"\x05peers\x18\x01 \x03(\v2!.tokenbay.federation.v1.KnownPeerR\x05peers*\xcd\x02\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -1137,7 +1270,8 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x13KIND_TRANSFER_PROOF\x10\n" +
 	"\x12\x19\n" +
 	"\x15KIND_TRANSFER_APPLIED\x10\v\x12\x13\n" +
-	"\x0fKIND_REVOCATION\x10\f*\x8f\x01\n" +
+	"\x0fKIND_REVOCATION\x10\f\x12\x16\n" +
+	"\x12KIND_PEER_EXCHANGE\x10\r*\x8f\x01\n" +
 	"\x10RevocationReason\x12!\n" +
 	"\x1dREVOCATION_REASON_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17REVOCATION_REASON_ABUSE\x10\x01\x12\x1c\n" +
@@ -1158,7 +1292,7 @@ func file_federation_federation_proto_rawDescGZIP() []byte {
 
 var (
 	file_federation_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 13)
+	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 15)
 	file_federation_federation_proto_goTypes   = []any{
 		(Kind)(0),                    // 0: tokenbay.federation.v1.Kind
 		(RevocationReason)(0),        // 1: tokenbay.federation.v1.RevocationReason
@@ -1175,16 +1309,19 @@ var (
 		(*TransferProof)(nil),        // 12: tokenbay.federation.v1.TransferProof
 		(*TransferApplied)(nil),      // 13: tokenbay.federation.v1.TransferApplied
 		(*Revocation)(nil),           // 14: tokenbay.federation.v1.Revocation
+		(*KnownPeer)(nil),            // 15: tokenbay.federation.v1.KnownPeer
+		(*PeerExchange)(nil),         // 16: tokenbay.federation.v1.PeerExchange
 	}
 )
 var file_federation_federation_proto_depIdxs = []int32{
-	0, // 0: tokenbay.federation.v1.Envelope.kind:type_name -> tokenbay.federation.v1.Kind
-	1, // 1: tokenbay.federation.v1.Revocation.reason:type_name -> tokenbay.federation.v1.RevocationReason
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0,  // 0: tokenbay.federation.v1.Envelope.kind:type_name -> tokenbay.federation.v1.Kind
+	1,  // 1: tokenbay.federation.v1.Revocation.reason:type_name -> tokenbay.federation.v1.RevocationReason
+	15, // 2: tokenbay.federation.v1.PeerExchange.peers:type_name -> tokenbay.federation.v1.KnownPeer
+	3,  // [3:3] is the sub-list for method output_type
+	3,  // [3:3] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_federation_federation_proto_init() }
@@ -1198,7 +1335,7 @@ func file_federation_federation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_federation_federation_proto_rawDesc), len(file_federation_federation_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
