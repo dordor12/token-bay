@@ -40,6 +40,13 @@ type Federation struct {
 	mu           sync.Mutex
 	peers        map[ids.TrackerID]*Peer // active recv goroutines
 	closed       bool
+
+	// inflightAttaches tracks attachPeerLocked calls that have passed the
+	// closed-check and are still running pe.Start. Close waits on this
+	// before iterating f.peers and calling p.Stop, which prevents
+	// p.Stop's stopOnce from racing p.Start's startOnce on memory that
+	// the race detector may have repurposed from a prior Peer.
+	inflightAttaches sync.WaitGroup
 }
 
 // Open constructs and starts the federation subsystem. It returns a ready
@@ -246,12 +253,18 @@ func (f *Federation) Peers() []PeerInfo { return f.reg.All() }
 
 // Depeer removes a peer from the active set.
 func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
+	// Snapshot + delete under f.mu, then Stop outside the lock: p.Stop
+	// blocks on wg.Wait, and recvLoop may need f.mu via ActivePeers, so
+	// holding f.mu through Stop deadlocks.
 	f.mu.Lock()
-	if p, ok := f.peers[id]; ok {
-		p.Stop()
+	p, ok := f.peers[id]
+	if ok {
 		delete(f.peers, id)
 	}
 	f.mu.Unlock()
+	if ok {
+		p.Stop()
+	}
 	return f.reg.Depeer(id, reason)
 }
 
@@ -351,6 +364,12 @@ func (f *Federation) AddPeer(p AllowlistedPeer) error {
 
 // Close shuts down the subsystem, stopping all peer goroutines and closing
 // the transport. Safe to call more than once.
+//
+// Lock discipline: p.Stop blocks on wg.Wait until recvLoop exits, and
+// recvLoop may itself need f.mu via gossip.Forward → ActivePeers. So
+// Close snapshots the peer set under the lock, releases the lock, then
+// iterates p.Stop. Without that, a recvLoop mid-dispatch deadlocks
+// against Close holding f.mu.
 func (f *Federation) Close() error {
 	f.mu.Lock()
 	if f.closed {
@@ -358,11 +377,17 @@ func (f *Federation) Close() error {
 		return nil
 	}
 	f.closed = true
-	for _, p := range f.peers {
-		p.Stop()
-	}
+	snap := f.peers
 	f.peers = nil
 	f.mu.Unlock()
+	// Wait for any attachPeerLocked that already passed the closed-check
+	// to finish pe.Start. This serializes startOnce before stopOnce so
+	// the race detector can't (mis)flag them as concurrent on memory
+	// recycled from a prior Peer.
+	f.inflightAttaches.Wait()
+	for _, p := range snap {
+		p.Stop()
+	}
 	if f.listenCancel != nil {
 		f.listenCancel()
 	}
@@ -400,6 +425,12 @@ func (f *Federation) attachPeer(res HandshakeResult, c PeerConn) {
 // recycled and concurrently accessed by Transport.Close's pair-Close
 // path during test teardown — the race detector flags this even though
 // the accesses are logically disjoint.
+//
+// pe.Start MUST stay outside f.mu: recvLoop fires synchronous dispatch
+// callbacks that re-enter the gossip→registry path which itself
+// acquires registry mutexes, and Close holds f.mu while calling
+// p.Stop → p.wg.Wait, so any cross-locking deadlocks if Start is
+// nested under f.mu.
 func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	f.mu.Lock()
 	if f.closed {
@@ -413,8 +444,14 @@ func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	pe := NewPeerForTest(c, dispatch)
 	f.peers[res.PeerTrackerID] = pe
 	_ = f.reg.Update(PeerInfo{TrackerID: res.PeerTrackerID, PubKey: res.PeerPubKey, Addr: c.RemoteAddr(), State: PeerStateSteady, Conn: c})
+	// Register the attach as in-flight before releasing the lock, so a
+	// concurrent Close() that observes closed=false here will wait on
+	// inflightAttaches before calling p.Stop on this pe. Done is fired
+	// after pe.Start completes spawning the recv goroutine.
+	f.inflightAttaches.Add(1)
 	f.mu.Unlock()
 	pe.Start(context.Background())
+	f.inflightAttaches.Done()
 	return pe
 }
 
