@@ -131,6 +131,22 @@ func ApplyDefaults(c *Config) {
 	if c.Federation.Bootstrap.TTLSeconds == 0 {
 		c.Federation.Bootstrap.TTLSeconds = d.Federation.Bootstrap.TTLSeconds
 	}
+	if c.Federation.Health.UptimeWindowS == 0 {
+		c.Federation.Health.UptimeWindowS = d.Federation.Health.UptimeWindowS
+	}
+	if c.Federation.Health.RevGossipWindowS == 0 {
+		c.Federation.Health.RevGossipWindowS = d.Federation.Health.RevGossipWindowS
+	}
+	if c.Federation.Health.RevGossipBufferSize == 0 {
+		c.Federation.Health.RevGossipBufferSize = d.Federation.Health.RevGossipBufferSize
+	}
+	// Weights: zero-zero pair means "no operator override" → fill from
+	// defaults. Partial override left alone so Validate's sum check
+	// fires loudly. Same idiom as BrokerScoreWeights.
+	if c.Federation.Health.UptimeWeight == 0 && c.Federation.Health.RevGossipWeight == 0 {
+		c.Federation.Health.UptimeWeight = d.Federation.Health.UptimeWeight
+		c.Federation.Health.RevGossipWeight = d.Federation.Health.RevGossipWeight
+	}
 
 	// Reputation
 	if c.Reputation.EvaluationIntervalS == 0 {

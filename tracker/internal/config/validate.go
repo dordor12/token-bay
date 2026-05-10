@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -280,6 +281,28 @@ func (v *validator) checkFederation(c *Config) {
 	if c.Federation.Bootstrap.TTLSeconds < 60 || c.Federation.Bootstrap.TTLSeconds > 3600 {
 		v.add("federation.bootstrap.ttl_seconds",
 			"must be 60..3600, got "+strconv.Itoa(c.Federation.Bootstrap.TTLSeconds))
+	}
+	if c.Federation.Health.UptimeWindowS <= 0 {
+		v.add("federation.health.uptime_window_s",
+			"must be > 0, got "+strconv.Itoa(c.Federation.Health.UptimeWindowS))
+	}
+	if c.Federation.Health.RevGossipWindowS <= 0 {
+		v.add("federation.health.rev_gossip_window_s",
+			"must be > 0, got "+strconv.Itoa(c.Federation.Health.RevGossipWindowS))
+	}
+	if c.Federation.Health.RevGossipBufferSize < 1 || c.Federation.Health.RevGossipBufferSize > 256 {
+		v.add("federation.health.rev_gossip_buffer_size",
+			"must be 1..256, got "+strconv.Itoa(c.Federation.Health.RevGossipBufferSize))
+	}
+	if c.Federation.Health.UptimeWeight < 0 || c.Federation.Health.UptimeWeight > 1 {
+		v.add("federation.health.uptime_weight", "must be in [0,1]")
+	}
+	if c.Federation.Health.RevGossipWeight < 0 || c.Federation.Health.RevGossipWeight > 1 {
+		v.add("federation.health.rev_gossip_weight", "must be in [0,1]")
+	}
+	if math.Abs(c.Federation.Health.UptimeWeight+c.Federation.Health.RevGossipWeight-1.0) > 1e-9 {
+		v.add("federation.health",
+			"uptime_weight + rev_gossip_weight must sum to 1.0")
 	}
 	if c.Federation.ListenAddr != "" {
 		if _, _, err := net.SplitHostPort(c.Federation.ListenAddr); err != nil {
