@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	TrackerIDLen = 32
-	RootLen      = 32
-	SigLen       = 64
-	NonceLen     = 32
+	TrackerIDLen  = 32
+	RootLen       = 32
+	SigLen        = 64
+	NonceLen      = 32
+	Ed25519PubLen = 32
 )
 
 // ValidateEnvelope enforces shape invariants on an Envelope. Receivers
@@ -112,4 +113,114 @@ func allZero(b []byte) bool {
 		}
 	}
 	return true
+}
+
+// ValidateTransferProofRequest enforces shape invariants on a
+// TransferProofRequest. Receivers MUST call this before verifying any
+// signature or dispatching it to LedgerHooks.AppendTransferOut.
+func ValidateTransferProofRequest(m *TransferProofRequest) error {
+	if m == nil {
+		return errors.New("federation: nil TransferProofRequest")
+	}
+	if len(m.SourceTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_request.source_tracker_id len %d != %d", len(m.SourceTrackerId), TrackerIDLen)
+	}
+	if len(m.DestTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_request.dest_tracker_id len %d != %d", len(m.DestTrackerId), TrackerIDLen)
+	}
+	if len(m.IdentityId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_request.identity_id len %d != %d", len(m.IdentityId), TrackerIDLen)
+	}
+	if m.Amount == 0 {
+		return errors.New("federation: transfer_request.amount must be > 0")
+	}
+	if len(m.Nonce) != NonceLen {
+		return fmt.Errorf("federation: transfer_request.nonce len %d != %d", len(m.Nonce), NonceLen)
+	}
+	if len(m.ConsumerSig) != SigLen {
+		return fmt.Errorf("federation: transfer_request.consumer_sig len %d != %d", len(m.ConsumerSig), SigLen)
+	}
+	if len(m.ConsumerPub) != Ed25519PubLen {
+		return fmt.Errorf("federation: transfer_request.consumer_pub len %d != %d", len(m.ConsumerPub), Ed25519PubLen)
+	}
+	if bytes.Equal(m.SourceTrackerId, m.DestTrackerId) {
+		return errors.New("federation: transfer_request.source_tracker_id == dest_tracker_id")
+	}
+	if allZero(m.SourceTrackerId) {
+		return errors.New("federation: transfer_request.source_tracker_id is all zero")
+	}
+	if allZero(m.DestTrackerId) {
+		return errors.New("federation: transfer_request.dest_tracker_id is all zero")
+	}
+	if allZero(m.IdentityId) {
+		return errors.New("federation: transfer_request.identity_id is all zero")
+	}
+	if allZero(m.Nonce) {
+		return errors.New("federation: transfer_request.nonce is all zero")
+	}
+	if m.Timestamp == 0 {
+		return errors.New("federation: transfer_request.timestamp must be > 0")
+	}
+	return nil
+}
+
+// ValidateTransferProof enforces shape invariants on a TransferProof.
+func ValidateTransferProof(m *TransferProof) error {
+	if m == nil {
+		return errors.New("federation: nil TransferProof")
+	}
+	if len(m.SourceTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_proof.source_tracker_id len %d != %d", len(m.SourceTrackerId), TrackerIDLen)
+	}
+	if len(m.DestTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_proof.dest_tracker_id len %d != %d", len(m.DestTrackerId), TrackerIDLen)
+	}
+	if len(m.IdentityId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_proof.identity_id len %d != %d", len(m.IdentityId), TrackerIDLen)
+	}
+	if m.Amount == 0 {
+		return errors.New("federation: transfer_proof.amount must be > 0")
+	}
+	if len(m.Nonce) != NonceLen {
+		return fmt.Errorf("federation: transfer_proof.nonce len %d != %d", len(m.Nonce), NonceLen)
+	}
+	if len(m.SourceChainTipHash) != RootLen {
+		return fmt.Errorf("federation: transfer_proof.source_chain_tip_hash len %d != %d", len(m.SourceChainTipHash), RootLen)
+	}
+	if len(m.SourceTrackerSig) != SigLen {
+		return fmt.Errorf("federation: transfer_proof.source_tracker_sig len %d != %d", len(m.SourceTrackerSig), SigLen)
+	}
+	if bytes.Equal(m.SourceTrackerId, m.DestTrackerId) {
+		return errors.New("federation: transfer_proof.source_tracker_id == dest_tracker_id")
+	}
+	if m.Timestamp == 0 {
+		return errors.New("federation: transfer_proof.timestamp must be > 0")
+	}
+	return nil
+}
+
+// ValidateTransferApplied enforces shape invariants on a TransferApplied.
+func ValidateTransferApplied(m *TransferApplied) error {
+	if m == nil {
+		return errors.New("federation: nil TransferApplied")
+	}
+	if len(m.SourceTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_applied.source_tracker_id len %d != %d", len(m.SourceTrackerId), TrackerIDLen)
+	}
+	if len(m.DestTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_applied.dest_tracker_id len %d != %d", len(m.DestTrackerId), TrackerIDLen)
+	}
+	if len(m.Nonce) != NonceLen {
+		return fmt.Errorf("federation: transfer_applied.nonce len %d != %d", len(m.Nonce), NonceLen)
+	}
+	if len(m.DestTrackerSig) != SigLen {
+		return fmt.Errorf("federation: transfer_applied.dest_tracker_sig len %d != %d", len(m.DestTrackerSig), SigLen)
+	}
+	if bytes.Equal(m.SourceTrackerId, m.DestTrackerId) {
+		return errors.New("federation: transfer_applied.source_tracker_id == dest_tracker_id")
+	}
+	if m.Timestamp == 0 {
+		return errors.New("federation: transfer_applied.timestamp must be > 0")
+	}
+	return nil
 }
