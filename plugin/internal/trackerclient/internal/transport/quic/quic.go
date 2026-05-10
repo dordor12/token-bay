@@ -4,6 +4,7 @@ package quic
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -48,19 +49,26 @@ func (d *Driver) Dial(ctx context.Context, ep transport.Endpoint, id transport.I
 	var pid ids.IdentityID
 	copy(pid[:], h[:])
 
+	peerPub, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	if !ok {
+		_ = raw.CloseWithError(0, "non-ed25519 peer pubkey")
+		return nil, errors.New("quic: peer cert pubkey is not Ed25519")
+	}
+
 	done := make(chan struct{})
 	go func() {
 		<-raw.Context().Done()
 		close(done)
 	}()
 
-	return &qConn{raw: raw, peerID: pid, done: done}, nil
+	return &qConn{raw: raw, peerID: pid, peerPub: peerPub, done: done}, nil
 }
 
 type qConn struct {
-	raw    *quicgo.Conn
-	peerID ids.IdentityID
-	done   chan struct{}
+	raw     *quicgo.Conn
+	peerID  ids.IdentityID
+	peerPub ed25519.PublicKey
+	done    chan struct{}
 }
 
 func (c *qConn) OpenStreamSync(ctx context.Context) (transport.Stream, error) {
@@ -79,8 +87,9 @@ func (c *qConn) AcceptStream(ctx context.Context) (transport.Stream, error) {
 	return &qStream{raw: s}, nil
 }
 
-func (c *qConn) PeerIdentityID() ids.IdentityID { return c.peerID }
-func (c *qConn) Done() <-chan struct{}          { return c.done }
+func (c *qConn) PeerIdentityID() ids.IdentityID   { return c.peerID }
+func (c *qConn) PeerPublicKey() ed25519.PublicKey { return c.peerPub }
+func (c *qConn) Done() <-chan struct{}            { return c.done }
 
 func (c *qConn) Close() error {
 	return c.raw.CloseWithError(0, "client close")

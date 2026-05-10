@@ -85,15 +85,23 @@ type FederationConfig struct {
 	TransferRetryWindowH  int `yaml:"transfer_retry_window_hours"`
 	EnrollRatePerMinPerIP int `yaml:"enroll_rate_per_min_per_ip"`
 
-	HandshakeTimeoutS int              `yaml:"handshake_timeout_s"`
-	GossipRateQPS     int              `yaml:"gossip_rate_qps"`
-	SendQueueDepth    int              `yaml:"send_queue_depth"`
-	PublishCadenceS   int              `yaml:"publish_cadence_s"`
-	ListenAddr        string           `yaml:"listen_addr"`
-	IdleTimeoutS      int              `yaml:"idle_timeout_s"`
-	RedialBaseS       int              `yaml:"redial_base_s"`
-	RedialMaxS        int              `yaml:"redial_max_s"`
-	Peers             []FederationPeer `yaml:"peers"`
+	HandshakeTimeoutS int                       `yaml:"handshake_timeout_s"`
+	GossipRateQPS     int                       `yaml:"gossip_rate_qps"`
+	SendQueueDepth    int                       `yaml:"send_queue_depth"`
+	PublishCadenceS   int                       `yaml:"publish_cadence_s"`
+	ListenAddr        string                    `yaml:"listen_addr"`
+	IdleTimeoutS      int                       `yaml:"idle_timeout_s"`
+	RedialBaseS       int                       `yaml:"redial_base_s"`
+	RedialMaxS        int                       `yaml:"redial_max_s"`
+	Peers             []FederationPeer          `yaml:"peers"`
+	Bootstrap         FederationBootstrapConfig `yaml:"bootstrap"`
+}
+
+// FederationBootstrapConfig governs the plugin-facing signed
+// bootstrap-list endpoint (RPC_METHOD_BOOTSTRAP_PEERS).
+type FederationBootstrapConfig struct {
+	MaxPeers   int `yaml:"max_peers"`   // [1, 256]; default 50
+	TTLSeconds int `yaml:"ttl_seconds"` // [60, 3600]; default 600 (10 minutes)
 }
 
 // FederationPeer is one operator-configured allowlisted peer tracker.
@@ -247,6 +255,10 @@ func DefaultConfig() *Config {
 			RedialBaseS:           1,
 			RedialMaxS:            30,
 			// Peers defaults to nil — operator-managed.
+			Bootstrap: FederationBootstrapConfig{
+				MaxPeers:   50,
+				TTLSeconds: 600,
+			},
 		},
 		Reputation: ReputationConfig{
 			EvaluationIntervalS: 60,

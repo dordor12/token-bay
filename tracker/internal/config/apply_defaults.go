@@ -125,6 +125,12 @@ func ApplyDefaults(c *Config) {
 	// ListenAddr: empty is a valid value (federation network-disabled),
 	// so ApplyDefaults does NOT fill it in.
 	// Peers: no default — operator-managed; leave nil if not set.
+	if c.Federation.Bootstrap.MaxPeers == 0 {
+		c.Federation.Bootstrap.MaxPeers = d.Federation.Bootstrap.MaxPeers
+	}
+	if c.Federation.Bootstrap.TTLSeconds == 0 {
+		c.Federation.Bootstrap.TTLSeconds = d.Federation.Bootstrap.TTLSeconds
+	}
 
 	// Reputation
 	if c.Reputation.EvaluationIntervalS == 0 {

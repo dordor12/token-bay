@@ -225,6 +225,14 @@ func newRunCmd() *cobra.Command {
 				Settlement: brokerSubs.Settlement,
 				Admission:  admissionAdapter{adm},
 				Reputation: rep,
+				BootstrapPeers: bootstrapPeersAdapter{
+					store:    store,
+					issuer:   ids.IdentityID(sha256.Sum256(trackerPub)),
+					priv:     trackerKey,
+					maxPeers: cfg.Federation.Bootstrap.MaxPeers,
+					ttl:      time.Duration(cfg.Federation.Bootstrap.TTLSeconds) * time.Second,
+				},
+				BootstrapMetrics: api.NewPrometheusBootstrapMetrics(prometheus.DefaultRegisterer),
 			})
 			if err != nil {
 				return err

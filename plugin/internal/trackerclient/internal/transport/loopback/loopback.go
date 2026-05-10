@@ -5,6 +5,7 @@ package loopback
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"io"
 	"net"
@@ -14,20 +15,28 @@ import (
 	"github.com/token-bay/token-bay/shared/ids"
 )
 
-// Pair returns a (clientConn, serverConn) pair. clientConn.Dial-style
-// behaviour is to return clientConn directly; tests call New(serverConn)
-// to drive the server side in a goroutine.
+// Pair returns a (clientConn, serverConn) pair without peer pubkeys.
+// Used by tests that don't verify Ed25519 signatures over the loopback.
 func Pair(clientID, serverID ids.IdentityID) (*Conn, *Conn) {
+	return PairWithKeys(clientID, serverID, nil, nil)
+}
+
+// PairWithKeys is like Pair but each side observes the other's Ed25519
+// pubkey via PeerPublicKey(). Used by tests that exercise signed-message
+// verification (slice 4 bootstrap peers).
+func PairWithKeys(clientID, serverID ids.IdentityID, clientPub, serverPub ed25519.PublicKey) (*Conn, *Conn) {
 	clientToServer := make(chan *streamPair, 16)
 	serverToClient := make(chan *streamPair, 16)
 	cli := &Conn{
 		peerID:  serverID,
+		peerPub: serverPub,
 		opens:   clientToServer,
 		accepts: serverToClient,
 		done:    make(chan struct{}),
 	}
 	srv := &Conn{
 		peerID:  clientID,
+		peerPub: clientPub,
 		opens:   serverToClient,
 		accepts: clientToServer,
 		done:    make(chan struct{}),
@@ -67,6 +76,7 @@ func (d *Driver) Dial(ctx context.Context, ep transport.Endpoint, _ transport.Id
 // Conn is the loopback Transport.Conn implementation.
 type Conn struct {
 	peerID  ids.IdentityID
+	peerPub ed25519.PublicKey
 	opens   chan *streamPair
 	accepts chan *streamPair
 	peer    *Conn
@@ -102,7 +112,8 @@ func (c *Conn) AcceptStream(ctx context.Context) (transport.Stream, error) {
 	}
 }
 
-func (c *Conn) PeerIdentityID() ids.IdentityID { return c.peerID }
+func (c *Conn) PeerIdentityID() ids.IdentityID   { return c.peerID }
+func (c *Conn) PeerPublicKey() ed25519.PublicKey { return c.peerPub }
 
 func (c *Conn) Close() error {
 	c.closeMu.Lock()

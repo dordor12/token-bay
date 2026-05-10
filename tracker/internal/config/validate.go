@@ -273,6 +273,14 @@ func (v *validator) checkFederation(c *Config) {
 		v.add("federation.redial_max_s",
 			"must be >= redial_base_s and <= 600, got "+strconv.Itoa(c.Federation.RedialMaxS))
 	}
+	if c.Federation.Bootstrap.MaxPeers < 1 || c.Federation.Bootstrap.MaxPeers > 256 {
+		v.add("federation.bootstrap.max_peers",
+			"must be 1..256, got "+strconv.Itoa(c.Federation.Bootstrap.MaxPeers))
+	}
+	if c.Federation.Bootstrap.TTLSeconds < 60 || c.Federation.Bootstrap.TTLSeconds > 3600 {
+		v.add("federation.bootstrap.ttl_seconds",
+			"must be 60..3600, got "+strconv.Itoa(c.Federation.Bootstrap.TTLSeconds))
+	}
 	if c.Federation.ListenAddr != "" {
 		if _, _, err := net.SplitHostPort(c.Federation.ListenAddr); err != nil {
 			v.add("federation.listen_addr",

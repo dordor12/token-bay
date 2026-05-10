@@ -22,6 +22,19 @@ var (
 	ErrAlpnMismatch     = errors.New("trackerclient: ALPN negotiation failed")
 	ErrNoHandler        = errors.New("trackerclient: server pushed a stream but no handler is registered")
 	ErrConfigInvalid    = errors.New("trackerclient: config invalid")
+
+	// ErrBootstrapPeerListBadSig is the plugin-side alias for the shared
+	// signature-mismatch error. Re-exported for caller-side errors.Is checks
+	// without forcing the caller to import shared/proto.
+	ErrBootstrapPeerListBadSig = tbproto.ErrBootstrapPeerListBadSig
+
+	// ErrBootstrapPeerListExpired is returned when the snapshot's expires_at
+	// is in the past beyond the 60-second skew tolerance.
+	ErrBootstrapPeerListExpired = errors.New("trackerclient: bootstrap peer list expired")
+
+	// ErrBootstrapIssuerMismatch is returned when the snapshot's issuer_id
+	// does not match the connected tracker's identity.
+	ErrBootstrapIssuerMismatch = errors.New("trackerclient: bootstrap issuer does not match connected tracker")
 )
 
 // RpcError wraps a tracker-side structured error.

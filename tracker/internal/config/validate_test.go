@@ -764,3 +764,23 @@ func TestValidate_Federation_ValidPeers(t *testing.T) {
 	}
 	assert.NoError(t, Validate(cfg))
 }
+
+func TestValidate_FederationBootstrap_OutOfRange(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+		field  string
+	}{
+		{"max_peers zero", func(c *Config) { c.Federation.Bootstrap.MaxPeers = 0 }, "federation.bootstrap.max_peers"},
+		{"max_peers too high", func(c *Config) { c.Federation.Bootstrap.MaxPeers = 257 }, "federation.bootstrap.max_peers"},
+		{"ttl_seconds too low", func(c *Config) { c.Federation.Bootstrap.TTLSeconds = 30 }, "federation.bootstrap.ttl_seconds"},
+		{"ttl_seconds too high", func(c *Config) { c.Federation.Bootstrap.TTLSeconds = 3601 }, "federation.bootstrap.ttl_seconds"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig(t)
+			tc.mutate(c)
+			assertOneFieldError(t, Validate(c), tc.field)
+		})
+	}
+}

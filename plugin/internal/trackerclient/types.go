@@ -187,6 +187,16 @@ type SettlementRequest struct {
 	PreimageBody []byte
 }
 
+// BootstrapPeer is a plugin-friendly view of a single tracker that came
+// out of a verified BootstrapPeerList from FetchBootstrapPeers.
+type BootstrapPeer struct {
+	TrackerID   ids.IdentityID
+	Addr        string
+	RegionHint  string
+	HealthScore float64
+	LastSeen    time.Time
+}
+
 // Transport, Conn, and Stream are network-seam interfaces. Drivers live
 // under internal/transport/.
 type (

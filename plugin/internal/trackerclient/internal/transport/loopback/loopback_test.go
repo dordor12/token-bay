@@ -2,6 +2,8 @@ package loopback
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"io"
 	"testing"
 	"time"
@@ -73,4 +75,17 @@ func TestDriverDial(t *testing.T) {
 	require.NoError(t, err)
 	_ = got
 	_ = cli
+}
+
+func TestConn_PeerPublicKey(t *testing.T) {
+	clientID := ids.IdentityID{1}
+	serverID := ids.IdentityID{2}
+	clientPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	serverPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	cli, srv := PairWithKeys(clientID, serverID, clientPub, serverPub)
+	require.True(t, ed25519.PublicKey(serverPub).Equal(cli.PeerPublicKey()))
+	require.True(t, ed25519.PublicKey(clientPub).Equal(srv.PeerPublicKey()))
 }

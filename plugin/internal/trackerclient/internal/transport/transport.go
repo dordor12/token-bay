@@ -33,6 +33,7 @@ type Conn interface {
 	OpenStreamSync(ctx context.Context) (Stream, error)
 	AcceptStream(ctx context.Context) (Stream, error)
 	PeerIdentityID() ids.IdentityID
+	PeerPublicKey() ed25519.PublicKey
 	Close() error
 	Done() <-chan struct{}
 }
