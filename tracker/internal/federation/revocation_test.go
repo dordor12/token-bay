@@ -100,8 +100,10 @@ func newTestCoordinator(t *testing.T, arch PeerRevocationArchive, fwd Forwarder)
 			}
 			return nil, false
 		},
-		Now:     func() time.Time { return time.Unix(1714000123, 0) },
-		Metrics: func(string) {},
+		Now:        func() time.Time { return time.Unix(1714000123, 0) },
+		Invalid:    func(string) {},
+		OnEmit:     func() {},
+		OnReceived: func(string) {},
 	})
 	return rc, pub, priv, tid
 }
@@ -159,7 +161,9 @@ func TestRevocationCoordinator_OnFreeze_NilArchive_NoOp(t *testing.T) {
 		Forward:     cap.fn,
 		PeerPubKey:  func(ids.TrackerID) (ed25519.PublicKey, bool) { return nil, false },
 		Now:         time.Now,
-		Metrics:     func(string) {},
+		Invalid:     func(string) {},
+		OnEmit:      func() {},
+		OnReceived:  func(string) {},
 	})
 	rc.OnFreeze(context.Background(), ids.IdentityID(bytes.Repeat([]byte{0x55}, 32)), "freeze_repeat", time.Now())
 	assert.Empty(t, cap.snapshot(), "nil archive disables emit")
@@ -203,8 +207,10 @@ func TestRevocationCoordinator_OnIncoming_HappyPath(t *testing.T) {
 			}
 			return nil, false
 		},
-		Now:     func() time.Time { return time.Unix(1714000200, 0) },
-		Metrics: func(string) {},
+		Now:        func() time.Time { return time.Unix(1714000200, 0) },
+		Invalid:    func(string) {},
+		OnEmit:     func() {},
+		OnReceived: func(string) {},
 	})
 
 	env := &fed.Envelope{
@@ -259,7 +265,8 @@ func TestRevocationCoordinator_OnIncoming_BadSig_Drops(t *testing.T) {
 			}
 			return nil, false
 		},
-		Now: func() time.Time { return time.Unix(1714000200, 0) }, Metrics: func(string) {},
+		Now:     func() time.Time { return time.Unix(1714000200, 0) },
+		Invalid: func(string) {}, OnEmit: func() {}, OnReceived: func(string) {},
 	})
 
 	env := &fed.Envelope{
@@ -300,7 +307,9 @@ func TestRevocationCoordinator_OnIncoming_UnknownIssuer_Drops(t *testing.T) {
 		MyTrackerID: myID, MyPriv: myPriv, Archive: arch, Forward: cap.fn,
 		PeerPubKey: func(ids.TrackerID) (ed25519.PublicKey, bool) { return nil, false }, // unknown
 		Now:        func() time.Time { return time.Unix(1714000200, 0) },
-		Metrics:    func(string) {},
+		Invalid:    func(string) {},
+		OnEmit:     func() {},
+		OnReceived: func(string) {},
 	})
 
 	env := &fed.Envelope{

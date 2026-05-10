@@ -115,8 +115,10 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 			}
 			return info.PubKey, true
 		},
-		Now:     dep.Now,
-		Metrics: func(name string) { dep.Metrics.InvalidFrames(name) },
+		Now:        dep.Now,
+		Invalid:    func(name string) { dep.Metrics.InvalidFrames(name) },
+		OnEmit:     dep.Metrics.RevocationsEmitted,
+		OnReceived: dep.Metrics.RevocationsReceived,
 	})
 
 	f := &Federation{

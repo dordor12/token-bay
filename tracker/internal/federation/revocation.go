@@ -31,7 +31,13 @@ type revocationCoordinatorCfg struct {
 	Forward     Forwarder
 	PeerPubKey  func(ids.TrackerID) (ed25519.PublicKey, bool)
 	Now         func() time.Time
-	Metrics     func(name string) // increment a named counter
+	// Invalid is bumped on drop branches and routes to invalid_frames_total{reason=...}.
+	Invalid func(reason string)
+	// OnEmit is bumped on a successful local OnFreeze emit.
+	OnEmit func()
+	// OnReceived is bumped on every inbound resolution. outcome ∈
+	// {archived, sig, shape, unknown_issuer, disabled, storage_err, canonical}.
+	OnReceived func(outcome string)
 }
 
 type revocationCoordinator struct {
@@ -42,8 +48,14 @@ func newRevocationCoordinator(cfg revocationCoordinatorCfg) *revocationCoordinat
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	if cfg.Metrics == nil {
-		cfg.Metrics = func(string) {}
+	if cfg.Invalid == nil {
+		cfg.Invalid = func(string) {}
+	}
+	if cfg.OnEmit == nil {
+		cfg.OnEmit = func() {}
+	}
+	if cfg.OnReceived == nil {
+		cfg.OnReceived = func(string) {}
 	}
 	return &revocationCoordinator{cfg: cfg}
 }
@@ -70,7 +82,7 @@ func mapReputationReasonToProto(s string) fed.RevocationReason {
 func (rc *revocationCoordinator) OnFreeze(ctx context.Context, identity ids.IdentityID, reason string, revokedAt time.Time) {
 	if rc == nil || rc.cfg.Archive == nil {
 		if rc != nil {
-			rc.cfg.Metrics("revocation_emit_disabled")
+			rc.cfg.Invalid("revocation_emit_disabled")
 		}
 		return
 	}
@@ -84,17 +96,17 @@ func (rc *revocationCoordinator) OnFreeze(ctx context.Context, identity ids.Iden
 	}
 	canonical, err := fed.CanonicalRevocationPreSig(rev)
 	if err != nil {
-		rc.cfg.Metrics("revocation_canonical")
+		rc.cfg.Invalid("revocation_canonical")
 		return
 	}
 	rev.TrackerSig = ed25519.Sign(rc.cfg.MyPriv, canonical)
 	if err := fed.ValidateRevocation(rev); err != nil {
-		rc.cfg.Metrics("revocation_self_shape")
+		rc.cfg.Invalid("revocation_self_shape")
 		return
 	}
 	payload, err := proto.Marshal(rev)
 	if err != nil {
-		rc.cfg.Metrics("revocation_marshal")
+		rc.cfg.Invalid("revocation_marshal")
 		return
 	}
 
@@ -106,13 +118,13 @@ func (rc *revocationCoordinator) OnFreeze(ctx context.Context, identity ids.Iden
 		TrackerSig: append([]byte(nil), rev.TrackerSig...),
 		ReceivedAt: uint64(rc.cfg.Now().Unix()), //nolint:gosec // G115 — Unix() ≥ 0
 	}); err != nil {
-		rc.cfg.Metrics("revocation_archive_self_err")
+		rc.cfg.Invalid("revocation_archive_self_err")
 		// Continue forwarding — peers should still learn even if our
 		// own archive write hit a transient error.
 	}
 
 	rc.cfg.Forward(ctx, fed.Kind_KIND_REVOCATION, payload)
-	rc.cfg.Metrics("revocations_emitted")
+	rc.cfg.OnEmit()
 }
 
 // OnIncoming validates a received KIND_REVOCATION envelope, verifies the
@@ -122,33 +134,39 @@ func (rc *revocationCoordinator) OnFreeze(ctx context.Context, identity ids.Iden
 func (rc *revocationCoordinator) OnIncoming(ctx context.Context, env *fed.Envelope, _ ids.TrackerID) {
 	if rc == nil || rc.cfg.Archive == nil {
 		if rc != nil {
-			rc.cfg.Metrics("revocation_disabled")
+			rc.cfg.Invalid("revocation_disabled")
+			rc.cfg.OnReceived("disabled")
 		}
 		return
 	}
 	rev := &fed.Revocation{}
 	if err := proto.Unmarshal(env.Payload, rev); err != nil {
-		rc.cfg.Metrics("revocation_shape")
+		rc.cfg.Invalid("revocation_shape")
+		rc.cfg.OnReceived("shape")
 		return
 	}
 	if err := fed.ValidateRevocation(rev); err != nil {
-		rc.cfg.Metrics("revocation_shape")
+		rc.cfg.Invalid("revocation_shape")
+		rc.cfg.OnReceived("shape")
 		return
 	}
 	var issuerID ids.TrackerID
 	copy(issuerID[:], rev.TrackerId)
 	issuerPub, ok := rc.cfg.PeerPubKey(issuerID)
 	if !ok {
-		rc.cfg.Metrics("revocation_unknown_issuer")
+		rc.cfg.Invalid("revocation_unknown_issuer")
+		rc.cfg.OnReceived("unknown_issuer")
 		return
 	}
 	canonical, err := fed.CanonicalRevocationPreSig(rev)
 	if err != nil {
-		rc.cfg.Metrics("revocation_canonical")
+		rc.cfg.Invalid("revocation_canonical")
+		rc.cfg.OnReceived("canonical")
 		return
 	}
 	if !ed25519.Verify(issuerPub, canonical, rev.TrackerSig) {
-		rc.cfg.Metrics("revocation_sig")
+		rc.cfg.Invalid("revocation_sig")
+		rc.cfg.OnReceived("sig")
 		return
 	}
 	if err := rc.cfg.Archive.PutPeerRevocation(ctx, storage.PeerRevocation{
@@ -160,9 +178,10 @@ func (rc *revocationCoordinator) OnIncoming(ctx context.Context, env *fed.Envelo
 		ReceivedAt: uint64(rc.cfg.Now().Unix()), //nolint:gosec // G115 — Unix() ≥ 0
 	}); err != nil {
 		// Cannot vouch for durability — do not forward.
-		rc.cfg.Metrics("revocation_archive_err")
+		rc.cfg.Invalid("revocation_archive_err")
+		rc.cfg.OnReceived("storage_err")
 		return
 	}
 	rc.cfg.Forward(ctx, fed.Kind_KIND_REVOCATION, env.Payload)
-	rc.cfg.Metrics("revocations_archived")
+	rc.cfg.OnReceived("archived")
 }
