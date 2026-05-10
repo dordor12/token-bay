@@ -32,6 +32,42 @@ func (s *Subsystem) RecordBrokerRequest(consumer ids.IdentityID, decision string
 	return nil
 }
 
+// RecordProofFidelity records the proof_fidelity_level signal (§3.1)
+// classified by the api/broker_request handler. level is one of
+// "full_two_signal", "partial", "degraded"; the rep_event value field
+// encodes that bucket as 1.0 / 0.5 / 0.0 so the evaluator can compute
+// a population mean. Unknown levels are stored as 0.0 and tagged
+// "degraded" for the metric.
+func (s *Subsystem) RecordProofFidelity(consumer ids.IdentityID, level string) error {
+	if s.closed.Load() {
+		return ErrSubsystemClosed
+	}
+	var value float64
+	label := level
+	switch level {
+	case "full_two_signal":
+		value = 1.0
+	case "partial":
+		value = 0.5
+	case "degraded":
+		value = 0.0
+	default:
+		value = 0.0
+		label = "degraded"
+	}
+	ctx := context.Background()
+	now := s.now()
+	if err := s.store.ensureState(ctx, consumer, now); err != nil {
+		return fmt.Errorf("reputation: RecordProofFidelity: %w", err)
+	}
+	if err := s.store.appendEvent(ctx, consumer, RoleConsumer,
+		SignalProofFidelityLevel, value, now); err != nil {
+		return fmt.Errorf("reputation: RecordProofFidelity: %w", err)
+	}
+	s.metrics.eventsIngested.WithLabelValues("proof_fidelity_" + label).Inc()
+	return nil
+}
+
 // RecordOfferOutcome is called by broker.runOffer per attempt. Outcome
 // is one of "accept", "reject", "unreachable".
 func (s *Subsystem) RecordOfferOutcome(seeder ids.IdentityID, outcome string) error {

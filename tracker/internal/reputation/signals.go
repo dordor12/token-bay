@@ -51,13 +51,18 @@ const (
 	// Dispute secondary signals.
 	SignalDisputeFiled  SignalKind = 11
 	SignalDisputeUpheld SignalKind = 12
+
+	// proof_fidelity_level (§3.1): per-broker_request classifier,
+	// emitted by the api/ verification path. value ∈ {1.0, 0.5, 0.0}
+	// for full_two_signal / partial / degraded.
+	SignalProofFidelityLevel SignalKind = 13
 )
 
 // Role returns the population this signal belongs to.
 func (s SignalKind) Role() Role {
 	switch s {
 	case SignalBrokerRequest, SignalProofRejection, SignalExhaustionClaim,
-		SignalDisputeFiled, SignalDisputeUpheld:
+		SignalDisputeFiled, SignalDisputeUpheld, SignalProofFidelityLevel:
 		return RoleConsumer
 	case SignalCostReportDeviation, SignalConsumerComplaint,
 		SignalOfferAccept, SignalOfferReject, SignalOfferUnreachable,

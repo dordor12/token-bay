@@ -225,6 +225,8 @@ func newRunCmd() *cobra.Command {
 				Settlement: brokerSubs.Settlement,
 				Admission:  admissionAdapter{adm},
 				Reputation: rep,
+				Identity:   ip,
+				TrackerPub: trackerPub,
 				BootstrapPeers: bootstrapPeersAdapter{
 					store:    store,
 					issuer:   ids.IdentityID(sha256.Sum256(trackerPub)),

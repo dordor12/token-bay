@@ -240,6 +240,8 @@ func (s *repSpy) RecordBrokerRequest(c ids.IdentityID, _ string) error {
 	return nil
 }
 
+func (s *repSpy) RecordProofFidelity(_ ids.IdentityID, _ string) error { return nil }
+
 func TestBrokerRequest_RecordsReputationSignal(t *testing.T) {
 	spy := &repSpy{}
 	svc := &fakeBrokerService{

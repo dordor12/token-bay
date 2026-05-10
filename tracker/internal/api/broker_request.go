@@ -2,17 +2,53 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	sharedadmission "github.com/token-bay/token-bay/shared/admission"
+	"github.com/token-bay/token-bay/shared/exhaustionproof"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/shared/signing"
 	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/broker"
 )
+
+// balanceSnapshotTTL is the maximum age of a SignedBalanceSnapshot the
+// broker_request handler will accept. Mirrors tracker spec §6 ("signed
+// balance snapshots have a 10-minute TTL").
+const balanceSnapshotTTL = 10 * time.Minute
+
+// ClassifyProofFidelity bucketises an ExhaustionProofV1 into the
+// proof_fidelity_level categories from reputation spec §3.1:
+//   - "full_two_signal" — both stop_failure and usage_probe present and
+//     self-consistent (matcher == "rate_limit").
+//   - "partial" — exactly one of the two signals missing.
+//   - "degraded" — both signals missing, the proof itself is nil, or the
+//     stop_failure carries a non-rate-limit matcher (text/synthetic).
+//
+// The handler emits a per-broker_request signal so the evaluator can
+// detect consumers whose proofs systematically degrade in quality.
+func ClassifyProofFidelity(p *exhaustionproof.ExhaustionProofV1) string {
+	if p == nil {
+		return "degraded"
+	}
+	hasStop := p.StopFailure != nil
+	hasProbe := p.UsageProbe != nil
+	switch {
+	case !hasStop && !hasProbe:
+		return "degraded"
+	case !hasStop || !hasProbe:
+		return "partial"
+	}
+	if p.StopFailure.Matcher != "rate_limit" {
+		return "degraded"
+	}
+	return "full_two_signal"
+}
 
 // brokerAdmission is the slice of admission the broker_request handler needs.
 type brokerAdmission interface {
@@ -30,6 +66,7 @@ func (r *Router) installBrokerRequest() handlerFunc {
 	if !ok {
 		return notImpl("broker_request")
 	}
+	verifyEnabled := r.deps.Identity != nil && len(r.deps.TrackerPub) == ed25519.PublicKeySize
 	return func(ctx context.Context, rc *RequestCtx, payloadBytes []byte) (*tbproto.RpcResponse, error) {
 		var env tbproto.EnvelopeSigned
 		if err := proto.Unmarshal(payloadBytes, &env); err != nil {
@@ -49,8 +86,15 @@ func (r *Router) installBrokerRequest() handlerFunc {
 			_ = r.deps.Reputation.RecordBrokerRequest(consumer, "submitted")
 		}
 
-		// TODO(broker-followup): verify consumer sig + balance proof + exhaustion proof.
-		// v1 trusts the mTLS-authenticated channel + admission gating.
+		if verifyEnabled {
+			if err := r.verifyBrokerRequest(&env, consumer, rc.Now); err != nil {
+				return nil, err
+			}
+			fidelity := ClassifyProofFidelity(env.Body.ExhaustionProof)
+			if r.deps.Reputation != nil {
+				_ = r.deps.Reputation.RecordProofFidelity(consumer, fidelity)
+			}
+		}
 
 		admResult := adm.Decide(consumer, nil, rc.Now)
 		switch admResult.Outcome {
@@ -76,6 +120,50 @@ func (r *Router) installBrokerRequest() handlerFunc {
 			return nil, errors.New("api: admission returned unknown outcome")
 		}
 	}
+}
+
+// verifyBrokerRequest enforces the three v1 cryptographic invariants on
+// a broker_request envelope:
+//
+//  1. The consumer signature on the envelope verifies under the pubkey
+//     resolved from the live mTLS connection table for ConsumerId. A
+//     consumer not currently connected, or a sig that does not check
+//     out, returns ErrUnauthenticated.
+//  2. The embedded SignedBalanceSnapshot verifies under the local
+//     tracker pubkey and is no older than balanceSnapshotTTL. A foreign
+//     issuer or stale snapshot returns ErrInvalid.
+//  3. The ExhaustionProofV1 has already passed wire-format validation
+//     in ValidateEnvelopeBody; the handler classifies its fidelity and
+//     emits the proof_fidelity_level signal.
+//
+// Per reputation §3.1, the classifier output is a per-broker_request
+// signal; the evaluator detects consumers whose proofs degrade
+// systematically over a population baseline.
+func (r *Router) verifyBrokerRequest(env *tbproto.EnvelopeSigned, consumer ids.IdentityID, now time.Time) error {
+	pub, ok := r.deps.Identity.PeerPubkey(consumer)
+	if !ok {
+		return ErrUnauthenticated("consumer not connected")
+	}
+	if !signing.VerifyEnvelope(pub, env) {
+		return ErrUnauthenticated("envelope signature invalid")
+	}
+
+	bal := env.Body.BalanceProof
+	if bal == nil || bal.Body == nil {
+		return ErrInvalid("balance_proof missing body")
+	}
+	if !signing.VerifyBalanceSnapshot(r.deps.TrackerPub, bal) {
+		return ErrInvalid("balance_proof signature invalid")
+	}
+	issued := time.Unix(int64(bal.Body.IssuedAt), 0) //nolint:gosec // G115 — IssuedAt is unix seconds
+	if now.Sub(issued) > balanceSnapshotTTL {
+		return ErrInvalid("balance_proof stale")
+	}
+
+	// ExhaustionProofV1 wire-format already validated by
+	// ValidateEnvelopeBody. v1 has no signature on the proof itself;
+	// the classifier downstream is the per-proof signal source.
+	return nil
 }
 
 func brokerResultToResponse(res *broker.Result) (*tbproto.RpcResponse, error) {
