@@ -43,6 +43,7 @@ type ReputationService interface {
 	Score(ids.IdentityID) (float64, bool)
 	IsFrozen(ids.IdentityID) bool
 	RecordOfferOutcome(seeder ids.IdentityID, outcome string)
+	OnLedgerEvent(ev admission.LedgerEvent)
 }
 
 // PushService is the slice of *server.Server the broker uses for offer +
@@ -88,3 +89,4 @@ type fallbackReputation struct{}
 func (fallbackReputation) Score(ids.IdentityID) (float64, bool)      { return 0.5, false }
 func (fallbackReputation) IsFrozen(ids.IdentityID) bool              { return false }
 func (fallbackReputation) RecordOfferOutcome(ids.IdentityID, string) {}
+func (fallbackReputation) OnLedgerEvent(admission.LedgerEvent)       {}

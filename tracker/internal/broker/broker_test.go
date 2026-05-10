@@ -335,9 +335,10 @@ func TestSubmit_RecordsAcceptOutcome(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, OutcomeAdmit, res.Outcome)
 
-	require.Len(t, rep.recordedOutcomes, 1)
-	require.Equal(t, seederID, rep.recordedOutcomes[0].ID)
-	require.Equal(t, "accept", rep.recordedOutcomes[0].Outcome)
+	outs := rep.outcomes()
+	require.Len(t, outs, 1)
+	require.Equal(t, seederID, outs[0].ID)
+	require.Equal(t, "accept", outs[0].Outcome)
 }
 
 func TestSubmit_UnknownModel(t *testing.T) {
