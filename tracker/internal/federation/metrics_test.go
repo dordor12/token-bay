@@ -99,3 +99,25 @@ func TestMetrics_KnownPeersSize(t *testing.T) {
 		t.Fatalf("known_peers_size = %v, want 7", got)
 	}
 }
+
+func TestMetrics_HealthScoreComputations(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	m := federation.NewMetrics(reg)
+
+	m.HealthScoreComputed("ok")
+	m.HealthScoreComputed("ok")
+	m.HealthScoreComputed("equivocated")
+	m.HealthScoreComputed("no_data")
+
+	vec := m.HealthScoreComputationsCounter()
+	if got := testutil.ToFloat64(vec.WithLabelValues("ok")); got != 2 {
+		t.Fatalf("ok = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(vec.WithLabelValues("equivocated")); got != 1 {
+		t.Fatalf("equivocated = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(vec.WithLabelValues("no_data")); got != 1 {
+		t.Fatalf("no_data = %v, want 1", got)
+	}
+}

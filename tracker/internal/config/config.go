@@ -95,6 +95,7 @@ type FederationConfig struct {
 	RedialMaxS        int                       `yaml:"redial_max_s"`
 	Peers             []FederationPeer          `yaml:"peers"`
 	Bootstrap         FederationBootstrapConfig `yaml:"bootstrap"`
+	Health            FederationHealthConfig    `yaml:"health"`
 }
 
 // FederationBootstrapConfig governs the plugin-facing signed
@@ -102,6 +103,17 @@ type FederationConfig struct {
 type FederationBootstrapConfig struct {
 	MaxPeers   int `yaml:"max_peers"`   // [1, 256]; default 50
 	TTLSeconds int `yaml:"ttl_seconds"` // [60, 3600]; default 600 (10 minutes)
+}
+
+// FederationHealthConfig governs the §7.3 peer-health-score
+// computation: signal windows, ring-buffer cap, and the two weights
+// (which must sum to 1.0 with float-epsilon tolerance).
+type FederationHealthConfig struct {
+	UptimeWindowS       int     `yaml:"uptime_window_s"`        // > 0; default 7200 (2h)
+	RevGossipWindowS    int     `yaml:"rev_gossip_window_s"`    // > 0; default 600 (10min)
+	RevGossipBufferSize int     `yaml:"rev_gossip_buffer_size"` // [1, 256]; default 16
+	UptimeWeight        float64 `yaml:"uptime_weight"`          // [0,1]; default 0.7
+	RevGossipWeight     float64 `yaml:"rev_gossip_weight"`      // [0,1]; default 0.3
 }
 
 // FederationPeer is one operator-configured allowlisted peer tracker.
@@ -258,6 +270,13 @@ func DefaultConfig() *Config {
 			Bootstrap: FederationBootstrapConfig{
 				MaxPeers:   50,
 				TTLSeconds: 600,
+			},
+			Health: FederationHealthConfig{
+				UptimeWindowS:       7200,
+				RevGossipWindowS:    600,
+				RevGossipBufferSize: 16,
+				UptimeWeight:        0.7,
+				RevGossipWeight:     0.3,
 			},
 		},
 		Reputation: ReputationConfig{

@@ -37,6 +37,13 @@ func (tt *twoTracker) flipReadyA(root, sig []byte) {
 	tt.srcA.ok = true
 }
 
+// flipReadyB mirrors flipReadyA for tracker B.
+func (tt *twoTracker) flipReadyB(root, sig []byte) {
+	tt.srcB.root = root
+	tt.srcB.sig = sig
+	tt.srcB.ok = true
+}
+
 func newTwoTracker(t *testing.T) *twoTracker {
 	t.Helper()
 	a := newPeerCfg(t)
@@ -136,6 +143,18 @@ func (f *fakeKnownPeersArchiveExt) ListKnownPeers(_ context.Context, limit int, 
 	return append([]storage.KnownPeer(nil), f.rows[:limit]...), nil
 }
 
+func (f *fakeKnownPeersArchiveExt) UpdateKnownPeerHealth(_ context.Context, trackerID []byte, score float64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.rows {
+		if bytes.Equal(r.TrackerID, trackerID) {
+			f.rows[i].HealthScore = score
+			return nil
+		}
+	}
+	return nil
+}
+
 // twoTrackerWithKnownPeers is the slice-3 variant of twoTracker, with
 // in-memory KnownPeers archives wired so peer-exchange tests can inspect
 // merged state. Lives separately from newTwoTracker so slice-2
@@ -162,10 +181,18 @@ func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
 	aID := ids.TrackerID(sha256.Sum256(a.pub))
 	bID := ids.TrackerID(sha256.Sum256(b.pub))
 
+	healthCfg := federation.HealthConfig{
+		UptimeWindow:        2 * time.Hour,
+		RevGossipWindow:     600 * time.Second,
+		RevGossipBufferSize: 16,
+		UptimeWeight:        0.7,
+		RevGossipWeight:     0.3,
+	}
 	aFed, err := federation.Open(federation.Config{
 		MyTrackerID: aID,
 		MyPriv:      a.priv,
 		Peers:       []federation.AllowlistedPeer{{TrackerID: bID, PubKey: b.pub, Addr: "B"}},
+		Health:      healthCfg,
 	}, federation.Deps{Transport: trA, RootSrc: srcA, Archive: archA, KnownPeers: kpA, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +201,7 @@ func newTwoTrackerWithKnownPeers(t *testing.T) *twoTrackerWithKnownPeers {
 		MyTrackerID: bID,
 		MyPriv:      b.priv,
 		Peers:       []federation.AllowlistedPeer{{TrackerID: aID, PubKey: a.pub, Addr: "A"}},
+		Health:      healthCfg,
 	}, federation.Deps{Transport: trB, RootSrc: srcB, Archive: archB, KnownPeers: kpB, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -963,4 +991,65 @@ func TestIntegration_PeerExchange_ThreeTracker_LineGraph(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatal("C never archived D through B")
+}
+
+func TestIntegration_PeerHealth_RootAttestationLiftsScore(t *testing.T) {
+	t.Parallel()
+	tt := newTwoTrackerWithKnownPeers(t)
+
+	// Wait for handshake to settle.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got := false
+		for _, p := range tt.a.Peers() {
+			if p.State == federation.PeerStateSteady {
+				got = true
+				break
+			}
+		}
+		if got {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// B publishes a ROOT_ATTESTATION. A archives it AND fires
+	// health.OnRootAttestation under the slice-5 wiring.
+	tt.flipReadyB(b(32, 7), b(64, 8))
+	if err := tt.b.PublishHour(context.Background(), 100); err != nil {
+		t.Fatalf("b.PublishHour: %v", err)
+	}
+
+	// Wait for A to archive B's root.
+	bIDBytes := tt.bID.Bytes()
+	deadline = time.Now().Add(2 * time.Second)
+	archived := false
+	for time.Now().Before(deadline) {
+		if _, ok, _ := tt.archA.GetPeerRoot(context.Background(), bIDBytes[:], 100); ok {
+			archived = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !archived {
+		t.Fatal("A never archived B's ROOT_ATTESTATION")
+	}
+
+	// Trigger peer-exchange emit on A: this calls Health.Score(B, now)
+	// and writes the freshly-computed score back to kpA's B row.
+	if err := tt.a.PublishPeerExchange(context.Background()); err != nil {
+		t.Fatalf("a.PublishPeerExchange: %v", err)
+	}
+
+	// Health for B should be ≈ 1.0 (uptime full, revgoss neutral).
+	row, ok, err := tt.kpA.GetKnownPeer(context.Background(), bIDBytes[:])
+	if err != nil {
+		t.Fatalf("GetKnownPeer(B): %v", err)
+	}
+	if !ok {
+		t.Fatal("kpA has no row for B")
+	}
+	if row.HealthScore < 0.95 {
+		t.Fatalf("B's health_score = %v, want >= 0.95 (just attested)", row.HealthScore)
+	}
 }

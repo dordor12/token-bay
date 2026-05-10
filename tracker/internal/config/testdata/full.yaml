@@ -61,6 +61,12 @@ federation:
   bootstrap:
     max_peers: 50
     ttl_seconds: 600
+  health:
+    uptime_window_s: 7200
+    rev_gossip_window_s: 600
+    rev_gossip_buffer_size: 16
+    uptime_weight: 0.7
+    rev_gossip_weight: 0.3
 
 reputation:
   evaluation_interval_s: 60

@@ -67,6 +67,45 @@ func TestValidate_HappyPath(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidate_FederationHealth_RangeChecks(t *testing.T) {
+	cases := []struct {
+		name  string
+		mut   func(c *Config)
+		field string
+	}{
+		{"uptime_window_zero", func(c *Config) { c.Federation.Health.UptimeWindowS = 0 }, "federation.health.uptime_window_s"},
+		{"revgoss_window_zero", func(c *Config) { c.Federation.Health.RevGossipWindowS = 0 }, "federation.health.rev_gossip_window_s"},
+		{"buffer_zero", func(c *Config) { c.Federation.Health.RevGossipBufferSize = 0 }, "federation.health.rev_gossip_buffer_size"},
+		{"buffer_too_big", func(c *Config) { c.Federation.Health.RevGossipBufferSize = 257 }, "federation.health.rev_gossip_buffer_size"},
+		{"uptime_weight_negative", func(c *Config) {
+			c.Federation.Health.UptimeWeight = -0.1
+			c.Federation.Health.RevGossipWeight = 1.1
+		}, "federation.health.uptime_weight"},
+		{"weights_dont_sum_to_one", func(c *Config) {
+			c.Federation.Health.UptimeWeight = 0.5
+			c.Federation.Health.RevGossipWeight = 0.4
+		}, "federation.health"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig(t)
+			tc.mut(c)
+			err := Validate(c)
+			require.Error(t, err)
+			var ve *ValidationError
+			require.True(t, errors.As(err, &ve))
+			found := false
+			for _, fe := range ve.Errors {
+				if fe.Field == tc.field {
+					found = true
+					break
+				}
+			}
+			require.Truef(t, found, "expected FieldError for %q, got %v", tc.field, ve.Errors)
+		})
+	}
+}
+
 func TestValidate_DataDirMustBeAbsolute(t *testing.T) {
 	c := validConfig(t)
 	c.DataDir = "var/lib/token-bay" // relative

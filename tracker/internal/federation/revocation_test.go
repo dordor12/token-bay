@@ -323,3 +323,97 @@ func TestRevocationCoordinator_OnIncoming_UnknownIssuer_Drops(t *testing.T) {
 	assert.False(t, ok)
 	assert.Empty(t, cap.snapshot())
 }
+
+func TestRevocationCoordinator_OnIncoming_FiresOnRevocationObserved(t *testing.T) {
+	arch := newFakeRevocationArchive()
+	cap := &captureForward{}
+
+	issuerPub, issuerPriv := newKey(t)
+	issuerID := ids.TrackerID(sha256.Sum256(issuerPub))
+	issuerIDBytes := issuerID.Bytes()
+	identity := bytes.Repeat([]byte{0x77}, 32)
+	rev := &fed.Revocation{
+		TrackerId:  issuerIDBytes[:],
+		IdentityId: identity,
+		Reason:     fed.RevocationReason_REVOCATION_REASON_ABUSE,
+		RevokedAt:  9000,
+	}
+	canonical, err := fed.CanonicalRevocationPreSig(rev)
+	require.NoError(t, err)
+	rev.TrackerSig = ed25519.Sign(issuerPriv, canonical)
+	payload, err := proto.Marshal(rev)
+	require.NoError(t, err)
+
+	var (
+		gotIssuer    ids.TrackerID
+		gotRevokedAt time.Time
+		gotRecvAt    time.Time
+		callCount    int
+	)
+	myPub, myPriv := newKey(t)
+	myID := ids.TrackerID(sha256.Sum256(myPub))
+	rc := newRevocationCoordinator(revocationCoordinatorCfg{
+		MyTrackerID: myID,
+		MyPriv:      myPriv,
+		Archive:     arch,
+		Forward:     cap.fn,
+		PeerPubKey: func(id ids.TrackerID) (ed25519.PublicKey, bool) {
+			if id == issuerID {
+				return issuerPub, true
+			}
+			return nil, false
+		},
+		Now:        func() time.Time { return time.Unix(9100, 0) },
+		Invalid:    func(string) {},
+		OnEmit:     func() {},
+		OnReceived: func(string) {},
+		OnRevocationObserved: func(issuer ids.TrackerID, revokedAt, recvAt time.Time) {
+			callCount++
+			gotIssuer = issuer
+			gotRevokedAt = revokedAt
+			gotRecvAt = recvAt
+		},
+	})
+	env := &fed.Envelope{
+		SenderId: issuerIDBytes[:], Kind: fed.Kind_KIND_REVOCATION,
+		Payload: payload, SenderSig: bytes.Repeat([]byte{0xFF}, fed.SigLen),
+	}
+	rc.OnIncoming(context.Background(), env, issuerID)
+
+	require.Equal(t, 1, callCount)
+	require.Equal(t, issuerID, gotIssuer)
+	require.Equal(t, time.Unix(9000, 0), gotRevokedAt)
+	require.Equal(t, time.Unix(9100, 0), gotRecvAt)
+}
+
+func TestRevocationCoordinator_OnIncoming_DoesNotFireOnBadSig(t *testing.T) {
+	arch := newFakeRevocationArchive()
+	cap := &captureForward{}
+	issuerPub, _ := newKey(t)
+	issuerID := ids.TrackerID(sha256.Sum256(issuerPub))
+	issuerIDBytes := issuerID.Bytes()
+	rev := &fed.Revocation{
+		TrackerId:  issuerIDBytes[:],
+		IdentityId: bytes.Repeat([]byte{0x42}, 32),
+		Reason:     fed.RevocationReason_REVOCATION_REASON_ABUSE,
+		RevokedAt:  9000,
+		TrackerSig: bytes.Repeat([]byte{0x00}, 64), // garbage sig
+	}
+	payload, _ := proto.Marshal(rev)
+	called := false
+	myPub, myPriv := newKey(t)
+	myID := ids.TrackerID(sha256.Sum256(myPub))
+	rc := newRevocationCoordinator(revocationCoordinatorCfg{
+		MyTrackerID: myID, MyPriv: myPriv, Archive: arch, Forward: cap.fn,
+		PeerPubKey: func(ids.TrackerID) (ed25519.PublicKey, bool) { return issuerPub, true },
+		Now:        func() time.Time { return time.Unix(9100, 0) },
+		Invalid:    func(string) {}, OnEmit: func() {}, OnReceived: func(string) {},
+		OnRevocationObserved: func(ids.TrackerID, time.Time, time.Time) { called = true },
+	})
+	env := &fed.Envelope{
+		SenderId: issuerIDBytes[:], Kind: fed.Kind_KIND_REVOCATION,
+		Payload: payload, SenderSig: bytes.Repeat([]byte{0xFF}, fed.SigLen),
+	}
+	rc.OnIncoming(context.Background(), env, issuerID)
+	require.False(t, called)
+}

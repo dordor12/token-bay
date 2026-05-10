@@ -13,6 +13,7 @@ import (
 
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/transport"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/wire"
+	fed "github.com/token-bay/token-bay/shared/federation"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
 
@@ -117,6 +118,26 @@ func (s *Server) PushOffer(ctx context.Context, push *tbproto.OfferPush) (*tbpro
 		return nil, err
 	}
 	return &dec, nil
+}
+
+// PushPeerExchange opens a server-initiated stream and writes the
+// peer-exchange-class tag (0x03) + a single federation.Envelope frame.
+// Peer-exchange is fire-and-forget: this method does NOT wait for any
+// reply from the client. Returns when the framed envelope has been
+// written and the stream's write half closed.
+func (s *Server) PushPeerExchange(ctx context.Context, env *fed.Envelope) error {
+	stream, err := s.Conn.OpenStreamSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	if _, err := stream.Write([]byte{0x03}); err != nil {
+		return err
+	}
+	if err := wire.Write(stream, env, s.MaxFrameSz); err != nil {
+		return err
+	}
+	return stream.CloseWrite()
 }
 
 // PushSettlement opens a server-initiated stream and writes the
