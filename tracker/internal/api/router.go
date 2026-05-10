@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"net/netip"
 	"time"
 
@@ -72,6 +73,15 @@ type FederationService interface {
 // structurally.
 type ReputationRecorder interface {
 	RecordBrokerRequest(consumer ids.IdentityID, decision string) error
+	RecordProofFidelity(consumer ids.IdentityID, level string) error
+}
+
+// IdentityResolver maps a consumer IdentityID back to the Ed25519 pubkey
+// from the live mTLS connection table. *server.Server.PeerPubkey
+// satisfies this; nil disables consumer-sig verification (handler falls
+// back to the legacy mTLS-trust path).
+type IdentityResolver interface {
+	PeerPubkey(id ids.IdentityID) (ed25519.PublicKey, bool)
 }
 
 // Deps lists the subsystems an api handler may depend on. Fields left
@@ -89,6 +99,8 @@ type Deps struct {
 	Admission        AdmissionService
 	Federation       FederationService
 	Reputation       ReputationRecorder
+	Identity         IdentityResolver
+	TrackerPub       ed25519.PublicKey
 	BootstrapPeers   BootstrapPeersService
 	BootstrapMetrics BootstrapPeersMetrics // optional; nil → no observability
 }

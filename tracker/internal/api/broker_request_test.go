@@ -240,6 +240,8 @@ func (s *repSpy) RecordBrokerRequest(c ids.IdentityID, _ string) error {
 	return nil
 }
 
+func (s *repSpy) RecordProofFidelity(_ ids.IdentityID, _ string) error { return nil }
+
 func TestBrokerRequest_RecordsReputationSignal(t *testing.T) {
 	spy := &repSpy{}
 	svc := &fakeBrokerService{
@@ -270,6 +272,23 @@ func TestBrokerRequest_RecordsReputationSignal(t *testing.T) {
 	copy(wantID[:], consumerBytes)
 	if spy.calls[0] != wantID {
 		t.Errorf("recorded consumer ID = %v, want %v", spy.calls[0], wantID)
+	}
+}
+
+func TestBrokerRequest_BrokerErrIdentityFrozen_MapsToFROZEN(t *testing.T) {
+	svc := &fakeBrokerService{submitErr: broker.ErrIdentityFrozen}
+	adm := &fakeAdmissionForBroker{decideResult: admission.Result{Outcome: admission.OutcomeAdmit}}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm})
+
+	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerID32()),
+	})
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_FROZEN {
+		t.Fatalf("status=%v error=%+v want FROZEN", resp.Status, resp.Error)
+	}
+	if resp.Error == nil || resp.Error.Code != "FROZEN" {
+		t.Fatalf("err=%+v want code=FROZEN", resp.Error)
 	}
 }
 
