@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -140,4 +141,45 @@ func TestPeerHealth_RevGossipSubScore_NegativeDelayClampedToZero(t *testing.T) {
 	// revoked_at in the future → negative delay treated as 0 → revgoss=1.0.
 	h.OnRevocation(p, now.Add(60*time.Second), now)
 	require.InDelta(t, 1.0, h.Score(p, now), 0.0001)
+}
+
+func TestPeerHealth_Concurrent(t *testing.T) {
+	now := time.Unix(10000, 0)
+	h := NewPeerHealth(HealthConfig{
+		UptimeWindow: 2 * time.Hour, RevGossipWindow: 600 * time.Second,
+		RevGossipBufferSize: 16,
+		UptimeWeight:        0.7, RevGossipWeight: 0.3,
+	}, func() time.Time { return now }, nil)
+
+	const peers = 8
+	const iters = 200
+
+	var wg sync.WaitGroup
+	for w := 0; w < peers; w++ {
+		var p ids.TrackerID
+		p[0] = byte(w)
+		wg.Add(3)
+		// Observe ROOT_ATTESTATION concurrently.
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				h.OnRootAttestation(p, now)
+			}
+		}()
+		// Observe revocations concurrently.
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				h.OnRevocation(p, now.Add(-30*time.Second), now)
+			}
+		}()
+		// Read concurrently.
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				_ = h.Score(p, now)
+			}
+		}()
+	}
+	wg.Wait()
 }
