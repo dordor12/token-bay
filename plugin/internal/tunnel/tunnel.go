@@ -18,6 +18,11 @@ type Tunnel struct {
 	stream *quic.Stream
 	cfg    Config
 
+	// ownsTransport is set when this Tunnel created its own quic.Transport
+	// (rendezvous path). Direct-dial tunnels leave it nil — quic-go's
+	// DialAddr owns the transport in that case.
+	ownsTransport *quic.Transport
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -134,7 +139,9 @@ func (t *Tunnel) CloseWrite() error {
 	return t.stream.Close() // quic-go: closes the send direction
 }
 
-// Close tears down the QUIC connection. Idempotent.
+// Close tears down the QUIC connection. Idempotent. If this Tunnel owns
+// its quic.Transport (rendezvous path), the transport is also closed,
+// releasing the underlying UDP socket.
 func (t *Tunnel) Close() error {
 	t.mu.Lock()
 	if t.closed {
@@ -147,7 +154,10 @@ func (t *Tunnel) Close() error {
 		_ = t.stream.Close()
 	}
 	if t.conn != nil {
-		return t.conn.CloseWithError(0, "tunnel closed")
+		_ = t.conn.CloseWithError(0, "tunnel closed")
+	}
+	if t.ownsTransport != nil {
+		return t.ownsTransport.Close()
 	}
 	return nil
 }
