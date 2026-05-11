@@ -27,6 +27,27 @@ func (b *Broker) RegisterQueued(env *tbproto.EnvelopeSigned, requestID [16]byte,
 	}()
 }
 
+// CancelQueued drops the pendingQueued entry for requestID. Used by the api
+// layer's block-then-deliver path when its own timer or the consumer's ctx
+// fires before drain reaches the entry — without this, drain would later
+// Submit on behalf of a consumer that has already received a wire response,
+// burning a reservation and (worst case) an offer-accept round-trip. Idempotent.
+//
+// Races against drainOnce are intentional: if drain has already popped the
+// entry from pendingQueued, CancelQueued is a no-op and the Submit proceeds
+// to completion. The reservation reaper backstops that case.
+func (b *Broker) CancelQueued(requestID [16]byte) {
+	b.pendingMu.Lock()
+	p, exists := b.pendingQueued[requestID]
+	if exists {
+		delete(b.pendingQueued, requestID)
+	}
+	b.pendingMu.Unlock()
+	if exists {
+		close(p.deliver)
+	}
+}
+
 // TriggerQueueDrain forces one drain iteration. The drain goroutine also
 // fires periodically per cfg.QueueDrainIntervalMs.
 func (b *Broker) TriggerQueueDrain() {
