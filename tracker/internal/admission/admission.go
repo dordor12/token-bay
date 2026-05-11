@@ -173,7 +173,33 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	}
 
 	s.startAggregator()
+	s.startSnapshotEmitter()
 	return s, nil
+}
+
+// startSnapshotEmitter spawns a goroutine that periodically calls
+// runSnapshotEmitOnce on cfg.SnapshotIntervalS cadence. No-op when
+// snapshotPrefix is unset (persistence disabled) or SnapshotIntervalS<=0.
+// Stops on s.stop. Errors are swallowed — operators see them via the
+// admin /admission/snapshot endpoint or the next emit cycle.
+func (s *Subsystem) startSnapshotEmitter() {
+	if s.snapshotPrefix == "" || s.cfg.SnapshotIntervalS <= 0 {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		t := time.NewTicker(time.Duration(s.cfg.SnapshotIntervalS) * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case now := <-t.C:
+				_ = s.runSnapshotEmitOnce(now)
+			}
+		}
+	}()
 }
 
 // PressureGauge returns the most recent supply-aggregator pressure (demand_rate /
