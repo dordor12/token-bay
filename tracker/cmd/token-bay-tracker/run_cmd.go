@@ -74,6 +74,8 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("ledger: %w", err)
 			}
+			led.StartRollup(time.Duration(cfg.Ledger.MerkleRootIntervalMin) * time.Minute)
+			defer led.Close() //nolint:errcheck
 
 			reg, err := registry.New(registry.DefaultShardCount)
 			if err != nil {
