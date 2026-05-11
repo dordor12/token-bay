@@ -11,9 +11,9 @@
 //
 //	GET  /health                       liveness + version
 //	GET  /stats                        peer count, ledger tip, merkle interval
-//	GET  /peers                        currently-connected QUIC peers
-//	POST /peers/add                    501 (federation not yet implemented)
-//	POST /peers/remove                 501 (federation not yet implemented)
+//	GET  /peers                        federation peers + link health
+//	POST /peers/add                    register an allowlisted peer
+//	POST /peers/remove                 deliberate depeering
 //	GET  /identity/{id}                registry record + signed balance
 //	POST /maintenance                  triggers graceful shutdown
 //	*    /broker/...                   mounted from internal/broker

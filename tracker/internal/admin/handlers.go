@@ -2,6 +2,8 @@ package admin
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -41,21 +43,140 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handlePeers lists federation peers. Federation is not yet implemented;
-// the response is honest about that so operators don't conclude their
-// peering is broken.
+// handlePeers lists federation peers with link health. When the
+// federation subsystem is not wired (admin Deps.Federation is nil) the
+// response reports federation_state=disabled with an empty list, so
+// operators can tell a misconfigured-tracker apart from a partitioned
+// one without consulting logs.
 func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.Federation == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"peers":            []any{},
+			"connected_quic":   s.deps.PeerCounter.PeerCount(),
+			"federation_state": "disabled",
+		})
+		return
+	}
+	peers := s.deps.Federation.Peers()
+	out := make([]map[string]any, 0, len(peers))
+	for _, p := range peers {
+		row := map[string]any{
+			"tracker_id":   hex.EncodeToString(p.TrackerID[:]),
+			"pubkey":       hex.EncodeToString(p.PubKey),
+			"addr":         p.Addr,
+			"region":       p.Region,
+			"state":        p.State,
+			"health_score": p.HealthScore,
+		}
+		if !p.Since.IsZero() {
+			row["since"] = p.Since.UTC().Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"peers":            []any{},
+		"peers":            out,
 		"connected_quic":   s.deps.PeerCounter.PeerCount(),
-		"federation_state": "not_implemented",
+		"federation_state": "enabled",
+		"listen_addr":      s.deps.Federation.ListenAddr(),
 	})
 }
 
-// handlePeersUnimplemented covers POST /peers/add and /peers/remove until
-// the federation subsystem ships those mutations.
-func (s *Server) handlePeersUnimplemented(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "federation subsystem not yet implemented")
+// peersAddBody is the operator-supplied JSON for POST /peers/add. All
+// fields are hex-or-string with no defaults; missing fields produce 400.
+type peersAddBody struct {
+	TrackerID string `json:"tracker_id"`
+	PubKey    string `json:"pubkey"`
+	Addr      string `json:"addr"`
+	Region    string `json:"region"`
+}
+
+// handlePeersAdd registers an operator-allowlisted peer at runtime.
+// 202 is returned on a successful registration because the actual dial
+// happens asynchronously in a per-peer goroutine.
+func (s *Server) handlePeersAdd(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Federation == nil {
+		writeError(w, http.StatusNotImplemented, "federation subsystem not configured")
+		return
+	}
+	defer r.Body.Close()
+	var body peersAddBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	tid, err := parseHexTrackerID(body.TrackerID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "tracker_id: "+err.Error())
+		return
+	}
+	pk, err := hex.DecodeString(body.PubKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "pubkey: "+err.Error())
+		return
+	}
+	if len(pk) != 32 {
+		writeError(w, http.StatusBadRequest, "pubkey must be 32 bytes")
+		return
+	}
+	if body.Addr == "" {
+		writeError(w, http.StatusBadRequest, "addr required")
+		return
+	}
+	req := PeerAddRequest{TrackerID: tid, PubKey: pk, Addr: body.Addr, Region: body.Region}
+	switch err := s.deps.Federation.AddPeer(req); {
+	case errors.Is(err, ErrPeerExists):
+		writeError(w, http.StatusConflict, "peer already registered")
+		return
+	case err != nil:
+		s.deps.Logger.Warn().Err(err).Str("event", "admin_add_peer").Msg("federation rejected AddPeer")
+		writeError(w, http.StatusInternalServerError, "add peer: "+err.Error())
+		return
+	}
+	s.deps.Logger.Info().Str("event", "admin_add_peer").Str("tracker_id", body.TrackerID).Msg("operator added peer")
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"tracker_id": body.TrackerID,
+		"state":      "pending",
+	})
+}
+
+// peersRemoveBody is the operator-supplied JSON for POST /peers/remove.
+type peersRemoveBody struct {
+	TrackerID string `json:"tracker_id"`
+}
+
+// handlePeersRemove removes a peer from the active set. Federation
+// records the depeer reason; admin always reports ReasonOperator via
+// the cmd-side adapter.
+func (s *Server) handlePeersRemove(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Federation == nil {
+		writeError(w, http.StatusNotImplemented, "federation subsystem not configured")
+		return
+	}
+	defer r.Body.Close()
+	var body peersRemoveBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	tid, err := parseHexTrackerID(body.TrackerID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "tracker_id: "+err.Error())
+		return
+	}
+	switch err := s.deps.Federation.Depeer(tid); {
+	case errors.Is(err, ErrPeerUnknown):
+		writeError(w, http.StatusNotFound, "peer unknown")
+		return
+	case err != nil:
+		s.deps.Logger.Warn().Err(err).Str("event", "admin_remove_peer").Msg("federation rejected Depeer")
+		writeError(w, http.StatusInternalServerError, "depeer: "+err.Error())
+		return
+	}
+	s.deps.Logger.Info().Str("event", "admin_remove_peer").Str("tracker_id", body.TrackerID).Msg("operator removed peer")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tracker_id": body.TrackerID,
+		"depeered":   true,
+	})
 }
 
 // handleIdentity returns whatever is known about the identity. Both the
