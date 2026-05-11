@@ -90,6 +90,23 @@ func (f *Inflight) LookupByHash(hash [32]byte) (*Request, bool) {
 	return r, ok
 }
 
+// LookupAssignment returns the consumer and assigned seeder for an in-flight
+// request keyed by request_id. ok=false if the request is unknown or selection
+// has not yet produced a seeder assignment. Safe to call concurrently with
+// MarkSeeder / Transition.
+func (f *Inflight) LookupAssignment(reqID [16]byte) (consumer, seeder ids.IdentityID, ok bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	r, present := f.byID[reqID]
+	if !present {
+		return ids.IdentityID{}, ids.IdentityID{}, false
+	}
+	if r.AssignedSeeder == (ids.IdentityID{}) {
+		return ids.IdentityID{}, ids.IdentityID{}, false
+	}
+	return r.ConsumerID, r.AssignedSeeder, true
+}
+
 // EnsureSettleSig idempotently initializes the request's settlement-sig
 // dispatch channel. Safe to call from HandleUsageReport before IndexByHash;
 // the lock here happens-before any HandleSettle's LookupByHash, so a later
