@@ -142,17 +142,24 @@ func TestIntegration_FrozenAtPeer_BrokerRejectsLocally(t *testing.T) {
 	require.NoError(t, err)
 	defer bFed.Close()
 
-	// Wait for steady-state peering on B.
+	// Wait until A's view of B is Steady. A is the revocation publisher
+	// (aFed.OnFreeze below); gossip.Forward only enumerates peers from
+	// the *publisher's* peers map, so waiting on B's view is the wrong
+	// side — that side races independently with A's own attachPeerLocked
+	// and can leave A.peers[B] empty when the publish fires, silently
+	// dropping the revocation. B's recv path is buffered (16-frame conn
+	// channel) and drains as soon as B's attach completes within the
+	// 2s revocation-archive wait below.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, p := range bFed.Peers() {
+		for _, p := range aFed.Peers() {
 			if p.State == federation.PeerStateSteady {
 				goto steady
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("B never reached steady state with A")
+	t.Fatal("A never reached steady state with B")
 steady:
 
 	// --- Broker on tracker B ----------------------------------------

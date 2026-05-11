@@ -777,7 +777,10 @@ func TestIntegration_Revocation_ThreeTracker_LineGraph(t *testing.T) {
 		{TrackerID: aID, PubKey: a.pub, Addr: "no-direct-a-c"},
 	}, revArchC)
 
-	// Wait for B to be steady with both A and C.
+	// Wait for B to be steady with both A and C (B forwards), and for
+	// A to be steady with B (A is the revocation publisher — A.peers[B]
+	// must be populated before aFed.OnFreeze, since gossip.Forward only
+	// enumerates the publisher's own peers map).
 	waitSteadyPeers := func(f *federation.Federation, want int) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
@@ -796,6 +799,7 @@ func TestIntegration_Revocation_ThreeTracker_LineGraph(t *testing.T) {
 		t.Fatalf("federation never reached %d steady peers", want)
 	}
 	waitSteadyPeers(bFed, 2)
+	waitSteadyPeers(aFed, 1)
 
 	identity := ids.IdentityID(bytes.Repeat([]byte{0x99}, 32))
 	aFed.OnFreeze(context.Background(), identity, "freeze_repeat", time.Unix(1714000100, 0))
@@ -959,7 +963,12 @@ func TestIntegration_PeerExchange_ThreeTracker_LineGraph(t *testing.T) {
 		}
 		t.Fatalf("federation never reached %d steady peers", want)
 	}
+	// B forwards (needs both A and C steady) and A is the publisher
+	// (aFed.PublishPeerExchange below); A.peers[B] must be Steady before
+	// the publish, since gossip.Forward only enumerates the publisher's
+	// own peers map.
 	waitSteadyPeers(bFed, 2)
+	waitSteadyPeers(aFed, 1)
 
 	// Inject D into A's known_peers, publish from A; B forwards to C.
 	dID := bytes.Repeat([]byte{0xDD}, 32)
@@ -997,11 +1006,16 @@ func TestIntegration_PeerHealth_RootAttestationLiftsScore(t *testing.T) {
 	t.Parallel()
 	tt := newTwoTrackerWithKnownPeers(t)
 
-	// Wait for handshake to settle.
+	// Wait until B's view of A is Steady. B is the publisher below
+	// (tt.b.PublishHour); gossip.Forward only enumerates peers from the
+	// *publisher's* peers map, so waiting on A's view is the wrong side
+	// — A's and B's attachPeerLocked race independently, and a fast A-side
+	// completion lets the publish fire before B.peers[A] is populated,
+	// silently dropping the ROOT_ATTESTATION.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		got := false
-		for _, p := range tt.a.Peers() {
+		for _, p := range tt.b.Peers() {
 			if p.State == federation.PeerStateSteady {
 				got = true
 				break
