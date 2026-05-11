@@ -94,6 +94,20 @@ func newRunCmd() *cobra.Command {
 			}
 			defer adm.Close() //nolint:errcheck
 
+			// Resume admission state from the most recent snapshot + tlog
+			// per admission-design §5.7. Without this, every restart begins
+			// with empty consumer-credit, seeder-heartbeat, and queue state.
+			if err := adm.StartupReplay(cmd.Context()); err != nil {
+				return fmt.Errorf("admission startup replay: %w", err)
+			}
+
+			// Expose admission collectors on /metrics. The Subsystem builds
+			// its dynamic+composite collector internally; we register it here
+			// so production scrapes see admission counters/gauges.
+			if err := prometheus.DefaultRegisterer.Register(adm.Collector()); err != nil {
+				return fmt.Errorf("admission metrics register: %w", err)
+			}
+
 			// federation: select QUICTransport when ListenAddr is set, else
 			// fall back to the in-process transport (which keeps the
 			// subsystem dormant — no real network presence — when peers
@@ -175,6 +189,10 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("reputation: %w", err)
 			}
 			defer rep.Close() //nolint:errcheck
+
+			if err := rep.Register(prometheus.DefaultRegisterer); err != nil {
+				return fmt.Errorf("reputation metrics register: %w", err)
+			}
 
 			var prices *broker.PriceTable
 			if cfg.Pricing.Models != nil {
@@ -276,6 +294,8 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("admin: %w", err)
 			}
+
+			startMaintenanceLoops(ctx, logger, fed, reg, alloc, cfg)
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Run(ctx) }()
