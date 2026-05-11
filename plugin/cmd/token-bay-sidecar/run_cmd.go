@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
 	"github.com/token-bay/token-bay/plugin/internal/bootstrap"
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
+	"github.com/token-bay/token-bay/plugin/internal/ccproxy"
 	"github.com/token-bay/token-bay/plugin/internal/config"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/seederflow"
@@ -119,6 +121,33 @@ func newRunCmd() *cobra.Command {
 			}
 			coord.SetTracker(tracker)
 
+			// Shared between ccproxy (reads via GetMode on /v1/messages)
+			// and consumerflow (writes EnterNetworkMode on StopFailure).
+			// Constructed here so a single map is observed by both halves.
+			sessionStore := ccproxy.NewSessionModeStore()
+
+			// SidecarURLFunc resolves to the live ccproxy URL once the App
+			// has been constructed and Started. consumerflow only calls it
+			// at hook time, which is necessarily after Start, so the lazy
+			// closure is safe.
+			var appPtr atomic.Pointer[sidecar.App]
+			sidecarURLFunc := func() string {
+				a := appPtr.Load()
+				if a == nil {
+					return ""
+				}
+				return a.Status().CCProxyURL
+			}
+
+			consumerCoord, err := buildConsumerFlow(
+				cfg, cfgDir, al, signer, tracker,
+				sessionStore, sidecarURLFunc, logger,
+			)
+			if err != nil {
+				_ = al.Close()
+				return fmt.Errorf("build consumerflow: %w", err)
+			}
+
 			janitor := &ccbridge.Janitor{
 				Root:     seederRoot,
 				Checker:  coord,
@@ -135,6 +164,8 @@ func newRunCmd() *cobra.Command {
 				TrackerClient:    tracker,
 				Janitor:          janitor,
 				SeederFlow:       coord,
+				ConsumerFlow:     consumerCoord,
+				SessionStore:     sessionStore,
 			}
 
 			app, err := sidecar.New(deps)
@@ -142,6 +173,7 @@ func newRunCmd() *cobra.Command {
 				_ = al.Close()
 				return err
 			}
+			appPtr.Store(app)
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
