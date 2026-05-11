@@ -148,7 +148,8 @@ func TestTransferCmd_HappyPath_DebitsAndAuditAndStdout(t *testing.T) {
 	require.NotNil(t, client.transferGot, "TransferRequest never called")
 	assert.Equal(t, uint64(250), client.transferGot.Amount)
 	assert.Equal(t, "us-east-1", client.transferGot.DestRegion)
-	assert.NotEqual(t, [16]byte{}, client.transferGot.Nonce, "nonce must be non-zero")
+	assert.NotEqual(t, [32]byte{}, client.transferGot.Nonce, "nonce must be non-zero")
+	assert.NotZero(t, client.transferGot.Timestamp, "timestamp must be non-zero")
 
 	// (b) audit log has exactly one TransferRecord with success outcome.
 	got := findTransferRecords(t, auditPath)

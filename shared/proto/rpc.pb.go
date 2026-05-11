@@ -1310,13 +1310,17 @@ func (*AdvertiseAck) Descriptor() ([]byte, []int) {
 }
 
 type TransferRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	IdentityId    []byte                 `protobuf:"bytes,1,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"`
-	Amount        uint64                 `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"`
-	DestRegion    string                 `protobuf:"bytes,3,opt,name=dest_region,json=destRegion,proto3" json:"dest_region,omitempty"`
-	Nonce         []byte                 `protobuf:"bytes,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	IdentityId      []byte                 `protobuf:"bytes,1,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"` // 32 — consumer identity
+	Amount          uint64                 `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	DestRegion      string                 `protobuf:"bytes,3,opt,name=dest_region,json=destRegion,proto3" json:"dest_region,omitempty"`                  // informational; not part of consumer sig coverage
+	Nonce           []byte                 `protobuf:"bytes,4,opt,name=nonce,proto3" json:"nonce,omitempty"`                                              // 32 — also used as ledger TransferRef
+	SourceTrackerId []byte                 `protobuf:"bytes,5,opt,name=source_tracker_id,json=sourceTrackerId,proto3" json:"source_tracker_id,omitempty"` // 32 — federation tracker_id of the source tracker
+	ConsumerSig     []byte                 `protobuf:"bytes,6,opt,name=consumer_sig,json=consumerSig,proto3" json:"consumer_sig,omitempty"`               // 64 — Ed25519(CanonicalTransferProofRequestPreSig) by consumer
+	ConsumerPub     []byte                 `protobuf:"bytes,7,opt,name=consumer_pub,json=consumerPub,proto3" json:"consumer_pub,omitempty"`               // 32 — consumer's Ed25519 pubkey
+	Timestamp       uint64                 `protobuf:"varint,8,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                     // unix seconds, picked by the consumer at sign time
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TransferRequest) Reset() {
@@ -1375,6 +1379,34 @@ func (x *TransferRequest) GetNonce() []byte {
 		return x.Nonce
 	}
 	return nil
+}
+
+func (x *TransferRequest) GetSourceTrackerId() []byte {
+	if x != nil {
+		return x.SourceTrackerId
+	}
+	return nil
+}
+
+func (x *TransferRequest) GetConsumerSig() []byte {
+	if x != nil {
+		return x.ConsumerSig
+	}
+	return nil
+}
+
+func (x *TransferRequest) GetConsumerPub() []byte {
+	if x != nil {
+		return x.ConsumerPub
+	}
+	return nil
+}
+
+func (x *TransferRequest) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
 }
 
 type TransferProof struct {
@@ -2159,14 +2191,18 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\tavailable\x18\x03 \x01(\bR\tavailable\x12\x1a\n" +
 	"\bheadroom\x18\x04 \x01(\x02R\bheadroom\x12\x14\n" +
 	"\x05tiers\x18\x05 \x01(\rR\x05tiers\"\x0e\n" +
-	"\fAdvertiseAck\"\x81\x01\n" +
+	"\fAdvertiseAck\"\x91\x02\n" +
 	"\x0fTransferRequest\x12\x1f\n" +
 	"\videntity_id\x18\x01 \x01(\fR\n" +
 	"identityId\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x04R\x06amount\x12\x1f\n" +
 	"\vdest_region\x18\x03 \x01(\tR\n" +
 	"destRegion\x12\x14\n" +
-	"\x05nonce\x18\x04 \x01(\fR\x05nonce\"\x82\x01\n" +
+	"\x05nonce\x18\x04 \x01(\fR\x05nonce\x12*\n" +
+	"\x11source_tracker_id\x18\x05 \x01(\fR\x0fsourceTrackerId\x12!\n" +
+	"\fconsumer_sig\x18\x06 \x01(\fR\vconsumerSig\x12!\n" +
+	"\fconsumer_pub\x18\a \x01(\fR\vconsumerPub\x12\x1c\n" +
+	"\ttimestamp\x18\b \x01(\x04R\ttimestamp\"\x82\x01\n" +
 	"\rTransferProof\x121\n" +
 	"\x15source_chain_tip_hash\x18\x01 \x01(\fR\x12sourceChainTipHash\x12\x1d\n" +
 	"\n" +

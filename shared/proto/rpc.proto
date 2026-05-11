@@ -149,10 +149,14 @@ message Advertisement {
 message AdvertiseAck {}
 
 message TransferRequest {
-  bytes  identity_id = 1;
-  uint64 amount      = 2;
-  string dest_region = 3;
-  bytes  nonce       = 4;
+  bytes  identity_id       = 1;  // 32 — consumer identity
+  uint64 amount            = 2;
+  string dest_region       = 3;  // informational; not part of consumer sig coverage
+  bytes  nonce             = 4;  // 32 — also used as ledger TransferRef
+  bytes  source_tracker_id = 5;  // 32 — federation tracker_id of the source tracker
+  bytes  consumer_sig      = 6;  // 64 — Ed25519(CanonicalTransferProofRequestPreSig) by consumer
+  bytes  consumer_pub      = 7;  // 32 — consumer's Ed25519 pubkey
+  uint64 timestamp         = 8;  // unix seconds, picked by the consumer at sign time
 }
 
 message TransferProof {
