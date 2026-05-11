@@ -18,17 +18,40 @@ import (
 )
 
 // fakeBrokerService satisfies api.BrokerService.
+//
+// When queuedDeliver is non-nil, RegisterQueued spawns a goroutine that
+// invokes deliver with queuedDeliver after queuedDelay — letting tests
+// drive the api-layer block-then-deliver path with deterministic outcomes.
+// queuedCancels counts CancelQueued calls so tests can assert cleanup;
+// it is written only by the handler goroutine that called Dispatch and
+// read after Dispatch returns, so no synchronization is needed.
 type fakeBrokerService struct {
-	submitResult *broker.Result
-	submitErr    error
+	submitResult  *broker.Result
+	submitErr     error
+	queuedDeliver *broker.Result
+	queuedDelay   time.Duration
+	queuedCancels int
 }
 
 func (f *fakeBrokerService) Submit(_ context.Context, _ *tbproto.EnvelopeSigned) (*broker.Result, error) {
 	return f.submitResult, f.submitErr
 }
 
-func (f *fakeBrokerService) RegisterQueued(_ *tbproto.EnvelopeSigned, _ [16]byte, _ func(*broker.Result)) {
+func (f *fakeBrokerService) RegisterQueued(_ *tbproto.EnvelopeSigned, _ [16]byte, deliver func(*broker.Result)) {
+	if f.queuedDeliver == nil {
+		return
+	}
+	res := f.queuedDeliver
+	delay := f.queuedDelay
+	go func() {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		deliver(res)
+	}()
 }
+
+func (f *fakeBrokerService) CancelQueued(_ [16]byte) { f.queuedCancels++ }
 
 func (f *fakeBrokerService) LookupAssignment(_ [16]byte) (ids.IdentityID, ids.IdentityID, bool) {
 	return ids.IdentityID{}, ids.IdentityID{}, false
@@ -38,12 +61,14 @@ func (f *fakeBrokerService) LookupAssignment(_ [16]byte) (ids.IdentityID, ids.Id
 // brokerAdmission). The Admit method is a passthrough no-op.
 type fakeAdmissionForBroker struct {
 	decideResult admission.Result
+	queueTimeout time.Duration
 }
 
 func (f *fakeAdmissionForBroker) Admit(_ context.Context, _, _ []byte) error { return nil }
 func (f *fakeAdmissionForBroker) Decide(_ ids.IdentityID, _ *sharedadmission.SignedCreditAttestation, _ time.Time) admission.Result {
 	return f.decideResult
 }
+func (f *fakeAdmissionForBroker) QueueTimeout() time.Duration { return f.queueTimeout }
 
 // validEnvelopeBytes returns a marshalled EnvelopeSigned that passes
 // ValidateEnvelopeBody. The consumer_id is the supplied id (32 bytes).
@@ -110,20 +135,40 @@ func TestBrokerRequest_Admit_ReturnsSeederAssignment(t *testing.T) {
 	}
 }
 
-func TestBrokerRequest_Queued_ReturnsQueued(t *testing.T) {
+// queuedAdmissionResult returns a Result with an OutcomeQueue decision and
+// the test request_id 0x42… so per-test setup stays terse.
+func queuedAdmissionResult() admission.Result {
 	var reqID [16]byte
 	reqID[0] = 0x42
-	adm := &fakeAdmissionForBroker{
-		decideResult: admission.Result{
-			Outcome: admission.OutcomeQueue,
-			Queued: &admission.QueuedDetails{
-				RequestID:    reqID,
-				PositionBand: admission.PositionBand1To10,
-				EtaBand:      admission.EtaBandLessThan30s,
-			},
+	return admission.Result{
+		Outcome: admission.OutcomeQueue,
+		Queued: &admission.QueuedDetails{
+			RequestID:    reqID,
+			PositionBand: admission.PositionBand1To10,
+			EtaBand:      admission.EtaBandLessThan30s,
 		},
 	}
-	r, _ := api.NewRouter(api.Deps{Broker: &fakeBrokerService{}, Admission: adm})
+}
+
+// When admission queues an envelope, the handler must block on the broker's
+// deliver callback and return the eventual outcome — not the wire Queued
+// variant — so a queued consumer ultimately gets served (tracker-broker-design
+// §5.4). This test exercises the happy path: drain delivers OutcomeAdmit, the
+// RPC response carries the SeederAssignment.
+func TestBrokerRequest_Queued_DeliversAdmit(t *testing.T) {
+	svc := &fakeBrokerService{
+		queuedDeliver: &broker.Result{
+			Outcome: broker.OutcomeAdmit,
+			Admit: &broker.Assignment{
+				SeederAddr:       "10.0.0.5:4000",
+				SeederPubkey:     bytes.Repeat([]byte{0xDD}, 32),
+				ReservationToken: bytes.Repeat([]byte{0xEE}, 16),
+			},
+		},
+		queuedDelay: 5 * time.Millisecond,
+	}
+	adm := &fakeAdmissionForBroker{decideResult: queuedAdmissionResult()}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm})
 
 	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
 		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
@@ -136,15 +181,117 @@ func TestBrokerRequest_Queued_ReturnsQueued(t *testing.T) {
 	if err := proto.Unmarshal(resp.Payload, &brr); err != nil {
 		t.Fatal(err)
 	}
-	q, ok := brr.Outcome.(*tbproto.BrokerRequestResponse_Queued)
+	sa, ok := brr.Outcome.(*tbproto.BrokerRequestResponse_SeederAssignment)
 	if !ok {
-		t.Fatalf("expected Queued, got %T", brr.Outcome)
+		t.Fatalf("expected SeederAssignment, got %T", brr.Outcome)
 	}
-	if len(q.Queued.RequestId) != 16 || q.Queued.RequestId[0] != 0x42 {
-		t.Errorf("unexpected request_id: %v", q.Queued.RequestId)
+	if string(sa.SeederAssignment.SeederAddr) != "10.0.0.5:4000" {
+		t.Errorf("seeder_addr = %q", sa.SeederAssignment.SeederAddr)
 	}
-	if q.Queued.PositionBand != tbproto.PositionBand_POSITION_BAND_1_TO_10 {
-		t.Errorf("position_band = %v", q.Queued.PositionBand)
+	if svc.queuedCancels != 0 {
+		t.Errorf("unexpected CancelQueued calls on happy path: %d", svc.queuedCancels)
+	}
+}
+
+// Drain may also deliver NoCapacity for a queued envelope (all seeders fell
+// off between queueing and pop). The handler must translate that into the
+// wire NoCapacity variant rather than wedging on the channel.
+func TestBrokerRequest_Queued_DeliversNoCapacity(t *testing.T) {
+	svc := &fakeBrokerService{
+		queuedDeliver: &broker.Result{
+			Outcome: broker.OutcomeNoCapacity,
+			NoCap:   &broker.NoCapacityDetails{Reason: "no_eligible_seeder"},
+		},
+	}
+	adm := &fakeAdmissionForBroker{decideResult: queuedAdmissionResult()}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm})
+
+	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerID32()),
+	})
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_OK {
+		t.Fatalf("status=%v error=%+v", resp.Status, resp.Error)
+	}
+	var brr tbproto.BrokerRequestResponse
+	if err := proto.Unmarshal(resp.Payload, &brr); err != nil {
+		t.Fatal(err)
+	}
+	nc, ok := brr.Outcome.(*tbproto.BrokerRequestResponse_NoCapacity)
+	if !ok {
+		t.Fatalf("expected NoCapacity, got %T", brr.Outcome)
+	}
+	if nc.NoCapacity.Reason != "no_eligible_seeder" {
+		t.Errorf("reason = %q", nc.NoCapacity.Reason)
+	}
+}
+
+// When the admission queue timeout elapses before drain delivers, the
+// handler must emit a wire Rejected{QUEUE_TIMEOUT} and CancelQueued the
+// pending entry so a later drain pop doesn't burn a reservation on the
+// abandoned envelope.
+func TestBrokerRequest_Queued_TimesOut(t *testing.T) {
+	svc := &fakeBrokerService{} // no queuedDeliver → handler waits for timeout
+	adm := &fakeAdmissionForBroker{
+		decideResult: queuedAdmissionResult(),
+		queueTimeout: 30 * time.Millisecond,
+	}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm})
+
+	start := time.Now()
+	resp := r.Dispatch(context.Background(), newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerID32()),
+	})
+	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
+		t.Fatalf("returned too quickly (%v) — should have blocked until queue timeout", elapsed)
+	}
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_OK {
+		t.Fatalf("status=%v error=%+v", resp.Status, resp.Error)
+	}
+	var brr tbproto.BrokerRequestResponse
+	if err := proto.Unmarshal(resp.Payload, &brr); err != nil {
+		t.Fatal(err)
+	}
+	rej, ok := brr.Outcome.(*tbproto.BrokerRequestResponse_Rejected)
+	if !ok {
+		t.Fatalf("expected Rejected, got %T", brr.Outcome)
+	}
+	if rej.Rejected.Reason != tbproto.RejectReason_REJECT_REASON_QUEUE_TIMEOUT {
+		t.Errorf("reason = %v want QUEUE_TIMEOUT", rej.Rejected.Reason)
+	}
+	if svc.queuedCancels != 1 {
+		t.Errorf("CancelQueued calls = %d, want 1", svc.queuedCancels)
+	}
+}
+
+// A canceled RPC context must release the block-then-deliver wait promptly
+// and CancelQueued the pending entry.
+func TestBrokerRequest_Queued_CtxCanceled(t *testing.T) {
+	svc := &fakeBrokerService{} // never delivers
+	adm := &fakeAdmissionForBroker{
+		decideResult: queuedAdmissionResult(),
+		queueTimeout: time.Hour, // ensure timer never wins
+	}
+	r, _ := api.NewRouter(api.Deps{Broker: svc, Admission: adm})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	resp := r.Dispatch(ctx, newRC(), &tbproto.RpcRequest{
+		Method:  tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST,
+		Payload: validEnvelopeBytes(t, consumerID32()),
+	})
+	// ctx.Err() bubbles up as an INTERNAL error response (the transport
+	// has already gone away; the wire response is moot but should not be OK).
+	if resp.Status == tbproto.RpcStatus_RPC_STATUS_OK {
+		t.Fatalf("expected non-OK status on ctx cancellation, got OK")
+	}
+	if svc.queuedCancels != 1 {
+		t.Errorf("CancelQueued calls = %d, want 1", svc.queuedCancels)
 	}
 }
 

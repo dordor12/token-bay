@@ -54,6 +54,8 @@ func (f *fakeBrokerLookup) Submit(context.Context, *tbproto.EnvelopeSigned) (*br
 func (f *fakeBrokerLookup) RegisterQueued(*tbproto.EnvelopeSigned, [16]byte, func(*broker.Result)) {
 }
 
+func (f *fakeBrokerLookup) CancelQueued([16]byte) {}
+
 func (f *fakeBrokerLookup) LookupAssignment([16]byte) (ids.IdentityID, ids.IdentityID, bool) {
 	return f.consumer, f.seeder, f.ok
 }

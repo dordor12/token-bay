@@ -46,6 +46,7 @@ type StunTurnService interface {
 type BrokerService interface {
 	Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*broker.Result, error)
 	RegisterQueued(env *tbproto.EnvelopeSigned, requestID [16]byte, deliver func(*broker.Result))
+	CancelQueued(requestID [16]byte)
 	turnAssignmentLookup
 }
 
