@@ -8,7 +8,9 @@
 package federation
 
 import (
+	"crypto/ed25519"
 	"errors"
+	"fmt"
 
 	"github.com/token-bay/token-bay/shared/signing"
 	"google.golang.org/protobuf/proto"
@@ -57,4 +59,24 @@ func CanonicalTransferAppliedPreSig(m *TransferApplied) ([]byte, error) {
 	}
 	clone.DestTrackerSig = nil
 	return signing.DeterministicMarshal(clone)
+}
+
+// SignTransferProofRequest returns the consumer's Ed25519 signature over
+// CanonicalTransferProofRequestPreSig(m). It mirrors signing.SignEnvelope
+// semantics: nil message and wrong-length priv key both return errors;
+// the helper does NOT re-run ValidateTransferProofRequest, so callers
+// choose between fail-fast and best-effort signing.
+//
+// The signature this returns is what api handlers stuff into
+// TransferProofRequest.ConsumerSig and what source-side OnRequest
+// verifies via ed25519.Verify(ConsumerPub, canonical, ConsumerSig).
+func SignTransferProofRequest(priv ed25519.PrivateKey, m *TransferProofRequest) ([]byte, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("federation: private key length %d, want %d", len(priv), ed25519.PrivateKeySize)
+	}
+	canonical, err := CanonicalTransferProofRequestPreSig(m)
+	if err != nil {
+		return nil, fmt.Errorf("federation: canonical TransferProofRequest: %w", err)
+	}
+	return ed25519.Sign(priv, canonical), nil
 }

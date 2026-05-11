@@ -232,6 +232,7 @@ func newRunCmd() *cobra.Command {
 				Broker:     brokerSubs.Broker,
 				Settlement: brokerSubs.Settlement,
 				Admission:  admissionAdapter{adm},
+				Federation: transferFederationAdapter{fed: fed},
 				Reputation: rep,
 				Identity:   ip,
 				TrackerPub: trackerPub,
