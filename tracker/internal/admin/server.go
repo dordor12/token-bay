@@ -60,6 +60,11 @@ type Deps struct {
 	Registry    RegistryView // required
 	Ledger      LedgerView   // required
 
+	// Federation is the operator-facing view of the federation
+	// subsystem. Optional: when nil, GET /peers reports federation as
+	// disabled and POST /peers/add|remove return 501.
+	Federation FederationView
+
 	// Subsystem mounts. Either may be nil; routes simply won't be mounted.
 	BrokerMux      http.Handler
 	AdmissionMount AdmissionMount
@@ -202,8 +207,8 @@ func (s *Server) buildMux() http.Handler {
 	mux.Handle("GET /health", guard(http.HandlerFunc(s.handleHealth)))
 	mux.Handle("GET /stats", guard(http.HandlerFunc(s.handleStats)))
 	mux.Handle("GET /peers", guard(http.HandlerFunc(s.handlePeers)))
-	mux.Handle("POST /peers/add", guard(http.HandlerFunc(s.handlePeersUnimplemented)))
-	mux.Handle("POST /peers/remove", guard(http.HandlerFunc(s.handlePeersUnimplemented)))
+	mux.Handle("POST /peers/add", guard(http.HandlerFunc(s.handlePeersAdd)))
+	mux.Handle("POST /peers/remove", guard(http.HandlerFunc(s.handlePeersRemove)))
 	mux.Handle("GET /identity/{id}", guard(http.HandlerFunc(s.handleIdentity)))
 	mux.Handle("POST /maintenance", guard(http.HandlerFunc(s.handleMaintenance)))
 
