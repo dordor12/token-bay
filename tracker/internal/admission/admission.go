@@ -213,6 +213,18 @@ func (s *Subsystem) PressureGauge() float64 {
 	return snap.Pressure
 }
 
+// QueueTimeout returns the configured cap on how long a queued admission
+// decision may wait before the api-layer block-then-deliver path gives up
+// and emits a wire Rejected{queue_timeout} (admission-design §5.4 / spec
+// §5.4). Returns 0 when QueueTimeoutS is non-positive — callers MUST treat
+// zero as "no operator-configured cap" and pick their own safety bound.
+func (s *Subsystem) QueueTimeout() time.Duration {
+	if s.cfg.QueueTimeoutS <= 0 {
+		return 0
+	}
+	return time.Duration(s.cfg.QueueTimeoutS) * time.Second
+}
+
 // Close signals all background goroutines to stop and waits for them.
 // Safe to call multiple times; subsequent calls are no-ops.
 func (s *Subsystem) Close() error {

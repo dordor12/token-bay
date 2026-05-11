@@ -53,7 +53,16 @@ func ClassifyProofFidelity(p *exhaustionproof.ExhaustionProofV1) string {
 // brokerAdmission is the slice of admission the broker_request handler needs.
 type brokerAdmission interface {
 	Decide(consumerID ids.IdentityID, att *sharedadmission.SignedCreditAttestation, now time.Time) admission.Result
+	// QueueTimeout caps the wait of the block-then-deliver path for an
+	// OutcomeQueue decision. Zero means "no operator-configured cap" —
+	// the handler falls back to a safety bound (queueTimeoutFallback).
+	QueueTimeout() time.Duration
 }
+
+// queueTimeoutFallback bounds the block-then-deliver wait when admission
+// reports zero (boot-time / mis-configured). Mirrors the 300 s admission-design
+// default, surfaced here so a wedged admission can never park an RPC forever.
+const queueTimeoutFallback = 300 * time.Second
 
 // installBrokerRequest wires the live broker_request handler when both
 // Deps.Broker and Deps.Admission are non-nil; otherwise returns the
@@ -112,9 +121,10 @@ func (r *Router) installBrokerRequest() handlerFunc {
 			return brokerResultToResponse(res)
 
 		case admission.OutcomeQueue:
-			// v1: emit Queued wire response without blocking the RPC.
-			// TODO(broker-followup): wire RegisterQueued + block-then-deliver path.
-			return queuedToResponse(admResult.Queued)
+			if admResult.Queued == nil {
+				return nil, errors.New("api: admission returned OutcomeQueue with nil Queued")
+			}
+			return r.serveQueued(ctx, &env, adm, admResult.Queued)
 
 		case admission.OutcomeReject:
 			return rejectedToResponse(admResult.Rejected)
@@ -122,6 +132,54 @@ func (r *Router) installBrokerRequest() handlerFunc {
 		default:
 			return nil, errors.New("api: admission returned unknown outcome")
 		}
+	}
+}
+
+// serveQueued implements the block-then-deliver path (tracker-broker-design
+// §5.4): register the envelope with the broker's pendingQueued cache, then
+// park on a 1-buffer channel until (a) the queue-drain goroutine pops the
+// entry and Submit's eventual result is delivered, (b) the consumer's RPC
+// ctx is canceled, or (c) the admission queue timeout elapses. On (b)/(c)
+// the pendingQueued entry is CancelQueued to keep drain from later burning
+// a reservation on behalf of a consumer that has already given up.
+func (r *Router) serveQueued(
+	ctx context.Context,
+	env *tbproto.EnvelopeSigned,
+	adm brokerAdmission,
+	q *admission.QueuedDetails,
+) (*tbproto.RpcResponse, error) {
+	requestID := q.RequestID
+	ch := make(chan *broker.Result, 1)
+	r.deps.Broker.RegisterQueued(env, requestID, func(res *broker.Result) {
+		select {
+		case ch <- res:
+		default:
+		}
+	})
+
+	timeout := adm.QueueTimeout()
+	if timeout <= 0 {
+		timeout = queueTimeoutFallback
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case res := <-ch:
+		if res == nil {
+			return nil, errors.New("api: broker delivered nil result for queued envelope")
+		}
+		return brokerResultToResponse(res)
+	case <-timer.C:
+		r.deps.Broker.CancelQueued(requestID)
+		retry := uint32(timeout / time.Second) //nolint:gosec // G115 — timeout is bounded
+		return rejectedToResponse(&admission.RejectedDetails{
+			Reason:      admission.RejectReasonQueueTimeout,
+			RetryAfterS: retry,
+		})
+	case <-ctx.Done():
+		r.deps.Broker.CancelQueued(requestID)
+		return nil, ctx.Err()
 	}
 }
 
@@ -186,22 +244,6 @@ func brokerResultToResponse(res *broker.Result) (*tbproto.RpcResponse, error) {
 		}
 	default:
 		return nil, errors.New("api: unexpected broker outcome")
-	}
-	out, err := proto.Marshal(&brr)
-	if err != nil {
-		return nil, err
-	}
-	return OkResponse(out), nil
-}
-
-func queuedToResponse(q *admission.QueuedDetails) (*tbproto.RpcResponse, error) {
-	var brr tbproto.BrokerRequestResponse
-	brr.Outcome = &tbproto.BrokerRequestResponse_Queued{
-		Queued: &tbproto.Queued{
-			RequestId:    q.RequestID[:],
-			PositionBand: tbproto.PositionBand(q.PositionBand),
-			EtaBand:      tbproto.EtaBand(q.EtaBand),
-		},
 	}
 	out, err := proto.Marshal(&brr)
 	if err != nil {
