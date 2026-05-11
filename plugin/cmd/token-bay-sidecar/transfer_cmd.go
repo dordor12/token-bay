@@ -21,7 +21,6 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
-	"github.com/token-bay/token-bay/shared/signing"
 )
 
 // transferSafetyOverhead is the v1 floor we keep in reserve on top of the
@@ -83,40 +82,34 @@ func runTransfer(ctx context.Context, opts transferOptions) error {
 		return fmt.Errorf("transfer: dest region %q matches source region; nothing to transfer", opts.DestRegion)
 	}
 
-	var nonce [16]byte
+	var nonce [32]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return fmt.Errorf("transfer: generate nonce: %w", err)
 	}
-	requestID := "transfer:" + hex.EncodeToString(nonce[:])
+	requestID := "transfer:" + hex.EncodeToString(nonce[:16])
+
+	now := opts.Now().UTC()
 
 	tr := &trackerclient.TransferRequest{
 		IdentityID: rec.IdentityID,
 		Amount:     opts.Amount,
 		DestRegion: opts.DestRegion,
 		Nonce:      nonce,
+		Timestamp:  uint64(now.Unix()), //nolint:gosec // G115 — post-epoch unix seconds always fit
+		// SourceTrackerID / DestTrackerID — federation tracker_ids
+		// (= SHA-256 of the peer tracker's raw Ed25519 pubkey). The
+		// enrollment-metadata TrackerID is an mTLS SPKI hash, which is
+		// NOT the federation tracker_id; wiring a real mapping from
+		// dest_region → peer pubkey hash is a follow-up. For now the
+		// CLI surfaces the limitation by passing the SPKI hash through;
+		// runtime rejection at the source tracker is the expected v1
+		// behavior until the mapping lands.
+		SourceTrackerID: em.TrackerID,
+		DestTrackerID:   em.TrackerID, // placeholder, distinct value lands with the dest-region → tracker_id mapping
 	}
-
-	// Sign the canonical RPC payload with the consumer's identity key.
-	// The wire form has no consumer-sig field today (proto change is a
-	// follow-up per federation cross-region transfer spec §2 non-goals);
-	// the sig is recorded in the audit log as proof of intent and as
-	// a forward-compatible artifact when the api handler grows the
-	// field. Canonicalization mirrors shared/federation/signing_transfer.go's
-	// pattern: route through shared/signing.DeterministicMarshal.
-	canonical, err := signing.DeterministicMarshal(&tbproto.TransferRequest{
-		IdentityId: tr.IdentityID[:],
-		Amount:     tr.Amount,
-		DestRegion: tr.DestRegion,
-		Nonce:      tr.Nonce[:],
-	})
-	if err != nil {
-		return fmt.Errorf("transfer: marshal canonical bytes: %w", err)
-	}
-	if _, err := signer.Sign(canonical); err != nil {
-		return fmt.Errorf("transfer: sign request: %w", err)
-	}
-
-	now := opts.Now().UTC()
+	// Client.TransferRequest signs the federation-canonical form for us
+	// using signer.PrivateKey(); the signer reference is passed through
+	// to opts.NewClient below for the QUIC TLS identity.
 
 	if opts.DryRun {
 		fmt.Fprintf(opts.Stdout,

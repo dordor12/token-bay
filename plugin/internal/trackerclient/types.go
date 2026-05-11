@@ -143,12 +143,20 @@ type Advertisement struct {
 	Tiers      uint32
 }
 
-// TransferRequest moves credits between regions.
+// TransferRequest moves credits between regions. Federation cross-region
+// transfer §5: the consumer signs the federation-canonical bytes of the
+// equivalent TransferProofRequest message and stuffs the sig + pubkey
+// into the wire alongside the routing fields. SourceTrackerID and
+// DestTrackerID are 32-byte federation tracker_ids (= SHA-256 of the
+// peer tracker's raw Ed25519 pubkey), not mTLS SPKI hashes.
 type TransferRequest struct {
-	IdentityID ids.IdentityID
-	Amount     uint64
-	DestRegion string
-	Nonce      [16]byte
+	IdentityID      ids.IdentityID
+	Amount          uint64
+	DestRegion      string
+	Nonce           [32]byte
+	SourceTrackerID [32]byte
+	DestTrackerID   [32]byte
+	Timestamp       uint64 // unix seconds, picked by the caller at sign time
 }
 
 // TransferProof is the source-region tracker's signed proof.

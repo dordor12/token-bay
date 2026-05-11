@@ -2,6 +2,7 @@ package trackerclient
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"net/netip"
 
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/wire"
+	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
@@ -181,16 +183,47 @@ func (c *Client) Advertise(ctx context.Context, ad *Advertisement) error {
 	return c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_ADVERTISE, req, &ack)
 }
 
-// TransferRequest moves credits between regions.
+// TransferRequest moves credits between regions. The consumer signs the
+// federation-canonical TransferProofRequest bytes derived from tr; the
+// destination tracker rebuilds them and verifies the sig as defense in
+// depth before forwarding to the source tracker.
 func (c *Client) TransferRequest(ctx context.Context, tr *TransferRequest) (*TransferProof, error) {
 	if tr == nil {
 		return nil, fmt.Errorf("%w: nil TransferRequest", ErrInvalidResponse)
 	}
+	if tr.SourceTrackerID == ([32]byte{}) {
+		return nil, fmt.Errorf("%w: TransferRequest.SourceTrackerID zero", ErrInvalidResponse)
+	}
+	if tr.DestTrackerID == ([32]byte{}) {
+		return nil, fmt.Errorf("%w: TransferRequest.DestTrackerID zero", ErrInvalidResponse)
+	}
+	priv := c.cfg.Identity.PrivateKey()
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: identity priv key public() is not ed25519.PublicKey", ErrInvalidResponse)
+	}
+	fedReq := &fed.TransferProofRequest{
+		SourceTrackerId: tr.SourceTrackerID[:],
+		DestTrackerId:   tr.DestTrackerID[:],
+		IdentityId:      tr.IdentityID[:],
+		Amount:          tr.Amount,
+		Nonce:           tr.Nonce[:],
+		ConsumerPub:     pub,
+		Timestamp:       tr.Timestamp,
+	}
+	sig, err := fed.SignTransferProofRequest(priv, fedReq)
+	if err != nil {
+		return nil, fmt.Errorf("trackerclient: sign TransferRequest: %w", err)
+	}
 	req := &tbproto.TransferRequest{
-		IdentityId: tr.IdentityID[:],
-		Amount:     tr.Amount,
-		DestRegion: tr.DestRegion,
-		Nonce:      tr.Nonce[:],
+		IdentityId:      tr.IdentityID[:],
+		Amount:          tr.Amount,
+		DestRegion:      tr.DestRegion,
+		Nonce:           tr.Nonce[:],
+		SourceTrackerId: tr.SourceTrackerID[:],
+		ConsumerSig:     sig,
+		ConsumerPub:     pub,
+		Timestamp:       tr.Timestamp,
 	}
 	var resp tbproto.TransferProof
 	if err := c.callUnary(ctx, tbproto.RpcMethod_RPC_METHOD_TRANSFER_REQUEST, req, &resp); err != nil {

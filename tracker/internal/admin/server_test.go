@@ -64,6 +64,39 @@ func (s *stubRegistry) Get(id ids.IdentityID) (registry.SeederRecord, bool) {
 	return rec, ok
 }
 
+// stubFederation implements FederationView for tests. The added /
+// depeered slices record calls so tests can assert dispatch reached
+// the right method with the right arguments.
+type stubFederation struct {
+	peers     []PeerSummary
+	listen    string
+	addErr    error
+	depeerErr error
+
+	added    []PeerAddRequest
+	depeered []ids.TrackerID
+}
+
+func (s *stubFederation) Peers() []PeerSummary { return s.peers }
+
+func (s *stubFederation) AddPeer(req PeerAddRequest) error {
+	if s.addErr != nil {
+		return s.addErr
+	}
+	s.added = append(s.added, req)
+	return nil
+}
+
+func (s *stubFederation) Depeer(id ids.TrackerID) error {
+	if s.depeerErr != nil {
+		return s.depeerErr
+	}
+	s.depeered = append(s.depeered, id)
+	return nil
+}
+
+func (s *stubFederation) ListenAddr() string { return s.listen }
+
 func newTestDeps() Deps {
 	cfg := config.DefaultConfig()
 	cfg.Admin.ListenAddr = "127.0.0.1:0"

@@ -2,6 +2,7 @@ package federation_test
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"testing"
 
 	fed "github.com/token-bay/token-bay/shared/federation"
@@ -142,5 +143,74 @@ func TestCanonicalTransferAppliedPreSig_NilMessage(t *testing.T) {
 	t.Parallel()
 	if _, err := fed.CanonicalTransferAppliedPreSig(nil); err == nil {
 		t.Fatal("err=nil, want error")
+	}
+}
+
+func TestSignTransferProofRequest_RoundTrip(t *testing.T) {
+	t.Parallel()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := validTransferProofRequest()
+	req.ConsumerPub = pub
+	req.ConsumerSig = nil
+
+	sig, err := fed.SignTransferProofRequest(priv, req)
+	if err != nil {
+		t.Fatalf("SignTransferProofRequest err=%v", err)
+	}
+	if len(sig) != ed25519.SignatureSize {
+		t.Fatalf("sig len=%d, want %d", len(sig), ed25519.SignatureSize)
+	}
+
+	// Verify exactly the bytes the source tracker would check.
+	req.ConsumerSig = sig
+	canonical, err := fed.CanonicalTransferProofRequestPreSig(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ed25519.Verify(pub, canonical, sig) {
+		t.Fatal("Verify failed against fed.CanonicalTransferProofRequestPreSig — sig must verify source-tracker-side")
+	}
+}
+
+func TestSignTransferProofRequest_NilMessage(t *testing.T) {
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fed.SignTransferProofRequest(priv, nil); err == nil {
+		t.Fatal("err=nil, want error on nil message")
+	}
+}
+
+func TestSignTransferProofRequest_BadPrivLength(t *testing.T) {
+	t.Parallel()
+	if _, err := fed.SignTransferProofRequest(ed25519.PrivateKey{1, 2, 3}, validTransferProofRequest()); err == nil {
+		t.Fatal("err=nil, want error on bad priv length")
+	}
+}
+
+func TestSignTransferProofRequest_IgnoresPriorSig(t *testing.T) {
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := validTransferProofRequest()
+	req.ConsumerSig = bytes.Repeat([]byte{0xFF}, 64)
+	a, err := fed.SignTransferProofRequest(priv, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ConsumerSig = bytes.Repeat([]byte{0x00}, 64)
+	b2, err := fed.SignTransferProofRequest(priv, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, b2) {
+		t.Fatal("SignTransferProofRequest must zero ConsumerSig before signing — got different sigs")
 	}
 }
