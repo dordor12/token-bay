@@ -2346,6 +2346,7 @@ var (
 		(*SettlementPush)(nil),        // 35: tokenbay.proto.v1.SettlementPush
 	}
 )
+
 var file_proto_rpc_proto_depIdxs = []int32{
 	0,  // 0: tokenbay.proto.v1.RpcRequest.method:type_name -> tokenbay.proto.v1.RpcMethod
 	1,  // 1: tokenbay.proto.v1.RpcResponse.status:type_name -> tokenbay.proto.v1.RpcStatus

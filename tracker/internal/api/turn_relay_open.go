@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -19,6 +18,17 @@ type turnAllocator interface {
 	Allocate(consumer, seeder idsLike, requestID [16]byte, now time.Time) (stunturn.Session, error)
 }
 
+// turnAssignmentLookup recovers the (consumer, seeder) pair the broker bound
+// to a reservation_token. *broker.Broker satisfies this structurally.
+type turnAssignmentLookup interface {
+	LookupAssignment(reqID [16]byte) (consumer, seeder idsLike, ok bool)
+}
+
+// fallbackRelayAddr is the v1 placeholder returned when Deps.RelayPublicAddr
+// is unset; component tests rely on a non-empty value but make no assertion
+// about routability.
+const fallbackRelayAddr = "127.0.0.1:0"
+
 // installTurnRelayOpen wires the live handler when Deps.StunTurn
 // satisfies turnAllocator; otherwise the Scope-2 stub.
 func (r *Router) installTurnRelayOpen() handlerFunc {
@@ -28,6 +38,16 @@ func (r *Router) installTurnRelayOpen() handlerFunc {
 	alloc, ok := r.deps.StunTurn.(turnAllocator)
 	if !ok {
 		return notImpl("turn_relay_open")
+	}
+	// lookup is optional: when nil (no broker wired) the handler falls
+	// back to the self-loop semantics tested in Scope-2.
+	var lookup turnAssignmentLookup
+	if r.deps.Broker != nil {
+		lookup = r.deps.Broker
+	}
+	relayAddr := r.deps.RelayPublicAddr
+	if relayAddr == "" {
+		relayAddr = fallbackRelayAddr
 	}
 	return func(_ context.Context, rc *RequestCtx, payloadBytes []byte) (*tbproto.RpcResponse, error) {
 		var req tbproto.TurnRelayOpenRequest
@@ -40,10 +60,21 @@ func (r *Router) installTurnRelayOpen() handlerFunc {
 		var rid [16]byte
 		copy(rid[:], req.SessionId)
 
-		// TODO(broker): once internal/broker lands, the seeder identity
-		// is recovered from a reservation token rather than reflexively
-		// from rc.PeerID. Scope-2 self-loop only.
-		sess, err := alloc.Allocate(rc.PeerID, rc.PeerID, rid, rc.Now)
+		// Default to self-loop (Scope-2: no broker, both ends are the caller).
+		consumer, seeder := rc.PeerID, rc.PeerID
+		if lookup != nil {
+			c, s, found := lookup.LookupAssignment(rid)
+			if !found {
+				return nil, ErrInvalid("turn_relay_open: unknown reservation_token")
+			}
+			// Only the consumer or the assigned seeder may open the relay.
+			if rc.PeerID != c && rc.PeerID != s {
+				return nil, ErrUnauthenticated("turn_relay_open: caller not party to reservation")
+			}
+			consumer, seeder = c, s
+		}
+
+		sess, err := alloc.Allocate(consumer, seeder, rid, rc.Now)
 		switch {
 		case errors.Is(err, stunturn.ErrThrottled):
 			return nil, ErrNoCapacity("turn_relay_open: seeder bandwidth budget exceeded")
@@ -53,11 +84,8 @@ func (r *Router) installTurnRelayOpen() handlerFunc {
 			return nil, fmt.Errorf("turn_relay_open: %w", err)
 		}
 
-		// relay_endpoint is a placeholder in v1: the real address comes
-		// from the server's TURN listener; threading it through Deps is
-		// deferred until broker drives the offer. See spec §4.4 / TODO.
 		out := &tbproto.TurnRelayOpenResponse{
-			RelayEndpoint: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0).String(),
+			RelayEndpoint: relayAddr,
 			Token:         sess.Token[:],
 		}
 		b, _ := proto.Marshal(out)

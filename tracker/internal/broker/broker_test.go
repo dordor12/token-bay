@@ -236,6 +236,26 @@ func TestSubmit_AdmitFirstCandidate(t *testing.T) {
 	require.NotNil(t, res.Admit)
 	require.Equal(t, ids.IdentityID{1}, res.Admit.AssignedSeeder)
 	require.Equal(t, 16, len(res.Admit.ReservationToken))
+
+	var rid [16]byte
+	copy(rid[:], res.Admit.ReservationToken)
+	consumer, seeder, ok := b.LookupAssignment(rid)
+	require.True(t, ok)
+	require.Equal(t, ids.IdentityID{1}, seeder)
+	require.NotEqual(t, ids.IdentityID{}, consumer)
+}
+
+func TestLookupAssignment_UnknownRequest(t *testing.T) {
+	deps := testDeps(t)
+	deps.Registry = newFakeRegistry()
+	withFakePusher(t, &deps)
+
+	b, err := OpenBroker(defaultBrokerCfg(), testSettlementCfg(), deps, nil)
+	require.NoError(t, err)
+	defer b.Close()
+
+	_, _, ok := b.LookupAssignment([16]byte{0xFE})
+	require.False(t, ok)
 }
 
 func TestSubmit_InsufficientCredits(t *testing.T) {

@@ -41,12 +41,13 @@ type StunTurnService interface {
 	turnAllocator
 }
 
-// BrokerService is the slice of broker used by the broker_request handler.
-// *broker.Broker satisfies it structurally.
+// BrokerService is the slice of broker used by the broker_request and
+// turn_relay_open handlers. *broker.Broker satisfies it structurally.
 type BrokerService interface {
 	Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*broker.Result, error)
 	RegisterQueued(env *tbproto.EnvelopeSigned, requestID [16]byte, deliver func(*broker.Result))
 	CancelQueued(requestID [16]byte)
+	turnAssignmentLookup
 }
 
 // SettlementService is the union of every settlement method any handler needs.
@@ -104,6 +105,12 @@ type Deps struct {
 	TrackerPub       ed25519.PublicKey
 	BootstrapPeers   BootstrapPeersService
 	BootstrapMetrics BootstrapPeersMetrics // optional; nil → no observability
+
+	// RelayPublicAddr is the host:port the turn_relay_open handler returns
+	// to consumers as the TURN relay endpoint. Empty disables the field
+	// (handler falls back to a non-routable placeholder; component tests
+	// rely on this).
+	RelayPublicAddr string
 }
 
 // RequestCtx carries per-call info every handler may need.

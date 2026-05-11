@@ -53,6 +53,10 @@ func (f *fakeBrokerService) RegisterQueued(_ *tbproto.EnvelopeSigned, _ [16]byte
 
 func (f *fakeBrokerService) CancelQueued(_ [16]byte) { f.queuedCancels++ }
 
+func (f *fakeBrokerService) LookupAssignment(_ [16]byte) (ids.IdentityID, ids.IdentityID, bool) {
+	return ids.IdentityID{}, ids.IdentityID{}, false
+}
+
 // fakeAdmissionForBroker satisfies api.AdmissionService (enrollAdmission +
 // brokerAdmission). The Admit method is a passthrough no-op.
 type fakeAdmissionForBroker struct {
