@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -26,10 +27,14 @@ func TestWriteDiscoveryFile_AtomicRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, url, got)
 
-	// File mode should be user-only (0600).
-	st, err := os.Stat(discoveryFilename(dir))
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	// File mode should be user-only (0600) on POSIX systems. Windows
+	// doesn't honor POSIX bits — Mode().Perm() returns 0o666 there —
+	// so the assertion only runs where it's meaningful.
+	if runtime.GOOS != "windows" {
+		st, err := os.Stat(discoveryFilename(dir))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+	}
 }
 
 func TestWriteDiscoveryFile_OverwritesExisting(t *testing.T) {
