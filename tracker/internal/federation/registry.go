@@ -20,6 +20,7 @@ const (
 	ReasonHandshakeFailed
 	ReasonInvalidSignature
 	ReasonDisconnected
+	ReasonLowHealth // slice 11: sustained low health score
 )
 
 func (r DepeerReason) String() string {
@@ -34,6 +35,8 @@ func (r DepeerReason) String() string {
 		return "invalid_signature"
 	case ReasonDisconnected:
 		return "disconnected"
+	case ReasonLowHealth:
+		return "low_health"
 	}
 	return "unknown"
 }

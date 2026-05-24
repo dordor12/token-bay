@@ -54,6 +54,12 @@ type Config struct {
 	// KnownPeersMaxAge is the cutoff for gossip-sourced rows
 	// (last_seen < now - MaxAge → deleted by pruner). Default 7d.
 	KnownPeersMaxAge time.Duration
+
+	// LowHealthThreshold + LowHealthSustainedWindow drive slice-11
+	// automatic depeer. 0 in either disables. Default 0.2 + 30m.
+	LowHealthThreshold       float64
+	LowHealthSustainedWindow time.Duration
+	HealthWatchInterval      time.Duration // default 5m
 }
 
 // Deps is the wired-in collaborators (Transport, RootSource, archive,
@@ -129,6 +135,15 @@ func (c Config) withDefaults() Config {
 	}
 	if c.KnownPeersMaxAge == 0 {
 		c.KnownPeersMaxAge = 7 * 24 * time.Hour
+	}
+	if c.LowHealthThreshold == 0 {
+		c.LowHealthThreshold = 0.2
+	}
+	if c.LowHealthSustainedWindow == 0 {
+		c.LowHealthSustainedWindow = 30 * time.Minute
+	}
+	if c.HealthWatchInterval == 0 {
+		c.HealthWatchInterval = 5 * time.Minute
 	}
 	return c
 }

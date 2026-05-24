@@ -214,6 +214,9 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		go f.runKnownPeersPruner(ctx)
 	}
 
+	// Slice 11: automatic depeer on sustained low health.
+	go f.runHealthWatcher(ctx)
+
 	// Dial each operator-allowlisted peer in a Dialer goroutine. The
 	// Dialer redials with exponential backoff after every drop; its
 	// OnConnected callback runs the federation handshake and blocks on
