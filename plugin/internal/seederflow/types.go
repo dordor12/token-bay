@@ -25,10 +25,29 @@ type TunnelConn interface {
 
 // TunnelAcceptor accepts inbound consumer-dialed QUIC tunnels. Production
 // wraps a *tunnel.Listener; tests provide a fake.
+//
+// Bind installs the (seederPriv, consumerPub) pair the acceptor should use
+// for the next inbound tunnel handshake. The seeder's private key is the
+// freshly-generated per-offer ephemeral; the consumer's pubkey arrives via
+// the OfferPush. Implementations may rebind their underlying tunnel
+// listener with the new TLS pin material so QUIC handshakes from any
+// other consumer fail closed. The Coordinator calls Bind exactly once
+// per accepted offer, before returning the OfferDecision.
 type TunnelAcceptor interface {
 	Accept(ctx context.Context) (TunnelConn, error)
 	LocalAddr() netip.AddrPort
+	Bind(seederPriv ed25519.PrivateKey, consumerPub ed25519.PublicKey) error
 	Close() error
+}
+
+// OfferMetrics is the optional observability hook for offer outcomes.
+// Nil-safe — Coordinator skips metrics if absent.
+type OfferMetrics interface {
+	// IncOfferRejected bumps a counter for offers rejected before the
+	// reservation is registered. reason is a stable low-cardinality slug:
+	//   - "no_ephemeral"  consumer_ephemeral_pub absent or wrong length
+	//   - "bind_failed"   acceptor.Bind returned an error
+	IncOfferRejected(reason string)
 }
 
 // UsageReporter is the slice of trackerclient.Client used by the

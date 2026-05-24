@@ -36,11 +36,12 @@ func handleOffer(ctx context.Context, stream transport.Stream, h OfferHandler, m
 	var envHash [32]byte
 	copy(envHash[:], push.EnvelopeHash)
 	decision, err := h.HandleOffer(ctx, &Offer{
-		ConsumerID:      consumerID,
-		EnvelopeHash:    envHash,
-		Model:           push.Model,
-		MaxInputTokens:  push.MaxInputTokens,
-		MaxOutputTokens: push.MaxOutputTokens,
+		ConsumerID:           consumerID,
+		EnvelopeHash:         envHash,
+		Model:                push.Model,
+		MaxInputTokens:       push.MaxInputTokens,
+		MaxOutputTokens:      push.MaxOutputTokens,
+		ConsumerEphemeralPub: push.ConsumerEphemeralPub,
 	})
 	pb := &tbproto.OfferDecision{Accept: decision.Accept}
 	if decision.Accept {

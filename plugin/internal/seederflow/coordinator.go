@@ -33,6 +33,10 @@ type Config struct {
 	MaxContext     uint32
 	Tiers          uint32
 
+	// Metrics is the optional observability hook for offer outcomes.
+	// Nil-safe.
+	Metrics OfferMetrics
+
 	// Clock returns the current time. Defaults to time.Now.
 	Clock func() time.Time
 	// Rand is the source of randomness for ephemeral keys. Defaults
@@ -72,14 +76,15 @@ type Coordinator struct {
 // reservation holds the per-offer state created on accept and consumed
 // when the consumer's tunnel dial arrives.
 type reservation struct {
-	envelopeHash    [32]byte
-	consumerIDHash  [32]byte
-	model           string
-	maxInputTokens  uint32
-	maxOutputTokens uint32
-	ephemeralPub    ed25519.PublicKey
-	ephemeralPriv   ed25519.PrivateKey
-	registeredAt    time.Time
+	envelopeHash         [32]byte
+	consumerIDHash       [32]byte
+	model                string
+	maxInputTokens       uint32
+	maxOutputTokens      uint32
+	ephemeralPub         ed25519.PublicKey
+	ephemeralPriv        ed25519.PrivateKey
+	consumerEphemeralPub ed25519.PublicKey
+	registeredAt         time.Time
 }
 
 // New validates cfg and constructs (but does not start) a Coordinator.

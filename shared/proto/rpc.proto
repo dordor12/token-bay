@@ -209,11 +209,19 @@ message HeartbeatPong {
 }
 
 message OfferPush {
-  bytes  consumer_id    = 1;  // 32
-  bytes  envelope_hash  = 2;  // 32
-  string model          = 3;
-  uint32 max_input_tokens  = 4;
-  uint32 max_output_tokens = 5;
+  bytes  consumer_id           = 1;  // 32
+  bytes  envelope_hash         = 2;  // 32
+  string model                 = 3;
+  uint32 max_input_tokens      = 4;
+  uint32 max_output_tokens     = 5;
+  // consumer_ephemeral_pub is the consumer's per-session Ed25519 pubkey
+  // for the tunnel TLS handshake. Length 0 (legacy/unset) or 32. The
+  // seeder uses this as PeerPin on the inbound tunnel listener so the
+  // QUIC + TLS pinning rejects any consumer that didn't generate this
+  // ephemeral key. Validator treats length-0 as "not carried" for
+  // backward compatibility with pre-binding tracker builds; the plugin
+  // seederflow Coordinator rejects offers without it.
+  bytes  consumer_ephemeral_pub = 6;
 }
 
 message OfferDecision {

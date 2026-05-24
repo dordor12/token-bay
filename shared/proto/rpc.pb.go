@@ -1936,8 +1936,16 @@ type OfferPush struct {
 	Model           string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
 	MaxInputTokens  uint32                 `protobuf:"varint,4,opt,name=max_input_tokens,json=maxInputTokens,proto3" json:"max_input_tokens,omitempty"`
 	MaxOutputTokens uint32                 `protobuf:"varint,5,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// consumer_ephemeral_pub is the consumer's per-session Ed25519 pubkey
+	// for the tunnel TLS handshake. Length 0 (legacy/unset) or 32. The
+	// seeder uses this as PeerPin on the inbound tunnel listener so the
+	// QUIC + TLS pinning rejects any consumer that didn't generate this
+	// ephemeral key. Validator treats length-0 as "not carried" for
+	// backward compatibility with pre-binding tracker builds; the plugin
+	// seederflow Coordinator rejects offers without it.
+	ConsumerEphemeralPub []byte `protobuf:"bytes,6,opt,name=consumer_ephemeral_pub,json=consumerEphemeralPub,proto3" json:"consumer_ephemeral_pub,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *OfferPush) Reset() {
@@ -2003,6 +2011,13 @@ func (x *OfferPush) GetMaxOutputTokens() uint32 {
 		return x.MaxOutputTokens
 	}
 	return 0
+}
+
+func (x *OfferPush) GetConsumerEphemeralPub() []byte {
+	if x != nil {
+		return x.ConsumerEphemeralPub
+	}
+	return nil
 }
 
 type OfferDecision struct {
@@ -2238,14 +2253,15 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\f\n" +
 	"\x01t\x18\x02 \x01(\x04R\x01t\"!\n" +
 	"\rHeartbeatPong\x12\x10\n" +
-	"\x03seq\x18\x01 \x01(\x04R\x03seq\"\xbd\x01\n" +
+	"\x03seq\x18\x01 \x01(\x04R\x03seq\"\xf3\x01\n" +
 	"\tOfferPush\x12\x1f\n" +
 	"\vconsumer_id\x18\x01 \x01(\fR\n" +
 	"consumerId\x12#\n" +
 	"\renvelope_hash\x18\x02 \x01(\fR\fenvelopeHash\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12(\n" +
 	"\x10max_input_tokens\x18\x04 \x01(\rR\x0emaxInputTokens\x12*\n" +
-	"\x11max_output_tokens\x18\x05 \x01(\rR\x0fmaxOutputTokens\"w\n" +
+	"\x11max_output_tokens\x18\x05 \x01(\rR\x0fmaxOutputTokens\x124\n" +
+	"\x16consumer_ephemeral_pub\x18\x06 \x01(\fR\x14consumerEphemeralPub\"w\n" +
 	"\rOfferDecision\x12\x16\n" +
 	"\x06accept\x18\x01 \x01(\bR\x06accept\x12)\n" +
 	"\x10ephemeral_pubkey\x18\x02 \x01(\fR\x0fephemeralPubkey\x12#\n" +
@@ -2346,7 +2362,6 @@ var (
 		(*SettlementPush)(nil),        // 35: tokenbay.proto.v1.SettlementPush
 	}
 )
-
 var file_proto_rpc_proto_depIdxs = []int32{
 	0,  // 0: tokenbay.proto.v1.RpcRequest.method:type_name -> tokenbay.proto.v1.RpcMethod
 	1,  // 1: tokenbay.proto.v1.RpcResponse.status:type_name -> tokenbay.proto.v1.RpcStatus

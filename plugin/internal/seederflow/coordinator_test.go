@@ -194,11 +194,41 @@ type stubRunner struct{}
 
 func (stubRunner) Run(context.Context, ccbridge.Request, io.Writer) error { return nil }
 
+type stubOfferMetrics struct {
+	mu       sync.Mutex
+	rejected map[string]int
+}
+
+func (s *stubOfferMetrics) IncOfferRejected(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rejected == nil {
+		s.rejected = map[string]int{}
+	}
+	s.rejected[reason]++
+}
+
+func (s *stubOfferMetrics) Get(reason string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rejected[reason]
+}
+
+var errBindFailed = errors.New("test: bind failed")
+
 type stubAcceptor struct {
+	mu       sync.Mutex
 	addr     netip.AddrPort
 	conns    chan seederflow.TunnelConn
 	closed   bool
 	closeErr error
+	bindings []stubBinding
+	bindErr  error
+}
+
+type stubBinding struct {
+	SeederPriv  ed25519.PrivateKey
+	ConsumerPub ed25519.PublicKey
 }
 
 func newStubAcceptor() *stubAcceptor {
@@ -221,7 +251,31 @@ func (s *stubAcceptor) Accept(ctx context.Context) (seederflow.TunnelConn, error
 }
 
 func (s *stubAcceptor) LocalAddr() netip.AddrPort { return s.addr }
+
+func (s *stubAcceptor) Bind(seederPriv ed25519.PrivateKey, consumerPub ed25519.PublicKey) error {
+	if s.bindErr != nil {
+		return s.bindErr
+	}
+	s.mu.Lock()
+	s.bindings = append(s.bindings, stubBinding{
+		SeederPriv:  append(ed25519.PrivateKey(nil), seederPriv...),
+		ConsumerPub: append(ed25519.PublicKey(nil), consumerPub...),
+	})
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *stubAcceptor) Bindings() []stubBinding {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]stubBinding, len(s.bindings))
+	copy(out, s.bindings)
+	return out
+}
+
 func (s *stubAcceptor) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.closed {
 		s.closed = true
 		close(s.conns)

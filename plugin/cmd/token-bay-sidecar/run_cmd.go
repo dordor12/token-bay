@@ -240,9 +240,10 @@ func resolveAutoTrackerEndpoints(cfgDir string, now time.Time) ([]trackerclient.
 }
 
 // buildSeederFlow constructs the seederflow.Coordinator from cfg with
-// every dependency wired. The Acceptor is the v1 NopAcceptor — see
-// seederflow/doc.go for the wire-format gap that prevents binding a
-// real tunnel.Listener at this layer.
+// every dependency wired. The Acceptor is a seederflow.RebindingAcceptor
+// backed by a tunnel.Listen factory: every accepted offer rebinds a
+// fresh UDP-bound TLS-pinned listener for the (seederEphemeralPriv,
+// consumerEphemeralPub) pair carried in the OfferPush.
 func buildSeederFlow(
 	cfg *config.Config,
 	al *auditlog.Logger,
@@ -254,13 +255,17 @@ func buildSeederFlow(
 	if err != nil {
 		return nil, err
 	}
+	acceptor, err := seederflow.NewRebindingAcceptor(newSeederTunnelListenerFactory())
+	if err != nil {
+		return nil, fmt.Errorf("build rebinding acceptor: %w", err)
+	}
 	models := []string{"claude-sonnet-4-6", "claude-opus-4-7"}
 	scfg := seederflow.Config{
 		Logger:         logger,
 		Bridge:         ccbridge.NewBridge(runner),
 		AuditLog:       al,
 		Signer:         signer,
-		Acceptor:       seederflow.NopAcceptor{},
+		Acceptor:       acceptor,
 		Runner:         runner,
 		ConformanceFn:  ccbridge.RunStartupConformance,
 		IdlePolicy:     idle,
