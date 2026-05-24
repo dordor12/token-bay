@@ -60,8 +60,11 @@ func mapSettlementError(err error) error {
 		return ErrInvalid("COST_OVERSPEND")
 	case errors.Is(err, broker.ErrSeederSigInvalid):
 		return ErrInvalid("SEEDER_SIG_INVALID")
-	case errors.Is(err, session.ErrIllegalTransition):
+	case errors.Is(err, broker.ErrInvalidState),
+		errors.Is(err, session.ErrIllegalTransition):
 		return ErrInvalid("INVALID_STATE")
+	case errors.Is(err, broker.ErrConsumerSig):
+		return ErrInvalid("CONSUMER_SIG_INVALID")
 	case errors.Is(err, broker.ErrUnknownPreimage):
 		return ErrNotFound("unknown preimage_hash")
 	case errors.Is(err, broker.ErrDuplicateSettle):

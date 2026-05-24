@@ -27,6 +27,7 @@ func TestNewBrokerMetrics_FieldsPopulated(t *testing.T) {
 	require.NotNil(t, m.SettlementDecisions)
 	require.NotNil(t, m.SettlementDuration)
 	require.NotNil(t, m.ConsumerSigMissing)
+	require.NotNil(t, m.ConsumerPubkeyUnknown)
 	require.NotNil(t, m.LedgerAppendFailure)
 	require.NotNil(t, m.StaleTipRetries)
 
@@ -59,6 +60,7 @@ func TestNewBrokerMetrics_RegistersWithRegistry(t *testing.T) {
 		"broker_settlement_decisions_total":          false,
 		"broker_settlement_duration_seconds":         false,
 		"broker_consumer_sig_missing_total":          false,
+		"broker_consumer_pubkey_unknown_total":       false,
 		"broker_ledger_append_failure_total":         false,
 		"broker_stale_tip_retries_total":             false,
 		"broker_queue_drain_pops_total":              false,
