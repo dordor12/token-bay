@@ -61,6 +61,34 @@ func CanonicalTransferAppliedPreSig(m *TransferApplied) ([]byte, error) {
 	return signing.DeterministicMarshal(clone)
 }
 
+// CanonicalTransferRejectPreSig returns the deterministic byte
+// representation of m with source_tracker_sig cleared. Slice 13.
+func CanonicalTransferRejectPreSig(m *TransferReject) ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("federation: nil TransferReject")
+	}
+	clone, ok := proto.Clone(m).(*TransferReject)
+	if !ok {
+		return nil, errors.New("federation: clone TransferReject")
+	}
+	clone.SourceTrackerSig = nil
+	return signing.DeterministicMarshal(clone)
+}
+
+// CanonicalTransferReversalPreSig returns the deterministic byte
+// representation of m with dest_tracker_sig cleared. Slice 14.
+func CanonicalTransferReversalPreSig(m *TransferReversal) ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("federation: nil TransferReversal")
+	}
+	clone, ok := proto.Clone(m).(*TransferReversal)
+	if !ok {
+		return nil, errors.New("federation: clone TransferReversal")
+	}
+	clone.DestTrackerSig = nil
+	return signing.DeterministicMarshal(clone)
+}
+
 // SignTransferProofRequest returns the consumer's Ed25519 signature over
 // CanonicalTransferProofRequestPreSig(m). It mirrors signing.SignEnvelope
 // semantics: nil message and wrong-length priv key both return errors;

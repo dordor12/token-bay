@@ -70,12 +70,27 @@ type Config struct {
 	// Metrics is an optional observability hook. Currently used only by
 	// FetchBootstrapPeers; future RPCs may attach their own counters.
 	Metrics BootstrapMetrics
+
+	// RerouteEnabled turns on slice-6 candidate-set extension: on each
+	// successful connect, the supervisor fetches the signed bootstrap
+	// peer list and merges it (ranked by health_score) into the
+	// endpoint-rotation set. Default false — opt-in for v1.
+	RerouteEnabled bool
 }
 
 // BootstrapMetrics is the optional observability hook for bootstrap-list
 // fetches. Nil-safe — Client skips metrics if absent.
 type BootstrapMetrics interface {
 	IncBootstrapPeersFetched(outcome string) // outcome ∈ {ok, sig_invalid, expired, invalid, empty, issuer_mismatch, rpc_error}
+}
+
+// RerouteMetrics is the optional observability hook for slice-6
+// reroute / candidate-set behavior. Embeds BootstrapMetrics so a single
+// concrete impl can satisfy both. Nil-safe.
+type RerouteMetrics interface {
+	BootstrapMetrics
+	IncRerouteCandidatesUpdated()
+	IncRerouteEndpointPicked(source string) // source ∈ {base, candidate}
 }
 
 // withDefaults returns a copy of cfg with zero-valued fields filled in.

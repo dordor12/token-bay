@@ -24,6 +24,24 @@ type HandshakeResult struct {
 	PeerPubKey    ed25519.PublicKey
 	DedupeTTL     time.Duration
 	GossipRateQPS uint32
+
+	// PeerFeatures is the slice-15 feature-flag set advertised by the
+	// peer in its Hello. Federation stores it on the Peer for future
+	// capability gating.
+	PeerFeatures []string
+}
+
+// SupportedFeatures lists the slice-15 feature flags this build
+// supports. Both sides advertise; the negotiated set is the
+// intersection. Adding a flag here is backwards-compatible —
+// pre-flag peers parse the Hello fine and just lack the feature.
+//
+// Conventionally lowercase, snake_case, slice-prefixed for traceability.
+var SupportedFeatures = []string{
+	"transfer_reject",       // slice 13
+	"peer_health_v1",        // slice 5
+	"signed_bootstrap_list", // slice 4
+	"peer_exchange_v1",      // slice 3
 }
 
 func sendHello(ctx context.Context, conn PeerConn, priv ed25519.PrivateKey, myID ids.TrackerID) ([]byte, error) {
@@ -32,7 +50,12 @@ func sendHello(ctx context.Context, conn PeerConn, priv ed25519.PrivateKey, myID
 		return nil, fmt.Errorf("%w: nonce: %v", ErrHandshakeFailed, err)
 	}
 	idBytes := myID.Bytes()
-	hello := &fed.Hello{TrackerId: idBytes[:], ProtocolVersion: protocolVersion, Nonce: nonce}
+	hello := &fed.Hello{
+		TrackerId:       idBytes[:],
+		ProtocolVersion: protocolVersion,
+		Nonce:           nonce,
+		Features:        append([]string(nil), SupportedFeatures...),
+	}
 	if err := fed.ValidateHello(hello); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
@@ -95,31 +118,54 @@ func sendPeerAuth(ctx context.Context, conn PeerConn, priv ed25519.PrivateKey, m
 
 // validatePeerHello unmarshals + validates a peer's Hello envelope, looks
 // up the expected pubkey in the allowlist, verifies envelope sig, and
-// returns the peer's TrackerID + pubkey + nonce.
-func validatePeerHello(env *fed.Envelope, expected map[ids.TrackerID]ed25519.PublicKey) (ids.TrackerID, ed25519.PublicKey, []byte, error) {
+// returns the peer's TrackerID + pubkey + nonce + advertised features.
+func validatePeerHello(env *fed.Envelope, expected map[ids.TrackerID]ed25519.PublicKey) (ids.TrackerID, ed25519.PublicKey, []byte, []string, error) {
 	var hello fed.Hello
 	if err := proto.Unmarshal(env.Payload, &hello); err != nil {
-		return ids.TrackerID{}, nil, nil, fmt.Errorf("%w: hello unmarshal: %v", ErrHandshakeFailed, err)
+		return ids.TrackerID{}, nil, nil, nil, fmt.Errorf("%w: hello unmarshal: %v", ErrHandshakeFailed, err)
 	}
 	if err := fed.ValidateHello(&hello); err != nil {
-		return ids.TrackerID{}, nil, nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
+		return ids.TrackerID{}, nil, nil, nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
 	if hello.ProtocolVersion != protocolVersion {
-		return ids.TrackerID{}, nil, nil, fmt.Errorf("%w: protocol_version %d != %d", ErrHandshakeFailed, hello.ProtocolVersion, protocolVersion)
+		return ids.TrackerID{}, nil, nil, nil, fmt.Errorf("%w: protocol_version %d != %d", ErrHandshakeFailed, hello.ProtocolVersion, protocolVersion)
 	}
 	var tid ids.TrackerID
 	copy(tid[:], hello.TrackerId)
 	pub, ok := expected[tid]
 	if !ok {
-		return ids.TrackerID{}, nil, nil, fmt.Errorf("%w: tracker %x not in allowlist", ErrHandshakeFailed, hello.TrackerId)
+		return ids.TrackerID{}, nil, nil, nil, fmt.Errorf("%w: tracker %x not in allowlist", ErrHandshakeFailed, hello.TrackerId)
 	}
 	if !signing.Verify(pub, env.Payload, env.SenderSig) {
-		return ids.TrackerID{}, nil, nil, fmt.Errorf("%w: hello envelope sig", ErrHandshakeFailed)
+		return ids.TrackerID{}, nil, nil, nil, fmt.Errorf("%w: hello envelope sig", ErrHandshakeFailed)
 	}
 	if want := sha256.Sum256(pub); want != tid {
-		return ids.TrackerID{}, nil, nil, fmt.Errorf("%w: hello tracker_id != hash(pubkey)", ErrHandshakeFailed)
+		return ids.TrackerID{}, nil, nil, nil, fmt.Errorf("%w: hello tracker_id != hash(pubkey)", ErrHandshakeFailed)
 	}
-	return tid, pub, hello.Nonce, nil
+	return tid, pub, hello.Nonce, append([]string(nil), hello.Features...), nil
+}
+
+// NegotiateFeatures returns the intersection of `mine` and `theirs`
+// (the slice-15 capability set). Order matches `mine`. Duplicates in
+// either input are deduped.
+func NegotiateFeatures(mine, theirs []string) []string {
+	set := make(map[string]struct{}, len(theirs))
+	for _, t := range theirs {
+		set[t] = struct{}{}
+	}
+	out := make([]string, 0, len(mine))
+	seen := make(map[string]struct{}, len(mine))
+	for _, m := range mine {
+		if _, ok := set[m]; !ok {
+			continue
+		}
+		if _, dup := seen[m]; dup {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	return out
 }
 
 func validatePeerAuth(env *fed.Envelope, pub ed25519.PublicKey, myNonce []byte) error {
@@ -175,7 +221,7 @@ func RunHandshakeDialer(ctx context.Context, conn PeerConn, myID ids.TrackerID, 
 	if err != nil {
 		return HandshakeResult{}, err
 	}
-	gotID, gotPub, theirNonce, err := validatePeerHello(helloEnv, map[ids.TrackerID]ed25519.PublicKey{peerID: peerPub})
+	gotID, gotPub, theirNonce, peerFeatures, err := validatePeerHello(helloEnv, map[ids.TrackerID]ed25519.PublicKey{peerID: peerPub})
 	if err != nil {
 		return HandshakeResult{}, err
 	}
@@ -205,6 +251,7 @@ func RunHandshakeDialer(ctx context.Context, conn PeerConn, myID ids.TrackerID, 
 		PeerPubKey:    gotPub,
 		DedupeTTL:     time.Duration(acc.DedupeTtlS) * time.Second,
 		GossipRateQPS: acc.GossipRateQps,
+		PeerFeatures:  NegotiateFeatures(SupportedFeatures, peerFeatures),
 	}, nil
 }
 
@@ -218,7 +265,7 @@ func RunHandshakeListener(ctx context.Context, conn PeerConn, myID ids.TrackerID
 	if err != nil {
 		return HandshakeResult{}, err
 	}
-	gotID, gotPub, theirNonce, err := validatePeerHello(helloEnv, expected)
+	gotID, gotPub, theirNonce, peerFeatures, err := validatePeerHello(helloEnv, expected)
 	if err != nil {
 		return HandshakeResult{}, err
 	}
@@ -239,7 +286,13 @@ func RunHandshakeListener(ctx context.Context, conn PeerConn, myID ids.TrackerID
 	if err := sendAccept(ctx, conn, priv, myID, time.Hour, 100); err != nil {
 		return HandshakeResult{}, err
 	}
-	return HandshakeResult{PeerTrackerID: gotID, PeerPubKey: gotPub, DedupeTTL: time.Hour, GossipRateQPS: 100}, nil
+	return HandshakeResult{
+		PeerTrackerID: gotID,
+		PeerPubKey:    gotPub,
+		DedupeTTL:     time.Hour,
+		GossipRateQPS: 100,
+		PeerFeatures:  NegotiateFeatures(SupportedFeatures, peerFeatures),
+	}, nil
 }
 
 var _ = errors.New // keep import

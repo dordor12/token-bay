@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -168,8 +169,18 @@ func newRunCmd() *cobra.Command {
 					UptimeWindow:        time.Duration(cfg.Federation.Health.UptimeWindowS) * time.Second,
 					RevGossipWindow:     time.Duration(cfg.Federation.Health.RevGossipWindowS) * time.Second,
 					RevGossipBufferSize: cfg.Federation.Health.RevGossipBufferSize,
+					LatencyTarget:       time.Duration(cfg.Federation.Health.LatencyTargetMs) * time.Millisecond,
 					UptimeWeight:        cfg.Federation.Health.UptimeWeight,
 					RevGossipWeight:     cfg.Federation.Health.RevGossipWeight,
+					LatencyWeight:       cfg.Federation.Health.LatencyWeight,
+				},
+				PeerExchangeCadence: time.Duration(cfg.Federation.PeerExchangeCadenceS) * time.Second,
+				RateLimit: federation.RateLimitConfig{
+					RootAttestation:      federation.RateBucket{Rate: cfg.Federation.RateLimit.RootAttestationPerSec, Burst: rlBurst(cfg.Federation.RateLimit.RootAttestationPerSec)},
+					Revocation:           federation.RateBucket{Rate: cfg.Federation.RateLimit.RevocationPerSec, Burst: rlBurst(cfg.Federation.RateLimit.RevocationPerSec)},
+					PeerExchange:         federation.RateBucket{Rate: cfg.Federation.RateLimit.PeerExchangePerSec, Burst: rlBurst(cfg.Federation.RateLimit.PeerExchangePerSec)},
+					EquivocationEvidence: federation.RateBucket{Rate: cfg.Federation.RateLimit.EquivocationEvidencePerSec, Burst: rlBurst(cfg.Federation.RateLimit.EquivocationEvidencePerSec)},
+					Transfer:             federation.RateBucket{Rate: cfg.Federation.RateLimit.TransferPerSec, Burst: rlBurst(cfg.Federation.RateLimit.TransferPerSec)},
 				},
 			}, federation.Deps{
 				Transport:         fedTransport,
@@ -388,6 +399,23 @@ type pushProxy struct {
 	srv atomic.Pointer[server.Server]
 }
 
+// rlBurst derives a sensible token-bucket burst from a configured
+// per-second rate. Bursts cap at 50 to keep per-(peer,kind) memory
+// bounded. Zero rate yields zero burst (disabled bucket).
+func rlBurst(rate float64) int {
+	if rate <= 0 {
+		return 0
+	}
+	b := int(rate * 5)
+	if b < 1 {
+		b = 1
+	}
+	if b > 50 {
+		b = 50
+	}
+	return b
+}
+
 func (p *pushProxy) setSrv(s *server.Server) {
 	p.srv.Store(s)
 }
@@ -412,6 +440,35 @@ func (p *pushProxy) PushSettlementTo(id ids.IdentityID, push *tbproto.Settlement
 // subsystems. The bearer token comes from TOKEN_BAY_ADMIN_TOKEN; an unset
 // or empty value rejects every admin request, which is intentional —
 // operators must opt in to remote admin access.
+// federationAdminActions adapts *federation.Federation into the
+// admin.FederationActions interface (slice 17).
+type federationAdminActions struct{ fed *federation.Federation }
+
+func (f federationAdminActions) ClearEquivocation(trackerIDHex string) (bool, error) {
+	tid, err := hexToTrackerID(trackerIDHex)
+	if err != nil {
+		return false, err
+	}
+	return f.fed.ClearEquivocation(tid), nil
+}
+
+func (f federationAdminActions) IssueTransferReversal(sourceTrackerIDHex, nonceHex, evidence string) ([]byte, error) {
+	tid, err := hexToTrackerID(sourceTrackerIDHex)
+	if err != nil {
+		return nil, fmt.Errorf("source_tracker_id: %w", err)
+	}
+	nonceB, err := hex.DecodeString(nonceHex)
+	if err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
+	if len(nonceB) != 32 {
+		return nil, fmt.Errorf("nonce: must be 32 bytes (64 hex chars), got %d", len(nonceB))
+	}
+	var nonce [32]byte
+	copy(nonce[:], nonceB)
+	return f.fed.IssueTransferReversal(context.Background(), tid, nonce, evidence)
+}
+
 func buildAdminServer(
 	cfg *config.Config,
 	logger zerolog.Logger,
@@ -452,5 +509,6 @@ func buildAdminServer(
 		BrokerMux:          brokerSubs.AdminHandler(),
 		AdmissionMount:     admissionMount,
 		TriggerMaintenance: stop,
+		FederationActions:  federationAdminActions{fed: fed},
 	})
 }

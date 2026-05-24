@@ -258,6 +258,78 @@ func ValidateTransferApplied(m *TransferApplied) error {
 	return nil
 }
 
+// MaxTransferRejectReasonLen is the wire cap on TransferReject.reason
+// to bound exposure to peer-supplied strings in logs and dashboards.
+const MaxTransferRejectReasonLen = 64
+
+// MaxTransferReversalEvidenceLen bounds operator-supplied evidence.
+const MaxTransferReversalEvidenceLen = 512
+
+func ValidateTransferReversal(m *TransferReversal) error {
+	if m == nil {
+		return errors.New("federation: nil TransferReversal")
+	}
+	if len(m.SourceTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_reversal.source_tracker_id len %d != %d", len(m.SourceTrackerId), TrackerIDLen)
+	}
+	if len(m.DestTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_reversal.dest_tracker_id len %d != %d", len(m.DestTrackerId), TrackerIDLen)
+	}
+	if len(m.Nonce) != NonceLen {
+		return fmt.Errorf("federation: transfer_reversal.nonce len %d != %d", len(m.Nonce), NonceLen)
+	}
+	if bytes.Equal(m.SourceTrackerId, m.DestTrackerId) {
+		return errors.New("federation: transfer_reversal.source_tracker_id == dest_tracker_id")
+	}
+	if len(m.Evidence) > MaxTransferReversalEvidenceLen {
+		return fmt.Errorf("federation: transfer_reversal.evidence len %d exceeds %d", len(m.Evidence), MaxTransferReversalEvidenceLen)
+	}
+	if !utf8.ValidString(m.Evidence) {
+		return errors.New("federation: transfer_reversal.evidence not valid UTF-8")
+	}
+	if m.Timestamp == 0 {
+		return errors.New("federation: transfer_reversal.timestamp must be > 0")
+	}
+	if len(m.DestTrackerSig) != SigLen {
+		return fmt.Errorf("federation: transfer_reversal.dest_tracker_sig len %d != %d", len(m.DestTrackerSig), SigLen)
+	}
+	return nil
+}
+
+func ValidateTransferReject(m *TransferReject) error {
+	if m == nil {
+		return errors.New("federation: nil TransferReject")
+	}
+	if len(m.SourceTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_reject.source_tracker_id len %d != %d", len(m.SourceTrackerId), TrackerIDLen)
+	}
+	if len(m.DestTrackerId) != TrackerIDLen {
+		return fmt.Errorf("federation: transfer_reject.dest_tracker_id len %d != %d", len(m.DestTrackerId), TrackerIDLen)
+	}
+	if len(m.Nonce) != NonceLen {
+		return fmt.Errorf("federation: transfer_reject.nonce len %d != %d", len(m.Nonce), NonceLen)
+	}
+	if bytes.Equal(m.SourceTrackerId, m.DestTrackerId) {
+		return errors.New("federation: transfer_reject.source_tracker_id == dest_tracker_id")
+	}
+	if len(m.Reason) == 0 {
+		return errors.New("federation: transfer_reject.reason empty")
+	}
+	if len(m.Reason) > MaxTransferRejectReasonLen {
+		return fmt.Errorf("federation: transfer_reject.reason len %d exceeds %d", len(m.Reason), MaxTransferRejectReasonLen)
+	}
+	if !utf8.ValidString(m.Reason) {
+		return errors.New("federation: transfer_reject.reason not valid UTF-8")
+	}
+	if m.Timestamp == 0 {
+		return errors.New("federation: transfer_reject.timestamp must be > 0")
+	}
+	if len(m.SourceTrackerSig) != SigLen {
+		return fmt.Errorf("federation: transfer_reject.source_tracker_sig len %d != %d", len(m.SourceTrackerSig), SigLen)
+	}
+	return nil
+}
+
 // MaxPeerExchangeEntries caps the number of KnownPeer entries inside a
 // single PeerExchange message at the validator boundary. The emitter
 // caps itself lower (defaultPeerExchangeEmitCap = 256 in

@@ -143,6 +143,37 @@ func TestPeerHealth_RevGossipSubScore_NegativeDelayClampedToZero(t *testing.T) {
 	require.InDelta(t, 1.0, h.Score(p, now), 0.0001)
 }
 
+func TestPeerHealth_LatencySubScore(t *testing.T) {
+	now := time.Unix(10000, 0)
+	h := NewPeerHealth(HealthConfig{
+		UptimeWindow: 2 * time.Hour, RevGossipWindow: 600 * time.Second,
+		RevGossipBufferSize: 16,
+		LatencyTarget:       200 * time.Millisecond,
+		UptimeWeight:        0.0, RevGossipWeight: 0.0, LatencyWeight: 1.0,
+	}, func() time.Time { return now }, nil)
+
+	var p ids.TrackerID
+	p[0] = 0x11
+
+	// No sample → neutral 1.0.
+	require.InDelta(t, 1.0, h.Score(p, now), 0.0001)
+
+	// First sample at 0ms → score 1.0.
+	h.OnLatencySample(p, 0)
+	require.InDelta(t, 1.0, h.Score(p, now), 0.0001)
+
+	// Second sample at 200ms (= target). EWMA(α=0.3) over (0, 200) →
+	// 0 * 0.7 + 200 * 0.3 = 60ms. score = 1 - 60/200 = 0.7.
+	h.OnLatencySample(p, 200*time.Millisecond)
+	require.InDelta(t, 0.7, h.Score(p, now), 0.001)
+
+	// Negative input clamped to 0; converges back toward 0 → score → 1.0.
+	for i := 0; i < 20; i++ {
+		h.OnLatencySample(p, -1)
+	}
+	require.InDelta(t, 1.0, h.Score(p, now), 0.05)
+}
+
 func TestPeerHealth_OnComputedFires(t *testing.T) {
 	now := time.Unix(10000, 0)
 	var outcomes []string

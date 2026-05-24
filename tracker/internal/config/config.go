@@ -96,6 +96,26 @@ type FederationConfig struct {
 	Peers             []FederationPeer          `yaml:"peers"`
 	Bootstrap         FederationBootstrapConfig `yaml:"bootstrap"`
 	Health            FederationHealthConfig    `yaml:"health"`
+
+	// PeerExchangeCadenceS drives the slice-7 periodic peer-exchange
+	// emit ticker. Default 3600 (1h, matching spec §7.1). 0 disables.
+	PeerExchangeCadenceS int `yaml:"peer_exchange_cadence_s"`
+
+	// RateLimit (slice 9) caps inbound gossip per (peer, kind).
+	// Per-bucket rate=0 disables that kind. Defaults derived from
+	// spec §10 acceptance criteria.
+	RateLimit FederationRateLimitConfig `yaml:"rate_limit"`
+}
+
+// FederationRateLimitConfig caps inbound gossip per (peer, kind). Each
+// field is a rate-per-second; the burst is implicitly the configured
+// rate × 5s window (capped at 50 to keep memory bounded).
+type FederationRateLimitConfig struct {
+	RootAttestationPerSec      float64 `yaml:"root_attestation_per_sec"`      // default 1 (≈ once per peer per hour with burst)
+	RevocationPerSec           float64 `yaml:"revocation_per_sec"`            // default 5
+	PeerExchangePerSec         float64 `yaml:"peer_exchange_per_sec"`         // default 0.05 (≈ 1 per 20s)
+	EquivocationEvidencePerSec float64 `yaml:"equivocation_evidence_per_sec"` // default 1
+	TransferPerSec             float64 `yaml:"transfer_per_sec"`              // default 20
 }
 
 // FederationBootstrapConfig governs the plugin-facing signed
@@ -112,8 +132,10 @@ type FederationHealthConfig struct {
 	UptimeWindowS       int     `yaml:"uptime_window_s"`        // > 0; default 7200 (2h)
 	RevGossipWindowS    int     `yaml:"rev_gossip_window_s"`    // > 0; default 600 (10min)
 	RevGossipBufferSize int     `yaml:"rev_gossip_buffer_size"` // [1, 256]; default 16
-	UptimeWeight        float64 `yaml:"uptime_weight"`          // [0,1]; default 0.7
-	RevGossipWeight     float64 `yaml:"rev_gossip_weight"`      // [0,1]; default 0.3
+	LatencyTargetMs     int     `yaml:"latency_target_ms"`      // > 0; default 200 (slice 8)
+	UptimeWeight        float64 `yaml:"uptime_weight"`          // [0,1]; default 0.6
+	RevGossipWeight     float64 `yaml:"rev_gossip_weight"`      // [0,1]; default 0.2
+	LatencyWeight       float64 `yaml:"latency_weight"`         // [0,1]; default 0.2 (slice 8)
 }
 
 // FederationPeer is one operator-configured allowlisted peer tracker.
@@ -275,8 +297,18 @@ func DefaultConfig() *Config {
 				UptimeWindowS:       7200,
 				RevGossipWindowS:    600,
 				RevGossipBufferSize: 16,
-				UptimeWeight:        0.7,
-				RevGossipWeight:     0.3,
+				LatencyTargetMs:     200,
+				UptimeWeight:        0.6,
+				RevGossipWeight:     0.2,
+				LatencyWeight:       0.2,
+			},
+			PeerExchangeCadenceS: 3600,
+			RateLimit: FederationRateLimitConfig{
+				RootAttestationPerSec:      1,
+				RevocationPerSec:           5,
+				PeerExchangePerSec:         0.05,
+				EquivocationEvidencePerSec: 1,
+				TransferPerSec:             20,
 			},
 		},
 		Reputation: ReputationConfig{

@@ -30,12 +30,17 @@ func backoffDelay(attempt int, base, maxDelay time.Duration, r *rand.Rand) time.
 
 // supervisor runs the dial → run → reconnect loop on its own goroutine.
 type supervisor struct {
-	cfg    Config
-	holder *connHolder
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	rng    *rand.Rand
+	cfg        Config
+	holder     *connHolder
+	ctx        context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	rng        *rand.Rand
+	candidates *peerCandidates
+	// fetchCandidates is the function called after each successful
+	// connect when RerouteEnabled is true. Production wiring sets this
+	// to (*Client).fetchAndUpdateCandidates; tests inject a fake.
+	fetchCandidates func(ctx context.Context)
 
 	statusMu sync.Mutex
 	status   ConnectionState
@@ -45,11 +50,12 @@ type supervisor struct {
 func newSupervisor(parent context.Context, cfg Config, holder *connHolder) *supervisor {
 	ctx, cancel := context.WithCancel(parent)
 	return &supervisor{
-		cfg:    cfg,
-		holder: holder,
-		ctx:    ctx,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		cfg:        cfg,
+		holder:     holder,
+		ctx:        ctx,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		candidates: newPeerCandidates(cfg.Clock),
 		//nolint:gosec // jitter randomness is non-cryptographic
 		rng:    rand.New(rand.NewSource(cfg.Clock().UnixNano())),
 		status: ConnectionState{Phase: PhaseDisconnected},
@@ -78,7 +84,10 @@ func (s *supervisor) run() {
 			s.setStatus(PhaseClosed, TrackerEndpoint{}, err, time.Time{})
 			return
 		}
-		ep := s.cfg.Endpoints[epIdx%len(s.cfg.Endpoints)]
+		ep, source := s.candidates.NextEndpoint(epIdx, s.cfg.Endpoints)
+		if rm, ok := s.cfg.Metrics.(RerouteMetrics); ok {
+			rm.IncRerouteEndpointPicked(source)
+		}
 		s.setStatus(PhaseConnecting, ep, nil, time.Time{})
 
 		dialCtx, dialCancel := context.WithTimeout(s.ctx, s.cfg.DialTimeout)
@@ -108,6 +117,13 @@ func (s *supervisor) run() {
 		lastConnect = s.cfg.Clock()
 		s.setStatus(PhaseConnected, ep, nil, time.Time{})
 		s.cfg.Logger.Info().Str("addr", ep.Addr).Msg("trackerclient: connected")
+
+		// Slice 6: if reroute is enabled, kick off a one-shot fetch of
+		// the signed bootstrap-peer list. Failure leaves the prior
+		// candidate set intact.
+		if s.cfg.RerouteEnabled && s.fetchCandidates != nil {
+			go s.fetchCandidates(s.ctx)
+		}
 
 		hbErrCh := make(chan error, 1)
 		hbCtx, hbCancel := context.WithCancel(s.ctx)

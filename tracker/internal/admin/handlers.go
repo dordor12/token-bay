@@ -239,3 +239,66 @@ func (s *Server) handleMaintenance(w http.ResponseWriter, _ *http.Request) {
 	go s.deps.TriggerMaintenance()
 	writeJSON(w, http.StatusAccepted, map[string]any{"draining": true})
 }
+
+// handleClearEquivocation is the slice-17 admin path: clear the sticky
+// peer-health equivocation flag for a given tracker. POST
+// /federation/peers/{id}/clear_equivocation. Idempotent — returns
+// {cleared: bool} where false means the flag was already not set.
+func (s *Server) handleClearEquivocation(w http.ResponseWriter, r *http.Request) {
+	idHex := r.PathValue("id")
+	if idHex == "" {
+		writeError(w, http.StatusBadRequest, "missing tracker id")
+		return
+	}
+	cleared, err := s.deps.FederationActions.ClearEquivocation(idHex)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "clear equivocation: "+err.Error())
+		return
+	}
+	s.deps.Logger.Info().
+		Str("event", "admin_clear_equivocation").
+		Str("tracker_id", idHex).
+		Bool("was_set", cleared).
+		Msg("operator cleared equivocation flag")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cleared":    cleared,
+		"tracker_id": idHex,
+	})
+}
+
+// handleTransferReversal is the slice-14 admin path: issue a signed
+// TransferReversal envelope from this tracker (as destination) to the
+// source. POST /federation/transfer_reversal with JSON body
+// {"source_tracker_id": "<hex>", "nonce": "<hex>", "evidence": "..."}.
+func (s *Server) handleTransferReversal(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SourceTrackerID string `json:"source_tracker_id"`
+		Nonce           string `json:"nonce"`
+		Evidence        string `json:"evidence"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "decode body: "+err.Error())
+		return
+	}
+	if req.SourceTrackerID == "" || req.Nonce == "" {
+		writeError(w, http.StatusBadRequest, "source_tracker_id and nonce required")
+		return
+	}
+	payload, err := s.deps.FederationActions.IssueTransferReversal(req.SourceTrackerID, req.Nonce, req.Evidence)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "issue reversal: "+err.Error())
+		return
+	}
+	s.deps.Logger.Info().
+		Str("event", "admin_transfer_reversal").
+		Str("source_tracker_id", req.SourceTrackerID).
+		Str("nonce", req.Nonce).
+		Int("payload_bytes", len(payload)).
+		Msg("operator issued transfer reversal")
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"issued":            true,
+		"source_tracker_id": req.SourceTrackerID,
+		"nonce":             req.Nonce,
+		"payload_bytes":     len(payload),
+	})
+}

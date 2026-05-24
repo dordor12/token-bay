@@ -50,8 +50,29 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 	c.started = true
 	c.sup = newSupervisor(ctx, c.cfg, c.holder)
+	c.sup.fetchCandidates = c.fetchAndUpdateCandidates
 	c.sup.start()
 	return nil
+}
+
+// fetchAndUpdateCandidates is the slice-6 connect-time hook: fetches
+// the signed BootstrapPeerList, validates it (sig check happens inside
+// FetchBootstrapPeers), and feeds the result into the supervisor's
+// peerCandidates set. Errors are logged at Warn; the prior candidate
+// set is preserved.
+func (c *Client) fetchAndUpdateCandidates(ctx context.Context) {
+	if c.sup == nil {
+		return
+	}
+	peers, expiresAt, err := c.fetchBootstrapPeersWithExpiry(ctx)
+	if err != nil {
+		c.cfg.Logger.Warn().Err(err).Msg("trackerclient: bootstrap-peers fetch failed; reroute candidates unchanged")
+		return
+	}
+	c.sup.candidates.Update(peers, expiresAt)
+	if rm, ok := c.cfg.Metrics.(RerouteMetrics); ok {
+		rm.IncRerouteCandidatesUpdated()
+	}
 }
 
 // Close terminates the supervisor and is idempotent.

@@ -30,6 +30,7 @@ type Federation struct {
 	revocation   *revocationCoordinator
 	peerExchange *peerExchangeCoordinator
 	health       *PeerHealth
+	rateLimiter  *gossipLimiter
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -89,6 +90,7 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	}
 
 	health := NewPeerHealth(cfg.Health, dep.Now, dep.Metrics.HealthScoreComputed)
+	rateLimiter := newGossipLimiter(cfg.RateLimit, dep.Now)
 
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
 	equiv := NewEquivocator(dep.Archive, forward, reg, health.OnEquivocation).WithSelf(cfg.MyTrackerID)
@@ -155,8 +157,9 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		reg: reg, dedupe: dedupe, gossip: gossip,
 		apply: apply, equiv: equiv, pub: pub,
 		transfer: transfer, revocation: revocation, peerExchange: peerExchange,
-		health: health,
-		peers:  make(map[ids.TrackerID]*Peer),
+		health:      health,
+		rateLimiter: rateLimiter,
+		peers:       make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
 	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
@@ -199,6 +202,20 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	f.listenCtx = ctx
 	f.listenCancel = cancel
 	go func() { _ = dep.Transport.Listen(ctx, f.acceptInbound) }()
+
+	// Slice 7: periodic peer-exchange emit goroutine. Cancelled
+	// alongside listenCtx by Close. Zero/negative cadence disables.
+	if peerExchange != nil && cfg.PeerExchangeCadence > 0 {
+		go f.runPeerExchangeTicker(ctx)
+	}
+
+	// Slice 10: periodic known_peers pruner.
+	if dep.KnownPeers != nil {
+		go f.runKnownPeersPruner(ctx)
+	}
+
+	// Slice 11: automatic depeer on sustained low health.
+	go f.runHealthWatcher(ctx)
 
 	// Dial each operator-allowlisted peer in a Dialer goroutine. The
 	// Dialer redials with exponential backoff after every drop; its
@@ -248,8 +265,49 @@ func (f *Federation) attachAndWait(p AllowlistedPeer) func(PeerConn) {
 	}
 }
 
+// runPeerExchangeTicker is the slice-7 periodic emit driver. Fires
+// EmitNow on each tick; errors are logged at Warn and never fatal.
+// Exits cleanly when ctx is cancelled (Close).
+func (f *Federation) runPeerExchangeTicker(ctx context.Context) {
+	t := time.NewTicker(f.cfg.PeerExchangeCadence)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := f.PublishPeerExchange(ctx); err != nil {
+				f.dep.Logger.Warn().Err(err).Msg("federation: periodic peer-exchange emit failed")
+			}
+		}
+	}
+}
+
 // Peers is the operator-facing snapshot of all known peers.
 func (f *Federation) Peers() []PeerInfo { return f.reg.All() }
+
+// ClearEquivocation is the slice-17 admin entry point. Clears the
+// sticky equivocation flag for peer in *PeerHealth so its score can
+// recover. Returns true if the flag was previously set. Callers MUST
+// authenticate the request — federation exposes this method but does
+// not gate access; the admin API server is responsible for token check.
+func (f *Federation) ClearEquivocation(peer ids.TrackerID) bool {
+	return f.health.ClearEquivocation(peer)
+}
+
+// IssueTransferReversal is the slice-14 admin entry point. Builds,
+// signs, and forwards a TransferReversal envelope to source. Returns
+// the signed wire bytes (for audit logging) or an error. Returns
+// ErrTransferDisabled when the federation was opened without a
+// LedgerHooks dep.
+func (f *Federation) IssueTransferReversal(
+	ctx context.Context, source ids.TrackerID, nonce [32]byte, evidence string,
+) ([]byte, error) {
+	if f.transfer == nil || f.transfer.cfg.Ledger == nil {
+		return nil, ErrTransferDisabled
+	}
+	return f.transfer.IssueTransferReversal(ctx, source, nonce, evidence)
+}
 
 // HealthScore returns the current 0..1 health score for the peer.
 // Returns 0 for unknown peers or when the subsystem has no PeerHealth
@@ -475,6 +533,12 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 			f.dep.Metrics.InvalidFrames("sig")
 			return
 		}
+		// Slice 9: gossip storm control. Drop with metric BEFORE
+		// dedupe so a flood doesn't fill the dedupe set with garbage.
+		if !f.rateLimiter.Allow(peerID, env.Kind) {
+			f.dep.Metrics.InvalidFrames("rate_limited")
+			return
+		}
 		mid := MessageID(env)
 		if f.dedupe.Seen(mid) {
 			f.dep.Metrics.InvalidFrames("dedupe_replay")
@@ -514,6 +578,18 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.transfer.OnApplied(context.Background(), env, peerID)
+		case fed.Kind_KIND_TRANSFER_REJECT:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnReject(context.Background(), env, peerID)
+		case fed.Kind_KIND_TRANSFER_REVERSAL:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnTransferReversal(context.Background(), env, peerID)
 		case fed.Kind_KIND_REVOCATION:
 			if f.revocation == nil {
 				f.dep.Metrics.InvalidFrames("revocation_disabled")

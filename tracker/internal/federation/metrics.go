@@ -22,6 +22,7 @@ type Metrics struct {
 	peerExchangeReceived      *prometheus.CounterVec
 	knownPeersSize            prometheus.Gauge
 	healthScoreComputations   *prometheus.CounterVec
+	reachableFraction         prometheus.Gauge // slice 16
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -41,8 +42,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		peerExchangeReceived:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_peer_exchange_received_total"}, []string{"outcome"}),
 		knownPeersSize:            prometheus.NewGauge(prometheus.GaugeOpts{Name: "tokenbay_federation_known_peers_size"}),
 		healthScoreComputations:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "tokenbay_federation_health_score_computations_total", Help: "Number of peer-health-score computations, by outcome."}, []string{"outcome"}),
+		reachableFraction:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "tokenbay_federation_reachable_fraction", Help: "Fraction of allowlisted peers in PeerStateSteady. 1.0 = full federation; <0.5 = partial failure."}),
 	}
-	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived, m.peerExchangeEmitted, m.peerExchangeReceived, m.knownPeersSize, m.healthScoreComputations} {
+	for _, c := range []prometheus.Collector{m.framesIn, m.framesOut, m.invalidFrames, m.dedupeSize, m.peers, m.rootAttestationsPublished, m.rootAttestationsReceived, m.equivocationsDetected, m.equivocationsAboutSelf, m.revocationsEmitted, m.revocationsReceived, m.peerExchangeEmitted, m.peerExchangeReceived, m.knownPeersSize, m.healthScoreComputations, m.reachableFraction} {
 		reg.MustRegister(c)
 	}
 	return m
@@ -106,6 +108,18 @@ func (m *Metrics) KnownPeersSizeGauge() prometheus.Gauge {
 // counter. outcome ∈ {ok, equivocated, no_data}.
 func (m *Metrics) HealthScoreComputed(outcome string) {
 	m.healthScoreComputations.WithLabelValues(outcome).Inc()
+}
+
+// SetReachableFraction sets the slice-16 reachable-peers gauge.
+// Computed as steady_peers / total_allowlisted_peers. Used by ops
+// alert recipes to fire on partial-federation failure (<0.5 → page).
+func (m *Metrics) SetReachableFraction(f float64) {
+	m.reachableFraction.Set(f)
+}
+
+// ReachableFractionGauge is a test-only accessor.
+func (m *Metrics) ReachableFractionGauge() prometheus.Gauge {
+	return m.reachableFraction
 }
 
 // HealthScoreComputationsCounter is a test-only accessor.

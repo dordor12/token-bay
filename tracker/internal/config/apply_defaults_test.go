@@ -191,6 +191,8 @@ func TestApplyDefaults_FederationHealth_Empty(t *testing.T) {
 	assert.Equal(t, 7200, c.Federation.Health.UptimeWindowS)
 	assert.Equal(t, 600, c.Federation.Health.RevGossipWindowS)
 	assert.Equal(t, 16, c.Federation.Health.RevGossipBufferSize)
-	assert.InDelta(t, 0.7, c.Federation.Health.UptimeWeight, 1e-9)
-	assert.InDelta(t, 0.3, c.Federation.Health.RevGossipWeight, 1e-9)
+	assert.Equal(t, 200, c.Federation.Health.LatencyTargetMs)
+	assert.InDelta(t, 0.6, c.Federation.Health.UptimeWeight, 1e-9)
+	assert.InDelta(t, 0.2, c.Federation.Health.RevGossipWeight, 1e-9)
+	assert.InDelta(t, 0.2, c.Federation.Health.LatencyWeight, 1e-9)
 }

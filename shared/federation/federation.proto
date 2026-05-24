@@ -20,6 +20,8 @@ enum Kind {
   KIND_TRANSFER_APPLIED       = 11;
   KIND_REVOCATION             = 12;
   KIND_PEER_EXCHANGE          = 13;
+  KIND_TRANSFER_REJECT        = 14;  // slice 13
+  KIND_TRANSFER_REVERSAL      = 15;  // slice 14
 }
 
 // Envelope wraps every steady-state and handshake message (including
@@ -102,6 +104,36 @@ message TransferApplied {
   bytes  nonce             = 3;
   uint64 timestamp         = 4;
   bytes  dest_tracker_sig  = 5;
+}
+
+// TransferReversal is the slice-14 escalation message. Issued by the
+// destination tracker (or an operator) when a transfer_out was observed
+// at the source but no matching transfer_in has settled at the
+// destination after the §4.3 24-hour window. The source side, on
+// receipt, MAY refund the consumer's credits (operator policy decision).
+// For v1 the message is informational + auditable; no automatic refund.
+message TransferReversal {
+  bytes  source_tracker_id  = 1;
+  bytes  dest_tracker_id    = 2;
+  bytes  nonce              = 3;   // matches the unsettled TransferProofRequest
+  string evidence           = 4;   // free-form operator note
+  uint64 timestamp          = 5;
+  bytes  dest_tracker_sig   = 6;
+}
+
+// TransferReject is the slice-13 negative-ack from the source side of a
+// cross-region credit transfer. Sent in lieu of KIND_TRANSFER_PROOF
+// when the source's AppendTransferOut hits an unrecoverable error
+// (most commonly ErrInsufficientCredits or ErrFrozen). The destination
+// surfaces a typed error to its StartTransfer caller immediately
+// rather than waiting for the request timeout.
+message TransferReject {
+  bytes  source_tracker_id = 1;
+  bytes  dest_tracker_id   = 2;
+  bytes  nonce             = 3;
+  string reason            = 4;  // e.g. "insufficient_credits", "frozen"
+  uint64 timestamp         = 5;
+  bytes  source_tracker_sig = 6; // Ed25519 over canonical body
 }
 
 enum RevocationReason {
