@@ -85,6 +85,23 @@ func (s *Store) UpdateKnownPeerHealth(ctx context.Context, trackerID []byte, sco
 	return nil
 }
 
+// DeleteStaleKnownPeers removes gossip-sourced known_peers rows whose
+// last_seen is older than cutoff. Allowlist rows are never pruned —
+// operator config remains the trust root. Returns the row count deleted.
+func (s *Store) DeleteStaleKnownPeers(ctx context.Context, cutoff time.Time) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM known_peers WHERE source = 'gossip' AND last_seen < ?`,
+		cutoff.Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("storage: DeleteStaleKnownPeers: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // GetKnownPeer returns the row for trackerID, or ok=false on miss.
 func (s *Store) GetKnownPeer(ctx context.Context, trackerID []byte) (KnownPeer, bool, error) {
 	row := s.db.QueryRowContext(ctx, `

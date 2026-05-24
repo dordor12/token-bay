@@ -209,6 +209,11 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		go f.runPeerExchangeTicker(ctx)
 	}
 
+	// Slice 10: periodic known_peers pruner.
+	if dep.KnownPeers != nil {
+		go f.runKnownPeersPruner(ctx)
+	}
+
 	// Dial each operator-allowlisted peer in a Dialer goroutine. The
 	// Dialer redials with exponential backoff after every drop; its
 	// OnConnected callback runs the federation handshake and blocks on

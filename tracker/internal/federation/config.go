@@ -46,6 +46,14 @@ type Config struct {
 	// RateLimit caps inbound gossip per (peer, kind). Slice 9. Zero
 	// rate per bucket disables that bucket.
 	RateLimit RateLimitConfig
+
+	// KnownPeersPruneInterval drives the slice-10 auto-pruner. Zero
+	// disables. Default 1h.
+	KnownPeersPruneInterval time.Duration
+
+	// KnownPeersMaxAge is the cutoff for gossip-sourced rows
+	// (last_seen < now - MaxAge → deleted by pruner). Default 7d.
+	KnownPeersMaxAge time.Duration
 }
 
 // Deps is the wired-in collaborators (Transport, RootSource, archive,
@@ -115,6 +123,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.PeerExchangeCadence == 0 {
 		c.PeerExchangeCadence = time.Hour
+	}
+	if c.KnownPeersPruneInterval == 0 {
+		c.KnownPeersPruneInterval = time.Hour
+	}
+	if c.KnownPeersMaxAge == 0 {
+		c.KnownPeersMaxAge = 7 * 24 * time.Hour
 	}
 	return c
 }

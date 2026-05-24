@@ -41,6 +41,44 @@ func TestUpdateKnownPeerHealth_UpdatesOnlyHealthScore(t *testing.T) {
 	require.Equal(t, time.Unix(100, 0), got.LastSeen)
 }
 
+func TestDeleteStaleKnownPeers_OnlyGossip(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	allow := bytes.Repeat([]byte{0xA1}, 32)
+	gossipOld := bytes.Repeat([]byte{0xB2}, 32)
+	gossipNew := bytes.Repeat([]byte{0xC3}, 32)
+	now := time.Unix(1000000, 0)
+
+	require.NoError(t, s.UpsertKnownPeer(ctx, KnownPeer{
+		TrackerID: allow, Addr: "a:1", LastSeen: now.Add(-72 * time.Hour),
+		RegionHint: "r", HealthScore: 0.9, Source: "allowlist",
+	}))
+	require.NoError(t, s.UpsertKnownPeer(ctx, KnownPeer{
+		TrackerID: gossipOld, Addr: "b:1", LastSeen: now.Add(-48 * time.Hour),
+		RegionHint: "r", HealthScore: 0.1, Source: "gossip",
+	}))
+	require.NoError(t, s.UpsertKnownPeer(ctx, KnownPeer{
+		TrackerID: gossipNew, Addr: "c:1", LastSeen: now.Add(-1 * time.Hour),
+		RegionHint: "r", HealthScore: 0.5, Source: "gossip",
+	}))
+
+	n, err := s.DeleteStaleKnownPeers(ctx, now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n, "only gossipOld should be deleted")
+
+	// allow + gossipNew remain.
+	_, ok, err := s.GetKnownPeer(ctx, allow)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, ok, err = s.GetKnownPeer(ctx, gossipNew)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, ok, err = s.GetKnownPeer(ctx, gossipOld)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestUpdateKnownPeerHealth_NoOpOnMissingRow(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
