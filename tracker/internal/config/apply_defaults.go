@@ -140,12 +140,18 @@ func ApplyDefaults(c *Config) {
 	if c.Federation.Health.RevGossipBufferSize == 0 {
 		c.Federation.Health.RevGossipBufferSize = d.Federation.Health.RevGossipBufferSize
 	}
-	// Weights: zero-zero pair means "no operator override" → fill from
-	// defaults. Partial override left alone so Validate's sum check
-	// fires loudly. Same idiom as BrokerScoreWeights.
-	if c.Federation.Health.UptimeWeight == 0 && c.Federation.Health.RevGossipWeight == 0 {
+	if c.Federation.Health.LatencyTargetMs == 0 {
+		c.Federation.Health.LatencyTargetMs = d.Federation.Health.LatencyTargetMs
+	}
+	// Weights: all-zero triple means "no operator override" → fill
+	// from defaults. Partial override left alone so Validate's sum
+	// check fires loudly. Same idiom as BrokerScoreWeights.
+	if c.Federation.Health.UptimeWeight == 0 &&
+		c.Federation.Health.RevGossipWeight == 0 &&
+		c.Federation.Health.LatencyWeight == 0 {
 		c.Federation.Health.UptimeWeight = d.Federation.Health.UptimeWeight
 		c.Federation.Health.RevGossipWeight = d.Federation.Health.RevGossipWeight
+		c.Federation.Health.LatencyWeight = d.Federation.Health.LatencyWeight
 	}
 	if c.Federation.PeerExchangeCadenceS == 0 {
 		c.Federation.PeerExchangeCadenceS = d.Federation.PeerExchangeCadenceS

@@ -65,8 +65,10 @@ federation:
     uptime_window_s: 7200
     rev_gossip_window_s: 600
     rev_gossip_buffer_size: 16
-    uptime_weight: 0.7
-    rev_gossip_weight: 0.3
+    latency_target_ms: 200
+    uptime_weight: 0.6
+    rev_gossip_weight: 0.2
+    latency_weight: 0.2
   peer_exchange_cadence_s: 3600
 
 reputation:

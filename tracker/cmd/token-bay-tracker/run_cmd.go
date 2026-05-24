@@ -152,8 +152,10 @@ func newRunCmd() *cobra.Command {
 					UptimeWindow:        time.Duration(cfg.Federation.Health.UptimeWindowS) * time.Second,
 					RevGossipWindow:     time.Duration(cfg.Federation.Health.RevGossipWindowS) * time.Second,
 					RevGossipBufferSize: cfg.Federation.Health.RevGossipBufferSize,
+					LatencyTarget:       time.Duration(cfg.Federation.Health.LatencyTargetMs) * time.Millisecond,
 					UptimeWeight:        cfg.Federation.Health.UptimeWeight,
 					RevGossipWeight:     cfg.Federation.Health.RevGossipWeight,
+					LatencyWeight:       cfg.Federation.Health.LatencyWeight,
 				},
 				PeerExchangeCadence: time.Duration(cfg.Federation.PeerExchangeCadenceS) * time.Second,
 			}, federation.Deps{

@@ -300,9 +300,18 @@ func (v *validator) checkFederation(c *Config) {
 	if c.Federation.Health.RevGossipWeight < 0 || c.Federation.Health.RevGossipWeight > 1 {
 		v.add("federation.health.rev_gossip_weight", "must be in [0,1]")
 	}
-	if math.Abs(c.Federation.Health.UptimeWeight+c.Federation.Health.RevGossipWeight-1.0) > 1e-9 {
+	if c.Federation.Health.LatencyWeight < 0 || c.Federation.Health.LatencyWeight > 1 {
+		v.add("federation.health.latency_weight", "must be in [0,1]")
+	}
+	if c.Federation.Health.LatencyTargetMs <= 0 {
+		v.add("federation.health.latency_target_ms",
+			"must be > 0, got "+strconv.Itoa(c.Federation.Health.LatencyTargetMs))
+	}
+	if math.Abs(c.Federation.Health.UptimeWeight+
+		c.Federation.Health.RevGossipWeight+
+		c.Federation.Health.LatencyWeight-1.0) > 1e-9 {
 		v.add("federation.health",
-			"uptime_weight + rev_gossip_weight must sum to 1.0")
+			"uptime_weight + rev_gossip_weight + latency_weight must sum to 1.0")
 	}
 	// PeerExchangeCadenceS: 0 disables; positive must be sane (>= 60s,
 	// <= 24h sanity ceiling).

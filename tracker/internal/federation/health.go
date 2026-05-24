@@ -10,12 +10,17 @@ import (
 // HealthConfig parameterizes the score formula; see spec §4.1 / §8.
 // Defaults are filled by tracker/internal/config; this package does not
 // fall back to defaults itself.
+//
+// Slice 8 added LatencyTarget + LatencyWeight as the fourth signal.
+// Weights MUST sum to 1.0 (validator-enforced).
 type HealthConfig struct {
 	UptimeWindow        time.Duration
 	RevGossipWindow     time.Duration
 	RevGossipBufferSize int
+	LatencyTarget       time.Duration // RTT at which latency sub-score reaches 0
 	UptimeWeight        float64
 	RevGossipWeight     float64
+	LatencyWeight       float64
 }
 
 // PeerHealth tracks per-peer health signals and computes a 0..1 score
@@ -29,6 +34,7 @@ type PeerHealth struct {
 	lastRoot        map[ids.TrackerID]time.Time
 	revGossipDelays map[ids.TrackerID]*ringBuf16
 	equivocated     map[ids.TrackerID]struct{}
+	latencyEWMA     map[ids.TrackerID]time.Duration // slice 8: smoothed RTT
 }
 
 // NewPeerHealth returns a fresh PeerHealth. now must not be nil.
@@ -46,7 +52,26 @@ func NewPeerHealth(cfg HealthConfig, now func() time.Time, onComputed func(outco
 		lastRoot:        make(map[ids.TrackerID]time.Time),
 		revGossipDelays: make(map[ids.TrackerID]*ringBuf16),
 		equivocated:     make(map[ids.TrackerID]struct{}),
+		latencyEWMA:     make(map[ids.TrackerID]time.Duration),
 	}
+}
+
+// OnLatencySample records a fresh RTT measurement for peer. Smoothed
+// via EWMA with α=0.3 (favors recent samples but resists outliers).
+// Negative inputs are clamped to zero.
+func (h *PeerHealth) OnLatencySample(peer ids.TrackerID, rtt time.Duration) {
+	if rtt < 0 {
+		rtt = 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prev, ok := h.latencyEWMA[peer]
+	if !ok {
+		h.latencyEWMA[peer] = rtt
+		return
+	}
+	const alpha = 0.3
+	h.latencyEWMA[peer] = time.Duration(float64(prev)*(1-alpha) + float64(rtt)*alpha)
 }
 
 // OnRootAttestation records receipt time of the most recent successful
@@ -120,7 +145,15 @@ func (h *PeerHealth) Score(peer ids.TrackerID, now time.Time) float64 {
 		revgossSub = clamp01(frac)
 	}
 
-	return h.cfg.UptimeWeight*uptimeSub + h.cfg.RevGossipWeight*revgossSub
+	latencySub := 1.0 // unknown latency → neutral
+	if rtt, ok := h.latencyEWMA[peer]; ok && h.cfg.LatencyTarget > 0 {
+		frac := 1.0 - float64(rtt)/float64(h.cfg.LatencyTarget)
+		latencySub = clamp01(frac)
+	}
+
+	return h.cfg.UptimeWeight*uptimeSub +
+		h.cfg.RevGossipWeight*revgossSub +
+		h.cfg.LatencyWeight*latencySub
 }
 
 func clamp01(v float64) float64 {

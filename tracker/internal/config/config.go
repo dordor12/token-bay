@@ -116,8 +116,10 @@ type FederationHealthConfig struct {
 	UptimeWindowS       int     `yaml:"uptime_window_s"`        // > 0; default 7200 (2h)
 	RevGossipWindowS    int     `yaml:"rev_gossip_window_s"`    // > 0; default 600 (10min)
 	RevGossipBufferSize int     `yaml:"rev_gossip_buffer_size"` // [1, 256]; default 16
-	UptimeWeight        float64 `yaml:"uptime_weight"`          // [0,1]; default 0.7
-	RevGossipWeight     float64 `yaml:"rev_gossip_weight"`      // [0,1]; default 0.3
+	LatencyTargetMs     int     `yaml:"latency_target_ms"`      // > 0; default 200 (slice 8)
+	UptimeWeight        float64 `yaml:"uptime_weight"`          // [0,1]; default 0.6
+	RevGossipWeight     float64 `yaml:"rev_gossip_weight"`      // [0,1]; default 0.2
+	LatencyWeight       float64 `yaml:"latency_weight"`         // [0,1]; default 0.2 (slice 8)
 }
 
 // FederationPeer is one operator-configured allowlisted peer tracker.
@@ -279,8 +281,10 @@ func DefaultConfig() *Config {
 				UptimeWindowS:       7200,
 				RevGossipWindowS:    600,
 				RevGossipBufferSize: 16,
-				UptimeWeight:        0.7,
-				RevGossipWeight:     0.3,
+				LatencyTargetMs:     200,
+				UptimeWeight:        0.6,
+				RevGossipWeight:     0.2,
+				LatencyWeight:       0.2,
 			},
 			PeerExchangeCadenceS: 3600,
 		},
