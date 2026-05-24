@@ -24,6 +24,10 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newEnrollCmd())
 	root.AddCommand(newTransferCmd())
 	root.AddCommand(newHooksCmd())
+	root.AddCommand(newStatusCmd())
+	root.AddCommand(newBalanceCmd())
+	root.AddCommand(newLogsCmd())
+	root.AddCommand(newFallbackCmd())
 	return root
 }
 
