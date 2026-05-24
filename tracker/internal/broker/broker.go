@@ -232,7 +232,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "accept")
 		// Accepted — load stays incremented; settlement releases on terminal.
 		_ = b.mgr.Inflight.MarkSeeder(req.RequestID, seeder.IdentityID, ephPub)
-		if terr := b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateAssigned); terr != nil {
+		if terr := b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateAssigned, b.deps.Now()); terr != nil {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)
 			b.failAndRelease(req)
 			return nil, terr
@@ -263,5 +263,5 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 // failAndRelease releases the reservation and marks the request as failed.
 func (b *Broker) failAndRelease(req *session.Request) {
 	_, _, _ = b.mgr.Reservations.Release(req.RequestID)
-	_ = b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateFailed)
+	_ = b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateFailed, b.deps.Now())
 }

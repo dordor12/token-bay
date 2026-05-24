@@ -30,15 +30,16 @@ func TestInflight_Get_Missing(t *testing.T) {
 func TestInflight_TransitionCAS(t *testing.T) {
 	f := NewInflight()
 	f.Insert(&Request{RequestID: [16]byte{1}, State: StateSelecting})
-	require.NoError(t, f.Transition([16]byte{1}, StateSelecting, StateAssigned))
-	require.ErrorIs(t, f.Transition([16]byte{1}, StateSelecting, StateAssigned), ErrIllegalTransition)
+	now := time.Unix(1700000000, 0)
+	require.NoError(t, f.Transition([16]byte{1}, StateSelecting, StateAssigned, now))
+	require.ErrorIs(t, f.Transition([16]byte{1}, StateSelecting, StateAssigned, now), ErrIllegalTransition)
 	got, _ := f.Get([16]byte{1})
 	require.Equal(t, StateAssigned, got.State)
 }
 
 func TestInflight_Transition_Unknown(t *testing.T) {
 	f := NewInflight()
-	require.ErrorIs(t, f.Transition([16]byte{99}, StateSelecting, StateAssigned), ErrUnknownRequest)
+	require.ErrorIs(t, f.Transition([16]byte{99}, StateSelecting, StateAssigned, time.Unix(1700000000, 0)), ErrUnknownRequest)
 }
 
 func TestInflight_MarkSeeder(t *testing.T) {
@@ -176,11 +177,63 @@ func TestInflight_RaceClean_Transition(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := f.Transition([16]byte{1}, StateServing, StateCompleted); err == nil {
+			if err := f.Transition([16]byte{1}, StateServing, StateCompleted, time.Unix(1700000000, 0)); err == nil {
 				atomic.AddInt32(&wins, 1)
 			}
 		}()
 	}
 	wg.Wait()
 	require.Equal(t, int32(1), wins)
+}
+
+// TestInflight_Transition_TerminalUsesInjectedClock pins the contract that
+// Transition records TerminatedAt from the caller-supplied `now`, not
+// time.Now(). This is what lets the broker test under a fake clock.
+func TestInflight_Transition_TerminalUsesInjectedClock(t *testing.T) {
+	f := NewInflight()
+	f.Insert(&Request{RequestID: [16]byte{1}, State: StateServing})
+
+	injected := time.Unix(1700000000, 0)
+	require.NoError(t, f.Transition([16]byte{1}, StateServing, StateCompleted, injected))
+
+	got, _ := f.Get([16]byte{1})
+	require.Equal(t, StateCompleted, got.State)
+	require.True(t, got.TerminatedAt.Equal(injected),
+		"TerminatedAt should equal injected clock: got=%v want=%v", got.TerminatedAt, injected)
+}
+
+// TestInflight_Transition_NonTerminalIgnoresClock confirms TerminatedAt stays
+// zero for non-terminal transitions regardless of the time passed.
+func TestInflight_Transition_NonTerminalIgnoresClock(t *testing.T) {
+	f := NewInflight()
+	f.Insert(&Request{RequestID: [16]byte{1}, State: StateSelecting})
+
+	require.NoError(t, f.Transition([16]byte{1}, StateSelecting, StateAssigned, time.Unix(1700000000, 0)))
+
+	got, _ := f.Get([16]byte{1})
+	require.Equal(t, StateAssigned, got.State)
+	require.True(t, got.TerminatedAt.IsZero(),
+		"TerminatedAt should remain zero for non-terminal transition: got=%v", got.TerminatedAt)
+}
+
+// TestInflight_Transition_BackwardsClockNoPanic exercises the case where the
+// injected clock moves backwards between calls (legitimate when tests fake
+// time, and also a tolerable real-world skew condition). Transitions must
+// not panic; each terminal transition records its own caller-supplied time
+// without regard to monotonicity across requests.
+func TestInflight_Transition_BackwardsClockNoPanic(t *testing.T) {
+	f := NewInflight()
+	f.Insert(&Request{RequestID: [16]byte{1}, State: StateServing})
+	f.Insert(&Request{RequestID: [16]byte{2}, State: StateServing})
+
+	t1 := time.Unix(1700000000, 0)
+	t2 := t1.Add(-time.Minute) // clock jumps backwards
+
+	require.NoError(t, f.Transition([16]byte{1}, StateServing, StateCompleted, t1))
+	require.NoError(t, f.Transition([16]byte{2}, StateServing, StateCompleted, t2))
+
+	r1, _ := f.Get([16]byte{1})
+	r2, _ := f.Get([16]byte{2})
+	require.True(t, r1.TerminatedAt.Equal(t1))
+	require.True(t, r2.TerminatedAt.Equal(t2))
 }
