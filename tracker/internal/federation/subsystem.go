@@ -286,6 +286,15 @@ func (f *Federation) runPeerExchangeTicker(ctx context.Context) {
 // Peers is the operator-facing snapshot of all known peers.
 func (f *Federation) Peers() []PeerInfo { return f.reg.All() }
 
+// ClearEquivocation is the slice-17 admin entry point. Clears the
+// sticky equivocation flag for peer in *PeerHealth so its score can
+// recover. Returns true if the flag was previously set. Callers MUST
+// authenticate the request — federation exposes this method but does
+// not gate access; the admin API server is responsible for token check.
+func (f *Federation) ClearEquivocation(peer ids.TrackerID) bool {
+	return f.health.ClearEquivocation(peer)
+}
+
 // Depeer removes a peer from the active set.
 func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
 	// Snapshot + delete under f.mu, then Stop outside the lock: p.Stop

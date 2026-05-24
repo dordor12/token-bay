@@ -68,6 +68,21 @@ type Deps struct {
 	// wires it to cancel the main signal context; that path drains the
 	// QUIC server and then this admin server. Required.
 	TriggerMaintenance func()
+
+	// FederationActions surfaces the slice-17 ClearEquivocation admin
+	// path. Nil disables the route. cmd/run_cmd wires this to the live
+	// *federation.Federation.
+	FederationActions FederationActions
+}
+
+// FederationActions is the slice-17 admin-side hook for federation
+// operations that mutate runtime state. Defined as an interface so the
+// admin package doesn't depend on internal/federation.
+type FederationActions interface {
+	// ClearEquivocation removes the sticky equivocation flag for the
+	// peer with the given TrackerID-hex. Returns true if the flag was
+	// previously set.
+	ClearEquivocation(trackerIDHex string) (bool, error)
 }
 
 // Server is the admin HTTP server. Single-call: a second Run returns
@@ -214,6 +229,10 @@ func (s *Server) buildMux() http.Handler {
 	}
 	if s.deps.AdmissionMount != nil {
 		s.deps.AdmissionMount(mux, guard)
+	}
+	if s.deps.FederationActions != nil {
+		mux.Handle("POST /federation/peers/{id}/clear_equivocation",
+			guard(http.HandlerFunc(s.handleClearEquivocation)))
 	}
 
 	return mux

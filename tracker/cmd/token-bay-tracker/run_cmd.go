@@ -282,7 +282,7 @@ func newRunCmd() *cobra.Command {
 			// stop() cancels ctx, which drains both the QUIC server and
 			// the admin server. /maintenance reuses the same path so an
 			// HTTP shutdown trigger is identical to SIGTERM.
-			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, stop)
+			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, fed, stop)
 			if err != nil {
 				return fmt.Errorf("admin: %w", err)
 			}
@@ -415,6 +415,18 @@ func (p *pushProxy) PushSettlementTo(id ids.IdentityID, push *tbproto.Settlement
 // subsystems. The bearer token comes from TOKEN_BAY_ADMIN_TOKEN; an unset
 // or empty value rejects every admin request, which is intentional —
 // operators must opt in to remote admin access.
+// federationAdminActions adapts *federation.Federation into the
+// admin.FederationActions interface (slice 17).
+type federationAdminActions struct{ fed *federation.Federation }
+
+func (f federationAdminActions) ClearEquivocation(trackerIDHex string) (bool, error) {
+	tid, err := hexToTrackerID(trackerIDHex)
+	if err != nil {
+		return false, err
+	}
+	return f.fed.ClearEquivocation(tid), nil
+}
+
 func buildAdminServer(
 	cfg *config.Config,
 	logger zerolog.Logger,
@@ -423,6 +435,7 @@ func buildAdminServer(
 	led *ledger.Ledger,
 	brokerSubs *broker.Subsystems,
 	adm *admission.Subsystem,
+	fed *federation.Federation,
 	stop func(),
 ) (*admin.Server, error) {
 	token := os.Getenv(adminTokenEnvVar)
@@ -448,5 +461,6 @@ func buildAdminServer(
 		BrokerMux:          brokerSubs.AdminHandler(),
 		AdmissionMount:     admissionMount,
 		TriggerMaintenance: stop,
+		FederationActions:  federationAdminActions{fed: fed},
 	})
 }

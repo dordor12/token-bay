@@ -99,13 +99,26 @@ func (h *PeerHealth) OnRevocation(peer ids.TrackerID, revokedAt, recvAt time.Tim
 	rb.push(delay)
 }
 
-// OnEquivocation flags peer as equivocating. Idempotent. The flag is
-// sticky for the life of the process — there is no admin clear path
-// in this slice (spec §3, §4.2).
+// OnEquivocation flags peer as equivocating. Idempotent. The flag
+// survives for the process lifetime unless cleared via
+// ClearEquivocation (slice 17 admin path).
 func (h *PeerHealth) OnEquivocation(peer ids.TrackerID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.equivocated[peer] = struct{}{}
+}
+
+// ClearEquivocation removes the sticky equivocation flag for peer,
+// allowing the score to recover. Slice 17: invoked only by the admin
+// API after operator review confirms a false positive. Idempotent —
+// no-op when the flag was not set. Returns true if the flag was
+// previously set (useful for audit logs).
+func (h *PeerHealth) ClearEquivocation(peer ids.TrackerID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, was := h.equivocated[peer]
+	delete(h.equivocated, peer)
+	return was
 }
 
 // Score computes the current health score for peer in [0, 1].
