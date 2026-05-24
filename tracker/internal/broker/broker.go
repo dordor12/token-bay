@@ -33,6 +33,8 @@ type Broker struct {
 	pendingQueued map[[16]byte]pendingEnv
 	queueDrainCh  chan struct{}
 
+	metrics *brokerMetrics
+
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -50,6 +52,13 @@ type pendingEnv struct {
 // Reputation (defaults to fallbackReputation{}). When mgr is nil a fresh
 // session.Manager is allocated.
 func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps, mgr *session.Manager) (*Broker, error) {
+	return openBrokerWithMetrics(cfg, scfg, deps, mgr, newBrokerMetrics())
+}
+
+// openBrokerWithMetrics is the internal constructor that lets Subsystems.Open
+// share a single brokerMetrics across the Broker + Settlement pair so the
+// composite Collector exposes one coherent set of counters/gauges.
+func openBrokerWithMetrics(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps, mgr *session.Manager, metrics *brokerMetrics) (*Broker, error) {
 	if deps.Registry == nil {
 		return nil, errors.New("broker: Registry required")
 	}
@@ -74,6 +83,9 @@ func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps
 	if mgr == nil {
 		mgr = session.New()
 	}
+	if metrics == nil {
+		metrics = newBrokerMetrics()
+	}
 	b := &Broker{
 		cfg:           cfg,
 		scfg:          scfg,
@@ -81,10 +93,20 @@ func OpenBroker(cfg config.BrokerConfig, scfg config.SettlementConfig, deps Deps
 		mgr:           mgr,
 		pendingQueued: make(map[[16]byte]pendingEnv),
 		queueDrainCh:  make(chan struct{}, 1),
+		metrics:       metrics,
 		stop:          make(chan struct{}),
 	}
 	b.startQueueDrain()
 	return b, nil
+}
+
+// pendingQueueLen returns the number of envelopes currently held in the
+// pending-queued cache. Safe under any concurrency; intended for the metrics
+// dynamic collector.
+func (b *Broker) pendingQueueLen() int {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	return len(b.pendingQueued)
 }
 
 // Close shuts down all broker goroutines. Idempotent.
@@ -111,6 +133,12 @@ func (b *Broker) LookupAssignment(reqID [16]byte) (consumer, seeder ids.Identity
 // api/ has fully validated the envelope and admission has returned
 // OutcomeAdmit; broker.Submit assumes the envelope is sound.
 func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Result, error) {
+	start := b.deps.Now()
+	resultLabel := "error"
+	defer func() {
+		b.metrics.SubmitDecisions.WithLabelValues(resultLabel).Inc()
+		b.metrics.SubmitDuration.Observe(b.deps.Now().Sub(start).Seconds())
+	}()
 	if env == nil || env.Body == nil {
 		return nil, errors.New("broker: Submit nil envelope")
 	}
@@ -126,6 +154,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 	//      revocation-gossip path archived its REVOCATION locally.
 	// Both must short-circuit before any reservation is held.
 	if b.deps.Reputation.IsFrozen(consumer) {
+		resultLabel = "frozen"
 		return nil, ErrIdentityFrozen
 	}
 	if b.deps.RevocationArchive != nil {
@@ -134,6 +163,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 			return nil, rerr
 		}
 		if revoked {
+			resultLabel = "frozen"
 			return nil, ErrIdentityFrozen
 		}
 	}
@@ -166,6 +196,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 
 	if rerr := b.mgr.Reservations.Reserve(requestID, consumer, cost, creds, expiresAt); rerr != nil {
 		if errors.Is(rerr, session.ErrInsufficientCredits) {
+			resultLabel = "no_capacity"
 			return &Result{
 				Outcome: OutcomeNoCapacity,
 				NoCap:   &NoCapacityDetails{Reason: "insufficient_credits"},
@@ -217,6 +248,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		if oerr != nil {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)
 			_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "unreachable")
+			b.metrics.OfferAttempts.WithLabelValues("unreachable").Inc()
 			tried = append(tried, seeder.IdentityID)
 			triedAny = true
 			continue
@@ -224,12 +256,14 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 		if !accepted {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)
 			_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "reject")
+			b.metrics.OfferAttempts.WithLabelValues("reject").Inc()
 			tried = append(tried, seeder.IdentityID)
 			triedAny = true
 			continue
 		}
 
 		_ = b.deps.Reputation.RecordOfferOutcome(seeder.IdentityID, "accept")
+		b.metrics.OfferAttempts.WithLabelValues("accept").Inc()
 		// Accepted — load stays incremented; settlement releases on terminal.
 		_ = b.mgr.Inflight.MarkSeeder(req.RequestID, seeder.IdentityID, ephPub)
 		if terr := b.mgr.Inflight.Transition(req.RequestID, session.StateSelecting, session.StateAssigned, b.deps.Now()); terr != nil {
@@ -237,6 +271,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 			b.failAndRelease(req)
 			return nil, terr
 		}
+		resultLabel = "admit"
 		return &Result{
 			Outcome: OutcomeAdmit,
 			Admit: &Assignment{
@@ -254,6 +289,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 	if triedAny {
 		reason = "all_seeders_rejected"
 	}
+	resultLabel = "no_capacity"
 	return &Result{
 		Outcome: OutcomeNoCapacity,
 		NoCap:   &NoCapacityDetails{Reason: reason},
