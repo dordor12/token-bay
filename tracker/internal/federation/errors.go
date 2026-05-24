@@ -33,4 +33,10 @@ var (
 	// Federation.PublishPeerExchange and rejected on inbound
 	// KIND_PEER_EXCHANGE.
 	ErrPeerExchangeDisabled = errors.New("federation: peer exchange disabled (no KnownPeersArchive)")
+
+	// ErrTransferRejected is slice 13: source emitted a signed
+	// KIND_TRANSFER_REJECT (e.g. ErrInsufficientBalance). The
+	// destination's StartTransfer fails fast with this wrapped error
+	// instead of waiting for the request timeout.
+	ErrTransferRejected = errors.New("federation: transfer rejected by source")
 )

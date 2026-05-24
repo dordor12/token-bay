@@ -545,6 +545,12 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.transfer.OnApplied(context.Background(), env, peerID)
+		case fed.Kind_KIND_TRANSFER_REJECT:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnReject(context.Background(), env, peerID)
 		case fed.Kind_KIND_REVOCATION:
 			if f.revocation == nil {
 				f.dep.Metrics.InvalidFrames("revocation_disabled")

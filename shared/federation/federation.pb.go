@@ -41,6 +41,7 @@ const (
 	Kind_KIND_TRANSFER_APPLIED       Kind = 11
 	Kind_KIND_REVOCATION             Kind = 12
 	Kind_KIND_PEER_EXCHANGE          Kind = 13
+	Kind_KIND_TRANSFER_REJECT        Kind = 14 // slice 13
 )
 
 // Enum value maps for Kind.
@@ -60,6 +61,7 @@ var (
 		11: "KIND_TRANSFER_APPLIED",
 		12: "KIND_REVOCATION",
 		13: "KIND_PEER_EXCHANGE",
+		14: "KIND_TRANSFER_REJECT",
 	}
 	Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":            0,
@@ -76,6 +78,7 @@ var (
 		"KIND_TRANSFER_APPLIED":       11,
 		"KIND_REVOCATION":             12,
 		"KIND_PEER_EXCHANGE":          13,
+		"KIND_TRANSFER_REJECT":        14,
 	}
 )
 
@@ -965,6 +968,96 @@ func (x *TransferApplied) GetDestTrackerSig() []byte {
 	return nil
 }
 
+// TransferReject is the slice-13 negative-ack from the source side of a
+// cross-region credit transfer. Sent in lieu of KIND_TRANSFER_PROOF
+// when the source's AppendTransferOut hits an unrecoverable error
+// (most commonly ErrInsufficientCredits or ErrFrozen). The destination
+// surfaces a typed error to its StartTransfer caller immediately
+// rather than waiting for the request timeout.
+type TransferReject struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	SourceTrackerId  []byte                 `protobuf:"bytes,1,opt,name=source_tracker_id,json=sourceTrackerId,proto3" json:"source_tracker_id,omitempty"`
+	DestTrackerId    []byte                 `protobuf:"bytes,2,opt,name=dest_tracker_id,json=destTrackerId,proto3" json:"dest_tracker_id,omitempty"`
+	Nonce            []byte                 `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Reason           string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // e.g. "insufficient_credits", "frozen"
+	Timestamp        uint64                 `protobuf:"varint,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	SourceTrackerSig []byte                 `protobuf:"bytes,6,opt,name=source_tracker_sig,json=sourceTrackerSig,proto3" json:"source_tracker_sig,omitempty"` // Ed25519 over canonical body
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *TransferReject) Reset() {
+	*x = TransferReject{}
+	mi := &file_federation_federation_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferReject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferReject) ProtoMessage() {}
+
+func (x *TransferReject) ProtoReflect() protoreflect.Message {
+	mi := &file_federation_federation_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferReject.ProtoReflect.Descriptor instead.
+func (*TransferReject) Descriptor() ([]byte, []int) {
+	return file_federation_federation_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TransferReject) GetSourceTrackerId() []byte {
+	if x != nil {
+		return x.SourceTrackerId
+	}
+	return nil
+}
+
+func (x *TransferReject) GetDestTrackerId() []byte {
+	if x != nil {
+		return x.DestTrackerId
+	}
+	return nil
+}
+
+func (x *TransferReject) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *TransferReject) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *TransferReject) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *TransferReject) GetSourceTrackerSig() []byte {
+	if x != nil {
+		return x.SourceTrackerSig
+	}
+	return nil
+}
+
 type Revocation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TrackerId     []byte                 `protobuf:"bytes,1,opt,name=tracker_id,json=trackerId,proto3" json:"tracker_id,omitempty"`    // 32 bytes — issuer
@@ -978,7 +1071,7 @@ type Revocation struct {
 
 func (x *Revocation) Reset() {
 	*x = Revocation{}
-	mi := &file_federation_federation_proto_msgTypes[12]
+	mi := &file_federation_federation_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +1083,7 @@ func (x *Revocation) String() string {
 func (*Revocation) ProtoMessage() {}
 
 func (x *Revocation) ProtoReflect() protoreflect.Message {
-	mi := &file_federation_federation_proto_msgTypes[12]
+	mi := &file_federation_federation_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +1096,7 @@ func (x *Revocation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Revocation.ProtoReflect.Descriptor instead.
 func (*Revocation) Descriptor() ([]byte, []int) {
-	return file_federation_federation_proto_rawDescGZIP(), []int{12}
+	return file_federation_federation_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Revocation) GetTrackerId() []byte {
@@ -1054,7 +1147,7 @@ type KnownPeer struct {
 
 func (x *KnownPeer) Reset() {
 	*x = KnownPeer{}
-	mi := &file_federation_federation_proto_msgTypes[13]
+	mi := &file_federation_federation_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1066,7 +1159,7 @@ func (x *KnownPeer) String() string {
 func (*KnownPeer) ProtoMessage() {}
 
 func (x *KnownPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_federation_federation_proto_msgTypes[13]
+	mi := &file_federation_federation_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1079,7 +1172,7 @@ func (x *KnownPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KnownPeer.ProtoReflect.Descriptor instead.
 func (*KnownPeer) Descriptor() ([]byte, []int) {
-	return file_federation_federation_proto_rawDescGZIP(), []int{13}
+	return file_federation_federation_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *KnownPeer) GetTrackerId() []byte {
@@ -1126,7 +1219,7 @@ type PeerExchange struct {
 
 func (x *PeerExchange) Reset() {
 	*x = PeerExchange{}
-	mi := &file_federation_federation_proto_msgTypes[14]
+	mi := &file_federation_federation_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1138,7 +1231,7 @@ func (x *PeerExchange) String() string {
 func (*PeerExchange) ProtoMessage() {}
 
 func (x *PeerExchange) ProtoReflect() protoreflect.Message {
-	mi := &file_federation_federation_proto_msgTypes[14]
+	mi := &file_federation_federation_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1151,7 +1244,7 @@ func (x *PeerExchange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerExchange.ProtoReflect.Descriptor instead.
 func (*PeerExchange) Descriptor() ([]byte, []int) {
-	return file_federation_federation_proto_rawDescGZIP(), []int{14}
+	return file_federation_federation_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PeerExchange) GetPeers() []*KnownPeer {
@@ -1233,7 +1326,14 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x0fdest_tracker_id\x18\x02 \x01(\fR\rdestTrackerId\x12\x14\n" +
 	"\x05nonce\x18\x03 \x01(\fR\x05nonce\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x04R\ttimestamp\x12(\n" +
-	"\x10dest_tracker_sig\x18\x05 \x01(\fR\x0edestTrackerSig\"\xce\x01\n" +
+	"\x10dest_tracker_sig\x18\x05 \x01(\fR\x0edestTrackerSig\"\xde\x01\n" +
+	"\x0eTransferReject\x12*\n" +
+	"\x11source_tracker_id\x18\x01 \x01(\fR\x0fsourceTrackerId\x12&\n" +
+	"\x0fdest_tracker_id\x18\x02 \x01(\fR\rdestTrackerId\x12\x14\n" +
+	"\x05nonce\x18\x03 \x01(\fR\x05nonce\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x1c\n" +
+	"\ttimestamp\x18\x05 \x01(\x04R\ttimestamp\x12,\n" +
+	"\x12source_tracker_sig\x18\x06 \x01(\fR\x10sourceTrackerSig\"\xce\x01\n" +
 	"\n" +
 	"Revocation\x12\x1d\n" +
 	"\n" +
@@ -1254,7 +1354,7 @@ const file_federation_federation_proto_rawDesc = "" +
 	"regionHint\x12!\n" +
 	"\fhealth_score\x18\x05 \x01(\x01R\vhealthScore\"G\n" +
 	"\fPeerExchange\x127\n" +
-	"\x05peers\x18\x01 \x03(\v2!.tokenbay.federation.v1.KnownPeerR\x05peers*\xcd\x02\n" +
+	"\x05peers\x18\x01 \x03(\v2!.tokenbay.federation.v1.KnownPeerR\x05peers*\xe7\x02\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -1271,7 +1371,8 @@ const file_federation_federation_proto_rawDesc = "" +
 	"\x12\x19\n" +
 	"\x15KIND_TRANSFER_APPLIED\x10\v\x12\x13\n" +
 	"\x0fKIND_REVOCATION\x10\f\x12\x16\n" +
-	"\x12KIND_PEER_EXCHANGE\x10\r*\x8f\x01\n" +
+	"\x12KIND_PEER_EXCHANGE\x10\r\x12\x18\n" +
+	"\x14KIND_TRANSFER_REJECT\x10\x0e*\x8f\x01\n" +
 	"\x10RevocationReason\x12!\n" +
 	"\x1dREVOCATION_REASON_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17REVOCATION_REASON_ABUSE\x10\x01\x12\x1c\n" +
@@ -1292,7 +1393,7 @@ func file_federation_federation_proto_rawDescGZIP() []byte {
 
 var (
 	file_federation_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 15)
+	file_federation_federation_proto_msgTypes  = make([]protoimpl.MessageInfo, 16)
 	file_federation_federation_proto_goTypes   = []any{
 		(Kind)(0),                    // 0: tokenbay.federation.v1.Kind
 		(RevocationReason)(0),        // 1: tokenbay.federation.v1.RevocationReason
@@ -1308,15 +1409,16 @@ var (
 		(*TransferProofRequest)(nil), // 11: tokenbay.federation.v1.TransferProofRequest
 		(*TransferProof)(nil),        // 12: tokenbay.federation.v1.TransferProof
 		(*TransferApplied)(nil),      // 13: tokenbay.federation.v1.TransferApplied
-		(*Revocation)(nil),           // 14: tokenbay.federation.v1.Revocation
-		(*KnownPeer)(nil),            // 15: tokenbay.federation.v1.KnownPeer
-		(*PeerExchange)(nil),         // 16: tokenbay.federation.v1.PeerExchange
+		(*TransferReject)(nil),       // 14: tokenbay.federation.v1.TransferReject
+		(*Revocation)(nil),           // 15: tokenbay.federation.v1.Revocation
+		(*KnownPeer)(nil),            // 16: tokenbay.federation.v1.KnownPeer
+		(*PeerExchange)(nil),         // 17: tokenbay.federation.v1.PeerExchange
 	}
 )
 var file_federation_federation_proto_depIdxs = []int32{
 	0,  // 0: tokenbay.federation.v1.Envelope.kind:type_name -> tokenbay.federation.v1.Kind
 	1,  // 1: tokenbay.federation.v1.Revocation.reason:type_name -> tokenbay.federation.v1.RevocationReason
-	15, // 2: tokenbay.federation.v1.PeerExchange.peers:type_name -> tokenbay.federation.v1.KnownPeer
+	16, // 2: tokenbay.federation.v1.PeerExchange.peers:type_name -> tokenbay.federation.v1.KnownPeer
 	3,  // [3:3] is the sub-list for method output_type
 	3,  // [3:3] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
@@ -1335,7 +1437,7 @@ func file_federation_federation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_federation_federation_proto_rawDesc), len(file_federation_federation_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

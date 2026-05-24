@@ -39,7 +39,8 @@ type issuedProof struct {
 }
 
 type pendingResp struct {
-	ch chan *fed.TransferProof
+	ch    chan *fed.TransferProof
+	rejCh chan *fed.TransferReject // slice 13: signed negative-ack from source
 }
 
 // transferCoordinator is constructed by Federation.Open and lives for
@@ -150,6 +151,12 @@ func (tc *transferCoordinator) OnRequest(ctx context.Context, env *fed.Envelope,
 		ConsumerPub: req.ConsumerPub,
 	})
 	if err != nil {
+		// Slice 13: emit a signed TransferReject so the destination's
+		// pending StartTransfer fails fast with a typed reason instead
+		// of waiting for the request timeout. The reason string is
+		// derived from the ledger sentinel and capped at 64 bytes by
+		// the validator.
+		tc.emitTransferReject(ctx, fromPeer, req, err.Error())
 		tc.cfg.MetricsCounter("transfer_request_ledger_err")
 		return
 	}
@@ -206,6 +213,91 @@ func (tc *transferCoordinator) cacheIssuedLocked(nonce [32]byte, payload []byte)
 	tc.issued[nonce] = issuedProof{payload: payload, at: tc.cfg.Now()}
 }
 
+// emitTransferReject builds, signs, and sends a KIND_TRANSFER_REJECT
+// envelope back to the destination peer that originated the request.
+// Slice 13. Errors during build/sign are logged via the metrics
+// counter and do not block the caller — the request is already failing.
+func (tc *transferCoordinator) emitTransferReject(ctx context.Context, dest ids.TrackerID, req *fed.TransferProofRequest, reason string) {
+	if len(reason) > fed.MaxTransferRejectReasonLen {
+		reason = reason[:fed.MaxTransferRejectReasonLen]
+	}
+	rej := &fed.TransferReject{
+		SourceTrackerId: req.SourceTrackerId,
+		DestTrackerId:   req.DestTrackerId,
+		Nonce:           req.Nonce,
+		Reason:          reason,
+		Timestamp:       uint64(tc.cfg.Now().Unix()), //nolint:gosec // Unix() ≥ 0 for any post-epoch timestamp
+	}
+	cb, err := fed.CanonicalTransferRejectPreSig(rej)
+	if err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_canonical")
+		return
+	}
+	rej.SourceTrackerSig = ed25519.Sign(tc.cfg.MyPriv, cb)
+	if err := fed.ValidateTransferReject(rej); err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_validate")
+		return
+	}
+	payload, err := proto.Marshal(rej)
+	if err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_marshal")
+		return
+	}
+	if err := tc.cfg.Send(ctx, dest, fed.Kind_KIND_TRANSFER_REJECT, payload); err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_send_err")
+		return
+	}
+	tc.cfg.MetricsCounter("transfer_reject_sent")
+}
+
+// OnReject is the dest-side dispatch hook. Validates the envelope and
+// hands the parsed reject to the pending StartTransfer call via rejCh.
+// If no pending call matches the nonce, the reject is dropped silently
+// (the destination's StartTransfer call has already returned via
+// ctx.Done or an out-of-band path).
+func (tc *transferCoordinator) OnReject(_ context.Context, env *fed.Envelope, fromPeer ids.TrackerID) {
+	rej := &fed.TransferReject{}
+	if err := proto.Unmarshal(env.Payload, rej); err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_shape")
+		return
+	}
+	if err := fed.ValidateTransferReject(rej); err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_shape")
+		return
+	}
+	// Verify the source's signature using the peer's known pubkey.
+	srcPub, ok := tc.cfg.PeerPubKey(fromPeer)
+	if !ok {
+		tc.cfg.MetricsCounter("transfer_reject_unknown_issuer")
+		return
+	}
+	cb, err := fed.CanonicalTransferRejectPreSig(rej)
+	if err != nil {
+		tc.cfg.MetricsCounter("transfer_reject_canonical")
+		return
+	}
+	if !ed25519.Verify(srcPub, cb, rej.SourceTrackerSig) {
+		tc.cfg.MetricsCounter("transfer_reject_sig")
+		return
+	}
+	var nonceArr [32]byte
+	copy(nonceArr[:], rej.Nonce)
+
+	tc.mu.Lock()
+	p, ok := tc.pending[nonceArr]
+	tc.mu.Unlock()
+	if !ok {
+		tc.cfg.MetricsCounter("transfer_reject_no_pending")
+		return
+	}
+	select {
+	case p.rejCh <- rej:
+		tc.cfg.MetricsCounter("transfer_reject_delivered")
+	default:
+		// already resolved by another path
+	}
+}
+
 func equalID(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -254,12 +346,13 @@ func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransf
 	}
 
 	ch := make(chan *fed.TransferProof, 1)
+	rejCh := make(chan *fed.TransferReject, 1)
 	tc.mu.Lock()
 	if _, exists := tc.pending[in.Nonce]; exists {
 		tc.mu.Unlock()
 		return StartTransferOutput{}, errors.New("federation: duplicate StartTransfer nonce in flight")
 	}
-	tc.pending[in.Nonce] = pendingResp{ch: ch}
+	tc.pending[in.Nonce] = pendingResp{ch: ch, rejCh: rejCh}
 	tc.mu.Unlock()
 	defer func() {
 		tc.mu.Lock()
@@ -275,6 +368,10 @@ func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransf
 	var proof *fed.TransferProof
 	select {
 	case proof = <-ch:
+	case rej := <-rejCh:
+		// Slice 13: source-side rejection. Surface the reason verbatim
+		// (validator capped it to 64 bytes) wrapped in ErrTransferRejected.
+		return StartTransferOutput{}, fmt.Errorf("%w: %s", ErrTransferRejected, rej.Reason)
 	case <-ctx.Done():
 		return StartTransferOutput{}, ctx.Err()
 	}

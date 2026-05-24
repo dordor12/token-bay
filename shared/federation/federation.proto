@@ -20,6 +20,7 @@ enum Kind {
   KIND_TRANSFER_APPLIED       = 11;
   KIND_REVOCATION             = 12;
   KIND_PEER_EXCHANGE          = 13;
+  KIND_TRANSFER_REJECT        = 14;  // slice 13
 }
 
 // Envelope wraps every steady-state and handshake message (including
@@ -102,6 +103,21 @@ message TransferApplied {
   bytes  nonce             = 3;
   uint64 timestamp         = 4;
   bytes  dest_tracker_sig  = 5;
+}
+
+// TransferReject is the slice-13 negative-ack from the source side of a
+// cross-region credit transfer. Sent in lieu of KIND_TRANSFER_PROOF
+// when the source's AppendTransferOut hits an unrecoverable error
+// (most commonly ErrInsufficientCredits or ErrFrozen). The destination
+// surfaces a typed error to its StartTransfer caller immediately
+// rather than waiting for the request timeout.
+message TransferReject {
+  bytes  source_tracker_id = 1;
+  bytes  dest_tracker_id   = 2;
+  bytes  nonce             = 3;
+  string reason            = 4;  // e.g. "insufficient_credits", "frozen"
+  uint64 timestamp         = 5;
+  bytes  source_tracker_sig = 6; // Ed25519 over canonical body
 }
 
 enum RevocationReason {

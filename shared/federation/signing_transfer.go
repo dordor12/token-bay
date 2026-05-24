@@ -58,3 +58,17 @@ func CanonicalTransferAppliedPreSig(m *TransferApplied) ([]byte, error) {
 	clone.DestTrackerSig = nil
 	return signing.DeterministicMarshal(clone)
 }
+
+// CanonicalTransferRejectPreSig returns the deterministic byte
+// representation of m with source_tracker_sig cleared. Slice 13.
+func CanonicalTransferRejectPreSig(m *TransferReject) ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("federation: nil TransferReject")
+	}
+	clone, ok := proto.Clone(m).(*TransferReject)
+	if !ok {
+		return nil, errors.New("federation: clone TransferReject")
+	}
+	clone.SourceTrackerSig = nil
+	return signing.DeterministicMarshal(clone)
+}
