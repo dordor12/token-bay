@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // discoveryFilename is the file the running sidecar writes under cfgDir
@@ -57,6 +61,45 @@ func readDiscoveryFile(cfgDir string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(raw)), nil
+}
+
+// urlProvider is the narrow surface writeDiscoveryFileWhenReady needs from
+// *sidecar.App — exposes the live ccproxy URL once the proxy has bound.
+// Defined as a single-method interface so tests can supply a fake without
+// constructing a full App+Run.
+type urlProvider interface {
+	CCProxyURL() string
+}
+
+// writeDiscoveryFileWhenReady polls until the URL resolves (the proxy
+// binds asynchronously on a goroutine inside App.Run), then atomically
+// writes the discovery file. Bails when ctx cancels — graceful shutdown
+// removes the file separately in run_cmd.go's defer.
+//
+// Polling vs. ready-channel: ccproxy's bind is fast (sub-millisecond on
+// localhost) but happens off the main goroutine; adding a ready signal
+// to sidecar.App would push business logic into a no-business-logic
+// package (sidecar CLAUDE.md rule #2). Polling at 25ms keeps the seam
+// invisible to sidecar/.
+func writeDiscoveryFileWhenReady(ctx context.Context, cfgDir string, app urlProvider, logger zerolog.Logger) {
+	t := time.NewTicker(25 * time.Millisecond)
+	defer t.Stop()
+	for {
+		url := app.CCProxyURL()
+		if url != "" {
+			if err := writeDiscoveryFile(cfgDir, url); err != nil {
+				logger.Warn().Err(err).Str("cfg_dir", cfgDir).Msg("could not write sidecar.url; hook subprocesses will exit 0 silently")
+			} else {
+				logger.Info().Str("path", filepath.Join(cfgDir, discoveryFilename)).Str("url", url).Msg("wrote sidecar.url discovery file")
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // removeDiscoveryFile deletes the discovery file. Idempotent — a missing

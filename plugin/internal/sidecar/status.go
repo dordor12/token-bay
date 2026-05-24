@@ -15,6 +15,13 @@ type Status struct {
 	Tracker    trackerclient.ConnectionState
 }
 
+// CCProxyURL returns the live ccproxy bind URL once the supervisor has
+// started. Returns "" before Run binds the listener; used by the cmd
+// layer's discovery-file writer to know when the URL has resolved.
+func (a *App) CCProxyURL() string {
+	return a.proxy.URL()
+}
+
 // Status returns a current snapshot. Safe to call concurrently with Run.
 func (a *App) Status() Status {
 	a.startMu.Lock()

@@ -166,6 +166,11 @@ func newRunCmd() *cobra.Command {
 				SeederFlow:       coord,
 				ConsumerFlow:     consumerCoord,
 				SessionStore:     sessionStore,
+				// The Coordinator implements hooks.Sink (see compile-time
+				// assertion at the bottom of consumerflow/coordinator.go).
+				// Wiring it here closes the loop: per-event hook subprocess
+				// → ccproxy /_hooks/{event} → consumerflow.Coordinator.
+				HookSink: consumerCoord,
 			}
 
 			app, err := sidecar.New(deps)
@@ -177,6 +182,21 @@ func newRunCmd() *cobra.Command {
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+
+			// Discovery-file goroutine: the hook subprocesses read this file
+			// to learn where to POST events. Written atomically once the OS
+			// has assigned a port (ccproxy binds :0), then removed on
+			// shutdown so a stale file from a previous run doesn't redirect
+			// the next sidecar's hooks at a dead socket.
+			discoveryCtx, cancelDiscovery := context.WithCancel(ctx)
+			defer cancelDiscovery()
+			go writeDiscoveryFileWhenReady(discoveryCtx, cfgDir, app, logger)
+			defer func() {
+				if err := removeDiscoveryFile(cfgDir); err != nil {
+					logger.Warn().Err(err).Str("cfg_dir", cfgDir).Msg("could not remove sidecar.url on shutdown")
+				}
+			}()
+
 			return app.Run(ctx)
 		},
 	}
