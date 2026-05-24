@@ -75,6 +75,8 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("ledger: %w", err)
 			}
+			led.StartRollup(time.Duration(cfg.Ledger.MerkleRootIntervalMin) * time.Minute)
+			defer led.Close() //nolint:errcheck
 
 			reg, err := registry.New(registry.DefaultShardCount)
 			if err != nil {
@@ -94,6 +96,20 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("admission: %w", err)
 			}
 			defer adm.Close() //nolint:errcheck
+
+			// Resume admission state from the most recent snapshot + tlog
+			// per admission-design §5.7. Without this, every restart begins
+			// with empty consumer-credit, seeder-heartbeat, and queue state.
+			if err := adm.StartupReplay(cmd.Context()); err != nil {
+				return fmt.Errorf("admission startup replay: %w", err)
+			}
+
+			// Expose admission collectors on /metrics. The Subsystem builds
+			// its dynamic+composite collector internally; we register it here
+			// so production scrapes see admission counters/gauges.
+			if err := prometheus.DefaultRegisterer.Register(adm.Collector()); err != nil {
+				return fmt.Errorf("admission metrics register: %w", err)
+			}
 
 			// federation: select QUICTransport when ListenAddr is set, else
 			// fall back to the in-process transport (which keeps the
@@ -187,6 +203,10 @@ func newRunCmd() *cobra.Command {
 			}
 			defer rep.Close() //nolint:errcheck
 
+			if err := rep.Register(prometheus.DefaultRegisterer); err != nil {
+				return fmt.Errorf("reputation metrics register: %w", err)
+			}
+
 			var prices *broker.PriceTable
 			if cfg.Pricing.Models != nil {
 				prices = broker.NewPriceTableFromConfig(cfg.Pricing)
@@ -235,17 +255,19 @@ func newRunCmd() *cobra.Command {
 			reflectFn := func(remote netip.AddrPort) netip.AddrPort { return remote }
 
 			router, err := api.NewRouter(api.Deps{
-				Logger:     logger,
-				Now:        time.Now,
-				Ledger:     led,
-				Registry:   reg,
-				StunTurn:   stunTurnAdapter{alloc: alloc, reflect: reflectFn},
-				Broker:     brokerSubs.Broker,
-				Settlement: brokerSubs.Settlement,
-				Admission:  admissionAdapter{adm},
-				Reputation: rep,
-				Identity:   ip,
-				TrackerPub: trackerPub,
+				Logger:          logger,
+				Now:             time.Now,
+				Ledger:          led,
+				Registry:        reg,
+				StunTurn:        stunTurnAdapter{alloc: alloc, reflect: reflectFn},
+				RelayPublicAddr: cfg.STUNTURN.TURNListenAddr,
+				Broker:          brokerSubs.Broker,
+				Settlement:      brokerSubs.Settlement,
+				Admission:       admissionAdapter{adm},
+				Federation:      transferFederationAdapter{fed: fed},
+				Reputation:      rep,
+				Identity:        ip,
+				TrackerPub:      trackerPub,
 				BootstrapPeers: bootstrapPeersAdapter{
 					store:    store,
 					issuer:   ids.IdentityID(sha256.Sum256(trackerPub)),
@@ -287,6 +309,8 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("admin: %w", err)
 			}
+
+			startMaintenanceLoops(ctx, logger, fed, reg, alloc, cfg)
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Run(ctx) }()
@@ -467,6 +491,11 @@ func buildAdminServer(
 		adm.RegisterMux(mux, admission.MuxGuard(guard))
 	}
 
+	var fedView admin.FederationView
+	if fed != nil {
+		fedView = newAdminFederationAdapter(fed)
+	}
+
 	return admin.New(admin.Deps{
 		Config:             cfg,
 		Logger:             logger,
@@ -476,6 +505,7 @@ func buildAdminServer(
 		PeerCounter:        srv,
 		Registry:           reg,
 		Ledger:             led,
+		Federation:         fedView,
 		BrokerMux:          brokerSubs.AdminHandler(),
 		AdmissionMount:     admissionMount,
 		TriggerMaintenance: stop,

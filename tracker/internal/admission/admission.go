@@ -173,7 +173,33 @@ func Open(cfg config.AdmissionConfig, reg *registry.Registry, priv ed25519.Priva
 	}
 
 	s.startAggregator()
+	s.startSnapshotEmitter()
 	return s, nil
+}
+
+// startSnapshotEmitter spawns a goroutine that periodically calls
+// runSnapshotEmitOnce on cfg.SnapshotIntervalS cadence. No-op when
+// snapshotPrefix is unset (persistence disabled) or SnapshotIntervalS<=0.
+// Stops on s.stop. Errors are swallowed — operators see them via the
+// admin /admission/snapshot endpoint or the next emit cycle.
+func (s *Subsystem) startSnapshotEmitter() {
+	if s.snapshotPrefix == "" || s.cfg.SnapshotIntervalS <= 0 {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		t := time.NewTicker(time.Duration(s.cfg.SnapshotIntervalS) * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case now := <-t.C:
+				_ = s.runSnapshotEmitOnce(now)
+			}
+		}
+	}()
 }
 
 // PressureGauge returns the most recent supply-aggregator pressure (demand_rate /
@@ -185,6 +211,18 @@ func (s *Subsystem) PressureGauge() float64 {
 		return 0.0
 	}
 	return snap.Pressure
+}
+
+// QueueTimeout returns the configured cap on how long a queued admission
+// decision may wait before the api-layer block-then-deliver path gives up
+// and emits a wire Rejected{queue_timeout} (admission-design §5.4 / spec
+// §5.4). Returns 0 when QueueTimeoutS is non-positive — callers MUST treat
+// zero as "no operator-configured cap" and pick their own safety bound.
+func (s *Subsystem) QueueTimeout() time.Duration {
+	if s.cfg.QueueTimeoutS <= 0 {
+		return 0
+	}
+	return time.Duration(s.cfg.QueueTimeoutS) * time.Second
 }
 
 // Close signals all background goroutines to stop and waits for them.

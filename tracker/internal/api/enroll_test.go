@@ -57,6 +57,10 @@ func (f *fakeAdmission) Decide(_ ids.IdentityID, _ *sharedadmission.SignedCredit
 	return admission.Result{Outcome: admission.OutcomeAdmit}
 }
 
+// QueueTimeout satisfies brokerAdmission; enroll tests never queue, so zero
+// is fine — the broker_request handler is the only consumer.
+func (f *fakeAdmission) QueueTimeout() time.Duration { return 0 }
+
 // rcForPubkey returns a RequestCtx whose PeerID equals SHA-256(pub) so
 // the enroll handler's defense-in-depth check passes.
 func rcForPubkey(pub []byte) *api.RequestCtx {

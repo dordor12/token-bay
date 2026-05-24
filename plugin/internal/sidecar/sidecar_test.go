@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/token-bay/token-bay/plugin/internal/ccproxy"
 	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
 )
@@ -125,6 +126,10 @@ func TestNew_WiresConsumerFlowAsSettlementHandler(t *testing.T) {
 	cf, err := consumerflow.New(validConsumerFlowDeps(t))
 	require.NoError(t, err)
 	deps.ConsumerFlow = cf
+	// Validate requires SessionStore whenever ConsumerFlow is set —
+	// otherwise ccproxy and consumerflow would observe different maps
+	// and fallback redirects would silently miss.
+	deps.SessionStore = ccproxy.NewSessionModeStore()
 
 	var observed trackerclient.SettlementHandler
 	deps.TrackerClientOverrides = func(cfg *trackerclient.Config) {

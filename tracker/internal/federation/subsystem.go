@@ -309,6 +309,16 @@ func (f *Federation) IssueTransferReversal(
 	return f.transfer.IssueTransferReversal(ctx, source, nonce, evidence)
 }
 
+// HealthScore returns the current 0..1 health score for the peer.
+// Returns 0 for unknown peers or when the subsystem has no PeerHealth
+// (e.g. nil receiver in tests). Same formula as PublishPeerExchange.
+func (f *Federation) HealthScore(id ids.TrackerID) float64 {
+	if f == nil || f.health == nil {
+		return 0
+	}
+	return f.health.Score(id, f.dep.Now())
+}
+
 // Depeer removes a peer from the active set.
 func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
 	// Snapshot + delete under f.mu, then Stop outside the lock: p.Stop

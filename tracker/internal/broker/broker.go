@@ -99,6 +99,14 @@ func (b *Broker) Close() error {
 	return nil
 }
 
+// LookupAssignment returns the consumer and assigned seeder for the in-flight
+// request identified by reservation_token (= request_id). ok=false when no
+// such request exists or the offer round-trip has not yet bound a seeder.
+// Read-only; safe under any concurrency.
+func (b *Broker) LookupAssignment(reqID [16]byte) (consumer, seeder ids.IdentityID, ok bool) {
+	return b.mgr.Inflight.LookupAssignment(reqID)
+}
+
 // Submit implements the broker selection algorithm (§5.1). Pre-condition:
 // api/ has fully validated the envelope and admission has returned
 // OutcomeAdmit; broker.Submit assumes the envelope is sound.
@@ -110,11 +118,16 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 	var consumer ids.IdentityID
 	copy(consumer[:], body.ConsumerId)
 
-	// Cross-region revocation pre-check (federation §6, reputation §12).
-	// The federation revocation gossip path archives REVOCATIONs from
-	// peer trackers; an identity FROZEN at any peer must not get
-	// brokered locally. Local FROZEN state is enforced by reputation;
-	// this closes the cross-region case.
+	// Frozen-identity pre-check (reputation §10 acceptance row 3:
+	// "Frozen identity's broker_request returns IDENTITY_FROZEN").
+	// Two paths produce a FROZEN consumer here:
+	//   1. Local reputation transitioned the identity to FROZEN.
+	//   2. A peer tracker FROZE the identity and the federation
+	//      revocation-gossip path archived its REVOCATION locally.
+	// Both must short-circuit before any reservation is held.
+	if b.deps.Reputation.IsFrozen(consumer) {
+		return nil, ErrIdentityFrozen
+	}
 	if b.deps.RevocationArchive != nil {
 		revoked, rerr := b.deps.RevocationArchive.IsIdentityRevoked(ctx, consumer[:])
 		if rerr != nil {

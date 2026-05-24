@@ -33,3 +33,19 @@ func parseHexID(s string) (ids.IdentityID, error) {
 	copy(id[:], b)
 	return id, nil
 }
+
+func parseHexTrackerID(s string) (ids.TrackerID, error) {
+	var id ids.TrackerID
+	if s == "" {
+		return id, fmt.Errorf("required")
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return id, err
+	}
+	if len(b) != 32 {
+		return id, fmt.Errorf("expected 32 bytes, got %d", len(b))
+	}
+	copy(id[:], b)
+	return id, nil
+}

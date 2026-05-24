@@ -100,7 +100,7 @@ func TestStats_LedgerError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
-func TestPeers_EmptyFederation(t *testing.T) {
+func TestPeers_NoFederation(t *testing.T) {
 	srv := newTestServer(t, nil)
 	defer srv.Close()
 
@@ -110,11 +110,60 @@ func TestPeers_EmptyFederation(t *testing.T) {
 
 	var out map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
-	assert.Equal(t, "not_implemented", out["federation_state"])
+	assert.Equal(t, "disabled", out["federation_state"])
 	assert.EqualValues(t, 7, out["connected_quic"])
+	peers, ok := out["peers"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, peers)
 }
 
-func TestPeersAdd_Unimplemented(t *testing.T) {
+func TestPeers_WithFederation(t *testing.T) {
+	var tid ids.TrackerID
+	for i := range tid {
+		tid[i] = byte(i)
+	}
+	pk := make([]byte, 32)
+	for i := range pk {
+		pk[i] = 0x42
+	}
+	stub := &stubFederation{
+		listen: "127.0.0.1:9443",
+		peers: []PeerSummary{{
+			TrackerID:   tid,
+			PubKey:      pk,
+			Addr:        "peer.example:9443",
+			Region:      "eu-1",
+			State:       "steady",
+			Since:       time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC),
+			HealthScore: 0.87,
+		}},
+	}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	resp := adminReq(t, "GET", srv.URL+"/peers", "test-token", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.Equal(t, "enabled", out["federation_state"])
+	assert.Equal(t, "127.0.0.1:9443", out["listen_addr"])
+
+	peers, ok := out["peers"].([]any)
+	require.True(t, ok)
+	require.Len(t, peers, 1)
+	row := peers[0].(map[string]any)
+	assert.Equal(t, hex.EncodeToString(tid[:]), row["tracker_id"])
+	assert.Equal(t, hex.EncodeToString(pk), row["pubkey"])
+	assert.Equal(t, "peer.example:9443", row["addr"])
+	assert.Equal(t, "eu-1", row["region"])
+	assert.Equal(t, "steady", row["state"])
+	assert.InDelta(t, 0.87, row["health_score"], 1e-9)
+	assert.Equal(t, "2026-05-10T10:00:00Z", row["since"])
+}
+
+func TestPeersAdd_NoFederation_501(t *testing.T) {
 	srv := newTestServer(t, nil)
 	defer srv.Close()
 
@@ -123,13 +172,143 @@ func TestPeersAdd_Unimplemented(t *testing.T) {
 	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
 }
 
-func TestPeersRemove_Unimplemented(t *testing.T) {
+func TestPeersAdd_BadJSON_400(t *testing.T) {
+	srv := newTestServer(t, func(d *Deps) { d.Federation = &stubFederation{} })
+	defer srv.Close()
+
+	resp := adminReq(t, "POST", srv.URL+"/peers/add", "test-token", "not json")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestPeersAdd_MissingFields(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"no tracker_id", `{"pubkey":"` + strings.Repeat("aa", 32) + `","addr":"x:1"}`},
+		{"bad tracker_id hex", `{"tracker_id":"zz","pubkey":"` + strings.Repeat("aa", 32) + `","addr":"x:1"}`},
+		{"short tracker_id", `{"tracker_id":"aabbcc","pubkey":"` + strings.Repeat("aa", 32) + `","addr":"x:1"}`},
+		{"bad pubkey hex", `{"tracker_id":"` + strings.Repeat("ab", 32) + `","pubkey":"zz","addr":"x:1"}`},
+		{"short pubkey", `{"tracker_id":"` + strings.Repeat("ab", 32) + `","pubkey":"aabb","addr":"x:1"}`},
+		{"no addr", `{"tracker_id":"` + strings.Repeat("ab", 32) + `","pubkey":"` + strings.Repeat("aa", 32) + `"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := newTestServer(t, func(d *Deps) { d.Federation = &stubFederation{} })
+			defer srv.Close()
+
+			resp := adminReq(t, "POST", srv.URL+"/peers/add", "test-token", c.body)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
+func TestPeersAdd_Success_202(t *testing.T) {
+	stub := &stubFederation{}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	tidHex := strings.Repeat("ab", 32)
+	pkHex := strings.Repeat("cd", 32)
+	body := `{"tracker_id":"` + tidHex + `","pubkey":"` + pkHex + `","addr":"peer.example:9443","region":"eu-1"}`
+
+	resp := adminReq(t, "POST", srv.URL+"/peers/add", "test-token", body)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	require.Len(t, stub.added, 1)
+	got := stub.added[0]
+	assert.Equal(t, hex.EncodeToString(got.TrackerID[:]), tidHex)
+	assert.Equal(t, hex.EncodeToString(got.PubKey), pkHex)
+	assert.Equal(t, "peer.example:9443", got.Addr)
+	assert.Equal(t, "eu-1", got.Region)
+}
+
+func TestPeersAdd_Conflict_409(t *testing.T) {
+	stub := &stubFederation{addErr: ErrPeerExists}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	body := `{"tracker_id":"` + strings.Repeat("ab", 32) + `","pubkey":"` + strings.Repeat("cd", 32) + `","addr":"x:1"}`
+	resp := adminReq(t, "POST", srv.URL+"/peers/add", "test-token", body)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
+func TestPeersAdd_OtherError_500(t *testing.T) {
+	stub := &stubFederation{addErr: errors.New("boom")}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	body := `{"tracker_id":"` + strings.Repeat("ab", 32) + `","pubkey":"` + strings.Repeat("cd", 32) + `","addr":"x:1"}`
+	resp := adminReq(t, "POST", srv.URL+"/peers/add", "test-token", body)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestPeersRemove_NoFederation_501(t *testing.T) {
 	srv := newTestServer(t, nil)
 	defer srv.Close()
 
 	resp := adminReq(t, "POST", srv.URL+"/peers/remove", "test-token", "{}")
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+}
+
+func TestPeersRemove_BadJSON_400(t *testing.T) {
+	srv := newTestServer(t, func(d *Deps) { d.Federation = &stubFederation{} })
+	defer srv.Close()
+
+	resp := adminReq(t, "POST", srv.URL+"/peers/remove", "test-token", "not json")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestPeersRemove_BadTrackerID_400(t *testing.T) {
+	srv := newTestServer(t, func(d *Deps) { d.Federation = &stubFederation{} })
+	defer srv.Close()
+
+	resp := adminReq(t, "POST", srv.URL+"/peers/remove", "test-token", `{"tracker_id":"zz"}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestPeersRemove_Unknown_404(t *testing.T) {
+	stub := &stubFederation{depeerErr: ErrPeerUnknown}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	body := `{"tracker_id":"` + strings.Repeat("ab", 32) + `"}`
+	resp := adminReq(t, "POST", srv.URL+"/peers/remove", "test-token", body)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestPeersRemove_Success_200(t *testing.T) {
+	stub := &stubFederation{}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	tidHex := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/peers/remove", "test-token", `{"tracker_id":"`+tidHex+`"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Len(t, stub.depeered, 1)
+	assert.Equal(t, tidHex, hex.EncodeToString(stub.depeered[0][:]))
+}
+
+func TestPeersRemove_OtherError_500(t *testing.T) {
+	stub := &stubFederation{depeerErr: errors.New("boom")}
+	srv := newTestServer(t, func(d *Deps) { d.Federation = stub })
+	defer srv.Close()
+
+	body := `{"tracker_id":"` + strings.Repeat("ab", 32) + `"}`
+	resp := adminReq(t, "POST", srv.URL+"/peers/remove", "test-token", body)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
 func TestIdentity_BadHex(t *testing.T) {

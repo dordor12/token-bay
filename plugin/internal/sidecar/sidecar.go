@@ -90,7 +90,11 @@ func New(deps Deps) (*App, error) {
 		}
 	}
 
-	proxy := ccproxy.New(ccproxy.WithAddr(deps.CCProxyAddr))
+	proxyOpts := []ccproxy.Option{ccproxy.WithAddr(deps.CCProxyAddr)}
+	if deps.SessionStore != nil {
+		proxyOpts = append(proxyOpts, ccproxy.WithSessionStore(deps.SessionStore))
+	}
+	proxy := ccproxy.New(proxyOpts...)
 
 	return &App{
 		deps:    deps,

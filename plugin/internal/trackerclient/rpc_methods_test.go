@@ -2,6 +2,7 @@ package trackerclient
 
 import (
 	"context"
+	"crypto/ed25519"
 	"net/netip"
 	"testing"
 	"time"
@@ -13,12 +14,21 @@ import (
 
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/internal/transport/loopback"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient/test/fakeserver"
+	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
 
 // newWiredClient stands up a wired Client + fakeserver pair using loopback.
 func newWiredClient(t *testing.T, register func(*fakeserver.Server)) (*Client, func()) {
+	return newWiredClientWithSigner(t, nil, register)
+}
+
+// newWiredClientWithSigner is like newWiredClient but lets the caller
+// inject a specific Ed25519 priv key so the test can verify signatures
+// produced by the Client against the matching pubkey. priv == nil falls
+// back to the default randomly-generated key in validConfig.
+func newWiredClientWithSigner(t *testing.T, priv ed25519.PrivateKey, register func(*fakeserver.Server)) (*Client, func()) {
 	t.Helper()
 	cli, srv := loopback.Pair(ids.IdentityID{1}, ids.IdentityID{2})
 	drv := loopback.NewDriver()
@@ -30,6 +40,9 @@ func newWiredClient(t *testing.T, register func(*fakeserver.Server)) (*Client, f
 	}
 
 	cfg := validConfig(t)
+	if priv != nil {
+		cfg.Identity = fakeSigner{priv: priv}
+	}
 	cfg.Transport = drv
 	cfg.Endpoints[0].Addr = "addr:1"
 	c, err := New(cfg)
@@ -235,13 +248,96 @@ func TestTransferRequestRoundTrip(t *testing.T) {
 		}
 	})
 	defer cleanup()
+	var src, dst [32]byte
+	src[0] = 0xAA
+	dst[0] = 0xBB
 	proof, err := c.TransferRequest(context.Background(), &TransferRequest{
-		IdentityID: ids.IdentityID{1},
-		Amount:     50,
-		DestRegion: "us-east-1",
+		IdentityID:      ids.IdentityID{1},
+		Amount:          50,
+		DestRegion:      "us-east-1",
+		SourceTrackerID: src,
+		DestTrackerID:   dst,
+		Timestamp:       1714000000,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(12345), proof.SourceSeq)
+}
+
+// TestTransferRequest_PopulatesAllWireFieldsAndSig captures the on-wire
+// tbproto.TransferRequest received by the fake server and asserts that
+// the plugin populated all 8 fields with a consumer_sig that verifies
+// against the federation-canonical bytes the source tracker checks.
+func TestTransferRequest_PopulatesAllWireFieldsAndSig(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	var got *tbproto.TransferRequest
+	c, cleanup := newWiredClientWithSigner(t, priv, func(s *fakeserver.Server) {
+		s.Handlers[tbproto.RpcMethod_RPC_METHOD_TRANSFER_REQUEST] = func(_ context.Context, req proto.Message) (tbproto.RpcStatus, proto.Message, *tbproto.RpcError) {
+			got = proto.Clone(req).(*tbproto.TransferRequest)
+			return tbproto.RpcStatus_RPC_STATUS_OK, &tbproto.TransferProof{
+				SourceChainTipHash: make([]byte, 32),
+				SourceSeq:          1,
+				TrackerSig:         make([]byte, 64),
+			}, nil
+		}
+	})
+	defer cleanup()
+
+	var src, dst [32]byte
+	src[0] = 0x11
+	dst[0] = 0x22
+	var nonce [32]byte
+	nonce[0] = 0x33
+	identity := ids.IdentityID{0x44}
+
+	_, err = c.TransferRequest(context.Background(), &TransferRequest{
+		IdentityID:      identity,
+		Amount:          250,
+		DestRegion:      "us-east-1",
+		SourceTrackerID: src,
+		DestTrackerID:   dst,
+		Nonce:           nonce,
+		Timestamp:       1714000000,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got, "fake server never observed the request")
+
+	assert.Equal(t, identity[:], got.IdentityId)
+	assert.Equal(t, uint64(250), got.Amount)
+	assert.Equal(t, "us-east-1", got.DestRegion)
+	assert.Equal(t, nonce[:], got.Nonce)
+	assert.Equal(t, src[:], got.SourceTrackerId)
+	assert.Equal(t, []byte(pub), got.ConsumerPub)
+	assert.Equal(t, uint64(1714000000), got.Timestamp)
+	require.Len(t, got.ConsumerSig, ed25519.SignatureSize)
+
+	// Sig must verify against the federation canonical bytes — what the
+	// source tracker actually checks in OnRequest.
+	canonical, err := fed.CanonicalTransferProofRequestPreSig(&fed.TransferProofRequest{
+		SourceTrackerId: src[:],
+		DestTrackerId:   dst[:],
+		IdentityId:      identity[:],
+		Amount:          250,
+		Nonce:           nonce[:],
+		ConsumerPub:     pub,
+		Timestamp:       1714000000,
+	})
+	require.NoError(t, err)
+	assert.True(t, ed25519.Verify(pub, canonical, got.ConsumerSig),
+		"consumer_sig must verify against fed.CanonicalTransferProofRequestPreSig")
+}
+
+func TestTransferRequest_MissingSourceTrackerID_Rejected(t *testing.T) {
+	c, cleanup := newWiredClient(t, nil)
+	defer cleanup()
+	_, err := c.TransferRequest(context.Background(), &TransferRequest{
+		IdentityID: ids.IdentityID{1},
+		Amount:     1,
+		Timestamp:  1714000000,
+		// SourceTrackerID + DestTrackerID intentionally zero
+	})
+	require.Error(t, err)
 }
 
 func TestStunAllocateRoundTrip(t *testing.T) {

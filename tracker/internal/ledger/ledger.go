@@ -22,6 +22,13 @@ type Ledger struct {
 	trackerPub ed25519.PublicKey
 	nowFn      func() time.Time
 	mu         sync.Mutex
+
+	// stop is closed by Close to signal background goroutines (the
+	// Merkle rollup loop) to drain. wg tracks them so Close can wait.
+	// closeOnce guards stop against double-close.
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // Option configures optional dependencies on Open.
@@ -48,6 +55,7 @@ func Open(store *storage.Store, key ed25519.PrivateKey, opts ...Option) (*Ledger
 		trackerKey: key,
 		trackerPub: key.Public().(ed25519.PublicKey),
 		nowFn:      time.Now,
+		stop:       make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(l)
@@ -55,7 +63,12 @@ func Open(store *storage.Store, key ed25519.PrivateKey, opts ...Option) (*Ledger
 	return l, nil
 }
 
-// Close is a no-op in v1: the Ledger does not own the Store. Reserved
-// for v2 background goroutines (Merkle publication) that need shutdown
-// hooks.
-func (l *Ledger) Close() error { return nil }
+// Close signals background goroutines (started by StartRollup) to
+// drain and waits for them. Safe to call multiple times; subsequent
+// calls are no-ops. Does NOT close the underlying Store — the caller
+// retains Store ownership.
+func (l *Ledger) Close() error {
+	l.closeOnce.Do(func() { close(l.stop) })
+	l.wg.Wait()
+	return nil
+}

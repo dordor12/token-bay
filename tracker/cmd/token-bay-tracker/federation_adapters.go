@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
@@ -84,9 +85,46 @@ func (a bootstrapPeersAdapter) Sign(canonical []byte) ([]byte, error) {
 func (a bootstrapPeersAdapter) MaxPeers() int      { return a.maxPeers }
 func (a bootstrapPeersAdapter) TTL() time.Duration { return a.ttl }
 
+// transferFederationAdapter bridges the api package's tbproto-typed
+// federationStartTransfer interface to the internal federation
+// package's StartTransfer entry point. The api handler at the
+// destination tracker has already verified the consumer signature
+// against the federation-canonical bytes; this adapter just shovels
+// the validated fields into federation.StartTransferInput, fans the
+// result back as a tbproto.TransferProof.
+type transferFederationAdapter struct {
+	fed *federation.Federation
+}
+
+func (a transferFederationAdapter) StartTransfer(ctx context.Context, req *tbproto.TransferRequest) (*tbproto.TransferProof, error) {
+	if req == nil {
+		return nil, fmt.Errorf("transferFederationAdapter: nil request")
+	}
+	in := federation.StartTransferInput{
+		Amount:      req.Amount,
+		ConsumerSig: req.ConsumerSig,
+		ConsumerPub: ed25519.PublicKey(req.ConsumerPub),
+		Timestamp:   req.Timestamp,
+	}
+	copy(in.SourceTrackerID[:], req.SourceTrackerId)
+	copy(in.IdentityID[:], req.IdentityId)
+	copy(in.Nonce[:], req.Nonce)
+
+	out, err := a.fed.StartTransfer(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return &tbproto.TransferProof{
+		SourceChainTipHash: out.SourceChainTipHash[:],
+		SourceSeq:          out.SourceSeq,
+		TrackerSig:         out.SourceTrackerSig,
+	}, nil
+}
+
 // silence unused warnings if any helper goes briefly unused.
 var (
 	_ federation.RootSource      = ledgerRootSourceAdapter{}
 	_ federation.PeerRootArchive = storeAsArchive{}
 	_ api.BootstrapPeersService  = bootstrapPeersAdapter{}
+	_ api.FederationService      = transferFederationAdapter{}
 )

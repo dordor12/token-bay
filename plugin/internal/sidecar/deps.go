@@ -7,6 +7,7 @@ import (
 
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
+	"github.com/token-bay/token-bay/plugin/internal/ccproxy"
 	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/seederflow"
@@ -84,6 +85,15 @@ type Deps struct {
 	// nil disables the seeder role at this process. The cmd layer
 	// constructs it and registers its ActiveClientChecker on Janitor.
 	SeederFlow *seederflow.Coordinator
+
+	// SessionStore is the ccproxy session-mode map. When set, the
+	// supervisor passes it to ccproxy.New via WithSessionStore so the
+	// cmd layer can share the same store with ConsumerFlow (which writes
+	// EnterNetworkMode entries that ccproxy reads on /v1/messages). When
+	// nil, ccproxy allocates its own private store — useful for tests
+	// that don't exercise the consumer flow. Required when ConsumerFlow
+	// is set, since the two halves must observe the same map.
+	SessionStore *ccproxy.SessionModeStore
 }
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps
@@ -100,6 +110,10 @@ func (d Deps) Validate() error {
 	}
 	if len(d.TrackerEndpoints) == 0 {
 		return fmt.Errorf("%w: TrackerEndpoints must be non-empty", ErrInvalidDeps)
+	}
+	if d.ConsumerFlow != nil && d.SessionStore == nil {
+		return fmt.Errorf("%w: SessionStore must be non-nil when ConsumerFlow is set "+
+			"(the same store must be observed by ccproxy and consumerflow)", ErrInvalidDeps)
 	}
 	return nil
 }

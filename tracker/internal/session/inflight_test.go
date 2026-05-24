@@ -67,6 +67,29 @@ func TestInflight_LookupByHash_Missing(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestInflight_LookupAssignment(t *testing.T) {
+	f := NewInflight()
+	rid := [16]byte{7}
+	consumer := ids.IdentityID{0x11}
+	seeder := ids.IdentityID{0x22}
+
+	// Unknown request → ok=false.
+	_, _, ok := f.LookupAssignment(rid)
+	require.False(t, ok)
+
+	// Inserted but not yet assigned → ok=false.
+	f.Insert(&Request{RequestID: rid, ConsumerID: consumer, State: StateSelecting})
+	_, _, ok = f.LookupAssignment(rid)
+	require.False(t, ok)
+
+	// After MarkSeeder → returns (consumer, seeder, true).
+	require.NoError(t, f.MarkSeeder(rid, seeder, ed25519.PublicKey(make([]byte, 32))))
+	gotConsumer, gotSeeder, ok := f.LookupAssignment(rid)
+	require.True(t, ok)
+	require.Equal(t, consumer, gotConsumer)
+	require.Equal(t, seeder, gotSeeder)
+}
+
 func TestInflight_SweepTerminal_RemovesTerminal(t *testing.T) {
 	f := NewInflight()
 	now := time.Now()

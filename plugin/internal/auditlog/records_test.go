@@ -95,6 +95,65 @@ func TestMarshalRecord_Seeder_OmitsTrackerHashWhenNil(t *testing.T) {
 	assert.NotContains(t, string(line), "tracker_entry_hash")
 }
 
+func TestMarshalRecord_Transfer_RoundTripSuccess(t *testing.T) {
+	chainTip := mustHash32(t, "ef")
+	rec := TransferRecord{
+		RequestID:          "transfer:" + strings.Repeat("aa", 16),
+		SourceRegion:       "eu-central-1",
+		DestRegion:         "us-east-1",
+		Amount:             250,
+		Outcome:            TransferOutcomeSuccess,
+		SourceChainTipHash: &chainTip,
+		SourceSeq:          12345,
+		Timestamp:          time.Date(2026, 5, 10, 12, 30, 0, 0, time.UTC),
+	}
+
+	line, err := marshalRecord(rec)
+	require.NoError(t, err)
+	assert.Contains(t, string(line), `"kind":"transfer"`)
+
+	got, err := unmarshalRecord(line)
+	require.NoError(t, err)
+	require.IsType(t, TransferRecord{}, got)
+	r := got.(TransferRecord)
+	assert.Equal(t, rec.RequestID, r.RequestID)
+	assert.Equal(t, rec.SourceRegion, r.SourceRegion)
+	assert.Equal(t, rec.DestRegion, r.DestRegion)
+	assert.Equal(t, rec.Amount, r.Amount)
+	assert.Equal(t, rec.Outcome, r.Outcome)
+	require.NotNil(t, r.SourceChainTipHash)
+	assert.Equal(t, *rec.SourceChainTipHash, *r.SourceChainTipHash)
+	assert.Equal(t, rec.SourceSeq, r.SourceSeq)
+	assert.True(t, rec.Timestamp.Equal(r.Timestamp))
+}
+
+func TestMarshalRecord_Transfer_RejectedOmitsChainAndSeq(t *testing.T) {
+	rec := TransferRecord{
+		RequestID:     "transfer:" + strings.Repeat("bb", 16),
+		SourceRegion:  "eu-central-1",
+		DestRegion:    "us-east-1",
+		Amount:        250,
+		Outcome:       TransferOutcomeRejected,
+		OutcomeReason: "frozen",
+		Timestamp:     time.Date(2026, 5, 10, 12, 31, 0, 0, time.UTC),
+	}
+
+	line, err := marshalRecord(rec)
+	require.NoError(t, err)
+	assert.NotContains(t, string(line), "source_chain_tip_hash")
+	assert.NotContains(t, string(line), "source_seq")
+	assert.Contains(t, string(line), `"outcome":"rejected"`)
+	assert.Contains(t, string(line), `"outcome_reason":"frozen"`)
+
+	got, err := unmarshalRecord(line)
+	require.NoError(t, err)
+	require.IsType(t, TransferRecord{}, got)
+	r := got.(TransferRecord)
+	assert.Equal(t, rec.OutcomeReason, r.OutcomeReason)
+	assert.Nil(t, r.SourceChainTipHash)
+	assert.Equal(t, uint64(0), r.SourceSeq)
+}
+
 func TestUnmarshalRecord_UnknownKindReturnsUnknownRecord(t *testing.T) {
 	line := []byte(`{"kind":"future_kind","weird":42}`)
 

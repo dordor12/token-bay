@@ -103,6 +103,11 @@ func (l *Logger) LogSeeder(rec SeederRecord) error {
 	return l.append(rec)
 }
 
+// LogTransfer appends a cross-region transfer record as one JSON line + fsync.
+func (l *Logger) LogTransfer(rec TransferRecord) error {
+	return l.append(rec)
+}
+
 // Close closes the underlying file. Idempotent. Subsequent Log* / Rotate
 // calls return ErrClosed.
 func (l *Logger) Close() error {

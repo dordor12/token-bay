@@ -88,6 +88,35 @@ func TestLogger_LogConsumerAndSeederAppendValidLines(t *testing.T) {
 	assert.Equal(t, "s1", s["request_id"])
 }
 
+func TestLogger_LogTransferAppendsValidLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "audit.log")
+	l, err := Open(p)
+	require.NoError(t, err)
+	defer l.Close()
+
+	chainTip := mustHash32(t, "ef")
+	require.NoError(t, l.LogTransfer(TransferRecord{
+		RequestID:          "transfer:abc",
+		SourceRegion:       "eu-central-1",
+		DestRegion:         "us-east-1",
+		Amount:             500,
+		Outcome:            TransferOutcomeSuccess,
+		SourceChainTipHash: &chainTip,
+		SourceSeq:          77,
+		Timestamp:          time.Date(2026, 5, 10, 12, 30, 0, 0, time.UTC),
+	}))
+	require.NoError(t, l.Close())
+
+	lines := readLines(t, p)
+	require.Len(t, lines, 1)
+	var probe map[string]any
+	require.NoError(t, json.Unmarshal(lines[0], &probe))
+	assert.Equal(t, "transfer", probe["kind"])
+	assert.Equal(t, "transfer:abc", probe["request_id"])
+	assert.Equal(t, "us-east-1", probe["dest_region"])
+	assert.Equal(t, "success", probe["outcome"])
+}
+
 func TestLogger_AfterCloseReturnsErrClosed(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "audit.log")
 	l, err := Open(p)
