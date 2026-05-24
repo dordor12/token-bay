@@ -70,6 +70,12 @@ federation:
     rev_gossip_weight: 0.2
     latency_weight: 0.2
   peer_exchange_cadence_s: 3600
+  rate_limit:
+    root_attestation_per_sec: 1
+    revocation_per_sec: 5
+    peer_exchange_per_sec: 0.05
+    equivocation_evidence_per_sec: 1
+    transfer_per_sec: 20
 
 reputation:
   evaluation_interval_s: 60

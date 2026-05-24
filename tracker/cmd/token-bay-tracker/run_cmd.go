@@ -158,6 +158,13 @@ func newRunCmd() *cobra.Command {
 					LatencyWeight:       cfg.Federation.Health.LatencyWeight,
 				},
 				PeerExchangeCadence: time.Duration(cfg.Federation.PeerExchangeCadenceS) * time.Second,
+				RateLimit: federation.RateLimitConfig{
+					RootAttestation:      federation.RateBucket{Rate: cfg.Federation.RateLimit.RootAttestationPerSec, Burst: rlBurst(cfg.Federation.RateLimit.RootAttestationPerSec)},
+					Revocation:           federation.RateBucket{Rate: cfg.Federation.RateLimit.RevocationPerSec, Burst: rlBurst(cfg.Federation.RateLimit.RevocationPerSec)},
+					PeerExchange:         federation.RateBucket{Rate: cfg.Federation.RateLimit.PeerExchangePerSec, Burst: rlBurst(cfg.Federation.RateLimit.PeerExchangePerSec)},
+					EquivocationEvidence: federation.RateBucket{Rate: cfg.Federation.RateLimit.EquivocationEvidencePerSec, Burst: rlBurst(cfg.Federation.RateLimit.EquivocationEvidencePerSec)},
+					Transfer:             federation.RateBucket{Rate: cfg.Federation.RateLimit.TransferPerSec, Burst: rlBurst(cfg.Federation.RateLimit.TransferPerSec)},
+				},
 			}, federation.Deps{
 				Transport:         fedTransport,
 				RootSrc:           ledgerRootSourceAdapter{led: led},
@@ -365,6 +372,23 @@ func (p *identityProxy) PeerPubkey(id ids.IdentityID) (ed25519.PublicKey, bool) 
 // a router built from broker).
 type pushProxy struct {
 	srv atomic.Pointer[server.Server]
+}
+
+// rlBurst derives a sensible token-bucket burst from a configured
+// per-second rate. Bursts cap at 50 to keep per-(peer,kind) memory
+// bounded. Zero rate yields zero burst (disabled bucket).
+func rlBurst(rate float64) int {
+	if rate <= 0 {
+		return 0
+	}
+	b := int(rate * 5)
+	if b < 1 {
+		b = 1
+	}
+	if b > 50 {
+		b = 50
+	}
+	return b
 }
 
 func (p *pushProxy) setSrv(s *server.Server) {

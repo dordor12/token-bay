@@ -156,6 +156,17 @@ func ApplyDefaults(c *Config) {
 	if c.Federation.PeerExchangeCadenceS == 0 {
 		c.Federation.PeerExchangeCadenceS = d.Federation.PeerExchangeCadenceS
 	}
+	// RateLimit: zero-everywhere means "no operator override" → fill
+	// from defaults. Any non-zero field is preserved so operators can
+	// disable individual buckets explicitly with 0.
+	rl := &c.Federation.RateLimit
+	if rl.RootAttestationPerSec == 0 &&
+		rl.RevocationPerSec == 0 &&
+		rl.PeerExchangePerSec == 0 &&
+		rl.EquivocationEvidencePerSec == 0 &&
+		rl.TransferPerSec == 0 {
+		*rl = d.Federation.RateLimit
+	}
 
 	// Reputation
 	if c.Reputation.EvaluationIntervalS == 0 {

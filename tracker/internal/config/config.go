@@ -100,6 +100,22 @@ type FederationConfig struct {
 	// PeerExchangeCadenceS drives the slice-7 periodic peer-exchange
 	// emit ticker. Default 3600 (1h, matching spec §7.1). 0 disables.
 	PeerExchangeCadenceS int `yaml:"peer_exchange_cadence_s"`
+
+	// RateLimit (slice 9) caps inbound gossip per (peer, kind).
+	// Per-bucket rate=0 disables that kind. Defaults derived from
+	// spec §10 acceptance criteria.
+	RateLimit FederationRateLimitConfig `yaml:"rate_limit"`
+}
+
+// FederationRateLimitConfig caps inbound gossip per (peer, kind). Each
+// field is a rate-per-second; the burst is implicitly the configured
+// rate × 5s window (capped at 50 to keep memory bounded).
+type FederationRateLimitConfig struct {
+	RootAttestationPerSec      float64 `yaml:"root_attestation_per_sec"`      // default 1 (≈ once per peer per hour with burst)
+	RevocationPerSec           float64 `yaml:"revocation_per_sec"`            // default 5
+	PeerExchangePerSec         float64 `yaml:"peer_exchange_per_sec"`         // default 0.05 (≈ 1 per 20s)
+	EquivocationEvidencePerSec float64 `yaml:"equivocation_evidence_per_sec"` // default 1
+	TransferPerSec             float64 `yaml:"transfer_per_sec"`              // default 20
 }
 
 // FederationBootstrapConfig governs the plugin-facing signed
@@ -287,6 +303,13 @@ func DefaultConfig() *Config {
 				LatencyWeight:       0.2,
 			},
 			PeerExchangeCadenceS: 3600,
+			RateLimit: FederationRateLimitConfig{
+				RootAttestationPerSec:      1,
+				RevocationPerSec:           5,
+				PeerExchangePerSec:         0.05,
+				EquivocationEvidencePerSec: 1,
+				TransferPerSec:             20,
+			},
 		},
 		Reputation: ReputationConfig{
 			EvaluationIntervalS: 60,

@@ -42,6 +42,10 @@ type Config struct {
 	// Zero or negative disables the ticker entirely (operators must
 	// call Federation.PublishPeerExchange explicitly). Default 1h.
 	PeerExchangeCadence time.Duration
+
+	// RateLimit caps inbound gossip per (peer, kind). Slice 9. Zero
+	// rate per bucket disables that bucket.
+	RateLimit RateLimitConfig
 }
 
 // Deps is the wired-in collaborators (Transport, RootSource, archive,

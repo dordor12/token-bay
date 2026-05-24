@@ -30,6 +30,7 @@ type Federation struct {
 	revocation   *revocationCoordinator
 	peerExchange *peerExchangeCoordinator
 	health       *PeerHealth
+	rateLimiter  *gossipLimiter
 
 	// listenCtx is the cancellable context Open creates. It scopes both
 	// the Listen goroutine and the per-peer dial goroutines, AND is
@@ -89,6 +90,7 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	}
 
 	health := NewPeerHealth(cfg.Health, dep.Now, dep.Metrics.HealthScoreComputed)
+	rateLimiter := newGossipLimiter(cfg.RateLimit, dep.Now)
 
 	apply := NewRootAttestApplier(dep.Archive, forward, dep.Now)
 	equiv := NewEquivocator(dep.Archive, forward, reg, health.OnEquivocation).WithSelf(cfg.MyTrackerID)
@@ -155,8 +157,9 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 		reg: reg, dedupe: dedupe, gossip: gossip,
 		apply: apply, equiv: equiv, pub: pub,
 		transfer: transfer, revocation: revocation, peerExchange: peerExchange,
-		health: health,
-		peers:  make(map[ids.TrackerID]*Peer),
+		health:      health,
+		rateLimiter: rateLimiter,
+		peers:       make(map[ids.TrackerID]*Peer),
 	}
 	peerSet.f = f
 	transfer.cfg.Send = func(ctx context.Context, peer ids.TrackerID, kind fed.Kind, payload []byte) error {
@@ -487,6 +490,12 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 		f.dep.Metrics.FramesIn(env.Kind.String())
 		if err := VerifyEnvelope(c.RemotePub(), env); err != nil {
 			f.dep.Metrics.InvalidFrames("sig")
+			return
+		}
+		// Slice 9: gossip storm control. Drop with metric BEFORE
+		// dedupe so a flood doesn't fill the dedupe set with garbage.
+		if !f.rateLimiter.Allow(peerID, env.Kind) {
+			f.dep.Metrics.InvalidFrames("rate_limited")
 			return
 		}
 		mid := MessageID(env)
