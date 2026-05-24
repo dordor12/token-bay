@@ -80,7 +80,13 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
-			logger := zerolog.New(cmd.ErrOrStderr()).With().Timestamp().Logger()
+			// Wrap stderr in zerolog.SyncWriter so concurrent goroutines (the
+			// discovery-file writer + seederflow.Run + consumerflow.Run +
+			// trackerclient reconnect loop) don't race on the underlying
+			// io.Writer's internal buffer. os.Stderr is already serialized by
+			// the kernel, but tests pin cmd.ErrOrStderr() to a *bytes.Buffer
+			// whose Write is not goroutine-safe.
+			logger := zerolog.New(zerolog.SyncWriter(cmd.ErrOrStderr())).With().Timestamp().Logger()
 
 			seederRoot := filepath.Join(cfgDir, "seeder-sessions")
 			runner := &ccbridge.ExecRunner{
