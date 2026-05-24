@@ -44,7 +44,19 @@ func (f *Federation) runHealthWatcher(ctx context.Context) {
 
 // runHealthWatcherTick is the single-iteration body. Exposed for tests.
 func (f *Federation) runHealthWatcherTick(now time.Time, state *healthWatcherState) {
-	for _, p := range f.reg.All() {
+	all := f.reg.All()
+	// Slice 16: publish reachable-fraction gauge from the same scan.
+	// Nil-safe so health-watcher unit tests that omit Metrics still run.
+	if f.dep.Metrics != nil && len(all) > 0 {
+		var steady int
+		for _, p := range all {
+			if p.State == PeerStateSteady {
+				steady++
+			}
+		}
+		f.dep.Metrics.SetReachableFraction(float64(steady) / float64(len(all)))
+	}
+	for _, p := range all {
 		if p.State != PeerStateSteady {
 			delete(state.belowSince, p.TrackerID)
 			continue
