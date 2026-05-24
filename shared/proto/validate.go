@@ -312,6 +312,8 @@ func ValidateBrokerRequestResponse(r *BrokerRequestResponse) error {
 }
 
 // ValidateOfferPush — non-empty consumer_id (32) + envelope_hash (32) + model.
+// consumer_ephemeral_pub is optional: empty for legacy trackers that
+// don't yet populate it; otherwise must be exactly 32 bytes (Ed25519).
 func ValidateOfferPush(o *OfferPush) error {
 	if o == nil {
 		return errors.New("proto: OfferPush is nil")
@@ -324,6 +326,9 @@ func ValidateOfferPush(o *OfferPush) error {
 	}
 	if o.Model == "" {
 		return errors.New("proto: OfferPush.Model empty")
+	}
+	if n := len(o.ConsumerEphemeralPub); n != 0 && n != 32 {
+		return fmt.Errorf("proto: OfferPush.ConsumerEphemeralPub len=%d, want 0 or 32", n)
 	}
 	return nil
 }

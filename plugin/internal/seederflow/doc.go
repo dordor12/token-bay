@@ -18,16 +18,18 @@
 //   - the seeder-side ActiveClientChecker the ccbridge.Janitor
 //     consults to keep per-client session folders for live peers.
 //
-// # Wire-format compatibility note
+// # Tunnel binding
 //
-// shared/proto OfferPush carries the consumer's identity hash but
-// not a per-session ephemeral pubkey, and the tunnel package's
-// listener requires PeerPin at bind time. Until OfferPush gains a
-// consumer-ephemeral-pubkey field, the production listener is
-// bound only after an offer is accepted using the consumer's
-// identity-derived pin material. The Acceptor abstraction in
-// types.go isolates this so tests can exercise the offer→serve
-// flow without standing up a real listener.
+// OfferPush carries consumer_ephemeral_pub (32 bytes). HandleOffer
+// rejects any offer that omits or malforms this field and bumps the
+// Metrics counter "no_ephemeral". On accept, the Coordinator generates
+// a fresh seeder ephemeral keypair and calls Acceptor.Bind(seederPriv,
+// consumerPub) before returning the OfferDecision. The production
+// Acceptor is a RebindingAcceptor that wraps a TunnelListenerFactory
+// (which in turn wraps internal/tunnel.Listen). Each Bind tears down
+// the previous listener and stands up a fresh one bound to the new
+// (seederPriv, consumerPub) pair so QUIC + TLS pinning rejects any
+// dialer whose ephemeral keypair differs from the consumer's.
 //
 // # Spec
 //

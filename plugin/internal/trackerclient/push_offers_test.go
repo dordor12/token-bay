@@ -2,6 +2,7 @@ package trackerclient
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,26 @@ func (f fakeOfferHandler) HandleOffer(_ Ctx, _ *Offer) (OfferDecision, error) {
 	pk := make([]byte, 32)
 	pk[0] = 1
 	return OfferDecision{Accept: true, EphemeralPubkey: pk}, nil
+}
+
+// recordingOfferHandler captures the *Offer it receives for inspection.
+type recordingOfferHandler struct {
+	mu    sync.Mutex
+	last  *Offer
+	reply OfferDecision
+}
+
+func (r *recordingOfferHandler) HandleOffer(_ Ctx, o *Offer) (OfferDecision, error) {
+	r.mu.Lock()
+	r.last = o
+	r.mu.Unlock()
+	return r.reply, nil
+}
+
+func (r *recordingOfferHandler) Last() *Offer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last
 }
 
 func newWiredClientWithOffer(t *testing.T, accept bool) (*Client, *fakeserver.Server, func()) {
@@ -84,6 +105,57 @@ func TestOfferHandlerReject(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, dec.Accept)
 	assert.Equal(t, "no thanks", dec.RejectReason)
+}
+
+func TestOfferHandler_PlumbsConsumerEphemeralPub(t *testing.T) {
+	rec := &recordingOfferHandler{reply: OfferDecision{
+		Accept:          true,
+		EphemeralPubkey: make([]byte, 32),
+	}}
+
+	cli, srv := loopback.Pair(ids.IdentityID{1}, ids.IdentityID{2})
+	drv := loopback.NewDriver()
+	drv.Listen("addr:1", srv)
+	fake := fakeserver.New(srv)
+	cfg := validConfig(t)
+	cfg.Transport = drv
+	cfg.Endpoints[0].Addr = "addr:1"
+	cfg.OfferHandler = rec
+	c, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, c.Start(context.Background()))
+	defer c.Close()
+	_ = cli
+
+	serverDone := make(chan struct{})
+	go func() {
+		_ = fake.Run(context.Background())
+		close(serverDone)
+	}()
+	defer func() {
+		_ = srv.Close()
+		<-serverDone
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, c.WaitConnected(ctx))
+
+	consumerPub := make([]byte, 32)
+	for i := range consumerPub {
+		consumerPub[i] = byte(0xa0 + i)
+	}
+	push := &tbproto.OfferPush{
+		ConsumerId:           make([]byte, 32),
+		EnvelopeHash:         make([]byte, 32),
+		Model:                "claude-sonnet-4-6",
+		ConsumerEphemeralPub: consumerPub,
+	}
+	dec, err := fake.PushOffer(context.Background(), push)
+	require.NoError(t, err)
+	assert.True(t, dec.Accept)
+	got := rec.Last()
+	require.NotNil(t, got)
+	assert.Equal(t, consumerPub, got.ConsumerEphemeralPub, "trackerclient must plumb ConsumerEphemeralPub from the push into Offer")
 }
 
 func TestOfferHandlerInvalidPushRejects(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"slices"
 	"time"
 
@@ -42,6 +43,17 @@ func (c *Coordinator) HandleOffer(ctx trackerclient.Ctx, o *trackerclient.Offer)
 		}, nil
 	}
 
+	// The consumer's ephemeral pubkey is required: the inbound tunnel
+	// listener pins on it during the TLS handshake (spec §6 seeder offer
+	// flow). Without it, we cannot accept a tunnel from the consumer.
+	if len(o.ConsumerEphemeralPub) != ed25519.PublicKeySize {
+		c.incOfferRejected("no_ephemeral")
+		return trackerclient.OfferDecision{
+			Accept:       false,
+			RejectReason: fmt.Sprintf("missing consumer ephemeral pubkey (len=%d, want %d)", len(o.ConsumerEphemeralPub), ed25519.PublicKeySize),
+		}, nil
+	}
+
 	pub, priv, err := ed25519.GenerateKey(c.cfg.Rand)
 	if err != nil {
 		return trackerclient.OfferDecision{
@@ -50,15 +62,25 @@ func (c *Coordinator) HandleOffer(ctx trackerclient.Ctx, o *trackerclient.Offer)
 		}, nil
 	}
 
+	consumerPub := append(ed25519.PublicKey(nil), o.ConsumerEphemeralPub...)
+	if err := c.cfg.Acceptor.Bind(priv, consumerPub); err != nil {
+		c.incOfferRejected("bind_failed")
+		return trackerclient.OfferDecision{
+			Accept:       false,
+			RejectReason: "acceptor bind failed: " + err.Error(),
+		}, nil
+	}
+
 	res := &reservation{
-		envelopeHash:    o.EnvelopeHash,
-		consumerIDHash:  sha256.Sum256(o.ConsumerID[:]),
-		model:           o.Model,
-		maxInputTokens:  o.MaxInputTokens,
-		maxOutputTokens: o.MaxOutputTokens,
-		ephemeralPub:    pub,
-		ephemeralPriv:   priv,
-		registeredAt:    now,
+		envelopeHash:         o.EnvelopeHash,
+		consumerIDHash:       sha256.Sum256(o.ConsumerID[:]),
+		model:                o.Model,
+		maxInputTokens:       o.MaxInputTokens,
+		maxOutputTokens:      o.MaxOutputTokens,
+		ephemeralPub:         pub,
+		ephemeralPriv:        priv,
+		consumerEphemeralPub: consumerPub,
+		registeredAt:         now,
 	}
 	key := hex.EncodeToString(o.EnvelopeHash[:])
 	c.mu.Lock()
@@ -69,6 +91,12 @@ func (c *Coordinator) HandleOffer(ctx trackerclient.Ctx, o *trackerclient.Offer)
 		Accept:          true,
 		EphemeralPubkey: pub,
 	}, nil
+}
+
+func (c *Coordinator) incOfferRejected(reason string) {
+	if c.cfg.Metrics != nil {
+		c.cfg.Metrics.IncOfferRejected(reason)
+	}
 }
 
 // HasReservation reports whether an unconsumed reservation exists for

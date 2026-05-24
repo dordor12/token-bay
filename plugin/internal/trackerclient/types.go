@@ -179,6 +179,12 @@ type Offer struct {
 	Model           string
 	MaxInputTokens  uint32
 	MaxOutputTokens uint32
+	// ConsumerEphemeralPub is the consumer's per-session Ed25519 pubkey
+	// for the tunnel TLS handshake. Empty when the tracker is a legacy
+	// build that doesn't populate it; the seederflow Coordinator rejects
+	// offers without it so the inbound tunnel listener can pin the
+	// consumer's cert.
+	ConsumerEphemeralPub []byte
 }
 
 // OfferDecision is what the seeder returns to the tracker.

@@ -337,6 +337,35 @@ func TestValidateOfferAndSettlementPush(t *testing.T) {
 		EnvelopeHash: make([]byte, 32),
 		Model:        "x",
 	}))
+	// ConsumerEphemeralPub is optional for backward compat (legacy
+	// trackers don't set it). Empty is OK.
+	require.NoError(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:           make([]byte, 32),
+		EnvelopeHash:         make([]byte, 32),
+		Model:                "x",
+		ConsumerEphemeralPub: nil,
+	}))
+	// 32-byte pubkey is OK.
+	require.NoError(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:           make([]byte, 32),
+		EnvelopeHash:         make([]byte, 32),
+		Model:                "x",
+		ConsumerEphemeralPub: make([]byte, 32),
+	}))
+	// Any non-empty length other than 32 is rejected — the field is
+	// either absent or a full Ed25519 pubkey.
+	require.Error(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:           make([]byte, 32),
+		EnvelopeHash:         make([]byte, 32),
+		Model:                "x",
+		ConsumerEphemeralPub: make([]byte, 31),
+	}))
+	require.Error(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:           make([]byte, 32),
+		EnvelopeHash:         make([]byte, 32),
+		Model:                "x",
+		ConsumerEphemeralPub: make([]byte, 33),
+	}))
 	require.Error(t, ValidateSettlementPush(nil))
 	require.Error(t, ValidateSettlementPush(&SettlementPush{PreimageHash: make([]byte, 32)}))
 	require.NoError(t, ValidateSettlementPush(&SettlementPush{
