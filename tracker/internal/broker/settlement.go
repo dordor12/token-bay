@@ -116,7 +116,7 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 
 	// 5. Transition SELECTING→SERVING or ASSIGNED→SERVING (idempotent if already SERVING).
 	// Try both source states; whichever succeeds is fine.
-	if terr := s.mgr.Inflight.Transition(reqID, session.StateAssigned, session.StateServing); terr != nil {
+	if terr := s.mgr.Inflight.Transition(reqID, session.StateAssigned, session.StateServing, s.deps.Now()); terr != nil {
 		if !errors.Is(terr, session.ErrIllegalTransition) {
 			return nil, terr
 		}
@@ -260,12 +260,12 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 		rec.Seq = tipSeq + 1
 	}
 	if appendErr != nil {
-		_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateFailed)
+		_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateFailed, s.deps.Now())
 		return
 	}
 	_, _, _ = s.mgr.Reservations.Release(req.RequestID)
 	_, _ = s.deps.Registry.DecLoad(req.AssignedSeeder)
-	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted)
+	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted, s.deps.Now())
 	if s.deps.Reputation != nil {
 		s.deps.Reputation.OnLedgerEvent(admission.LedgerEvent{
 			Kind:        admission.LedgerEventSettlement,

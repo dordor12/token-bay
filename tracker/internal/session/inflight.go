@@ -39,7 +39,12 @@ func (f *Inflight) Get(id [16]byte) (*Request, bool) {
 // is not present, ErrIllegalTransition if the current state is not `from`.
 // Concurrent Transition calls win exactly once for any given (from, to);
 // losers see ErrIllegalTransition.
-func (f *Inflight) Transition(id [16]byte, from, to State) error {
+//
+// `now` is the caller-owned clock; terminal transitions record it as
+// TerminatedAt. Matches the rest of the session package (ForceFail,
+// SweepTerminal, SweepExpired) — the package owns no clock of its own
+// so tests can drive time deterministically.
+func (f *Inflight) Transition(id [16]byte, from, to State, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, ok := f.byID[id]
@@ -51,7 +56,7 @@ func (f *Inflight) Transition(id [16]byte, from, to State) error {
 	}
 	r.State = to
 	if to == StateCompleted || to == StateFailed {
-		r.TerminatedAt = time.Now()
+		r.TerminatedAt = now
 	}
 	return nil
 }

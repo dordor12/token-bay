@@ -62,9 +62,9 @@ func (m *Manager) SweepExpiredAndFail(now time.Time) []Expiry {
 			}
 			switch req.State {
 			case StateSelecting:
-				_ = m.Inflight.Transition(slot.ReqID, StateSelecting, StateFailed)
+				_ = m.Inflight.Transition(slot.ReqID, StateSelecting, StateFailed, now)
 			case StateAssigned:
-				_ = m.Inflight.Transition(slot.ReqID, StateAssigned, StateFailed)
+				_ = m.Inflight.Transition(slot.ReqID, StateAssigned, StateFailed, now)
 			}
 		}
 		out = append(out, e)
