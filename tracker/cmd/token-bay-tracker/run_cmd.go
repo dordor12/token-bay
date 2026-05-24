@@ -75,6 +75,16 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("ledger: %w", err)
 			}
+
+			// Ledger integrity gate (spec §8). A corrupt chain MUST NOT
+			// serve traffic — run before any server starts, fail non-zero
+			// on break. The counter is shared with the federation peer-
+			// reconnect gate; register once here.
+			integrityMetrics := ledger.NewIntegrityMetrics(prometheus.DefaultRegisterer)
+			if err := runStartupIntegrityCheck(cmd.Context(), led, integrityMetrics, logger); err != nil {
+				return err
+			}
+
 			led.StartRollup(time.Duration(cfg.Ledger.MerkleRootIntervalMin) * time.Minute)
 			defer led.Close() //nolint:errcheck
 
@@ -153,18 +163,26 @@ func newRunCmd() *cobra.Command {
 					TrackerID: tid, PubKey: pk, Addr: p.Addr, Region: p.Region,
 				})
 			}
+			// fedRef holds the *Federation back-reference for the
+			// OnPeerReconnect hook. Same chicken-and-egg pattern as
+			// pushProxy / identityProxy: the hook needs Depeer but
+			// the federation isn't constructed yet. Stored via
+			// atomic.Pointer so the goroutine that fires the hook
+			// sees the assignment with proper happens-before.
+			fedRef := &atomic.Pointer[federation.Federation]{}
 			fed, err := federation.Open(federation.Config{
-				MyTrackerID:      ids.TrackerID(sha256.Sum256(trackerPub)),
-				MyPriv:           trackerKey,
-				HandshakeTimeout: time.Duration(cfg.Federation.HandshakeTimeoutS) * time.Second,
-				DedupeTTL:        time.Duration(cfg.Federation.GossipDedupeTTLS) * time.Second,
-				SendQueueDepth:   cfg.Federation.SendQueueDepth,
-				GossipRateQPS:    cfg.Federation.GossipRateQPS,
-				PublishCadence:   time.Duration(cfg.Federation.PublishCadenceS) * time.Second,
-				IdleTimeout:      time.Duration(cfg.Federation.IdleTimeoutS) * time.Second,
-				RedialBase:       time.Duration(cfg.Federation.RedialBaseS) * time.Second,
-				RedialMax:        time.Duration(cfg.Federation.RedialMaxS) * time.Second,
-				Peers:            fedPeers,
+				MyTrackerID:               ids.TrackerID(sha256.Sum256(trackerPub)),
+				MyPriv:                    trackerKey,
+				HandshakeTimeout:          time.Duration(cfg.Federation.HandshakeTimeoutS) * time.Second,
+				DedupeTTL:                 time.Duration(cfg.Federation.GossipDedupeTTLS) * time.Second,
+				SendQueueDepth:            cfg.Federation.SendQueueDepth,
+				GossipRateQPS:             cfg.Federation.GossipRateQPS,
+				PublishCadence:            time.Duration(cfg.Federation.PublishCadenceS) * time.Second,
+				IdleTimeout:               time.Duration(cfg.Federation.IdleTimeoutS) * time.Second,
+				RedialBase:                time.Duration(cfg.Federation.RedialBaseS) * time.Second,
+				RedialMax:                 time.Duration(cfg.Federation.RedialMaxS) * time.Second,
+				Peers:                     fedPeers,
+				IntegrityCheckOnReconnect: cfg.Federation.IntegrityCheckOnReconnect,
 				Health: federation.HealthConfig{
 					UptimeWindow:        time.Duration(cfg.Federation.Health.UptimeWindowS) * time.Second,
 					RevGossipWindow:     time.Duration(cfg.Federation.Health.RevGossipWindowS) * time.Second,
@@ -191,10 +209,18 @@ func newRunCmd() *cobra.Command {
 				Metrics:           federation.NewMetrics(prometheus.DefaultRegisterer),
 				Logger:            logger,
 				Now:               time.Now,
+				OnPeerReconnect: func(ctx context.Context, peer ids.TrackerID) {
+					f := fedRef.Load()
+					if f == nil {
+						return
+					}
+					runReconnectIntegrityCheck(ctx, led, integrityMetrics, logger, peer, f.Depeer)
+				},
 			})
 			if err != nil {
 				return fmt.Errorf("federation: %w", err)
 			}
+			fedRef.Store(fed)
 			defer fed.Close() //nolint:errcheck
 
 			rep, err := reputation.Open(cmd.Context(), cfg.Reputation, reputation.WithFreezeListener(fed))

@@ -105,6 +105,12 @@ type FederationConfig struct {
 	// Per-bucket rate=0 disables that kind. Defaults derived from
 	// spec §10 acceptance criteria.
 	RateLimit FederationRateLimitConfig `yaml:"rate_limit"`
+
+	// IntegrityCheckOnReconnect gates the spec §8 ledger-chain
+	// integrity audit run after each peer handshake. Tri-state pointer
+	// so operators can explicitly disable (`false`) without colliding
+	// with the default-true behavior when the key is omitted.
+	IntegrityCheckOnReconnect *bool `yaml:"integrity_check_on_reconnect"`
 }
 
 // FederationRateLimitConfig caps inbound gossip per (peer, kind). Each
@@ -234,6 +240,11 @@ type ModelPriceConfig struct {
 	OutCreditsPerToken uint64 `yaml:"out_credits_per_token"`
 }
 
+// boolPtr returns the address of a fresh bool initialized to v. Used by
+// DefaultConfig for tri-state fields (nil = "use default"); kept tight
+// to this file's needs rather than imported from a util package.
+func boolPtr(v bool) *bool { return &v }
+
 // DefaultConfig returns a Config with every defaultable field populated
 // per the design spec §4.1. Required fields (see spec §4.2) are returned
 // zero-valued so Validate flags them when the operator forgets.
@@ -310,6 +321,7 @@ func DefaultConfig() *Config {
 				EquivocationEvidencePerSec: 1,
 				TransferPerSec:             20,
 			},
+			IntegrityCheckOnReconnect: boolPtr(true),
 		},
 		Reputation: ReputationConfig{
 			EvaluationIntervalS: 60,

@@ -167,6 +167,12 @@ func ApplyDefaults(c *Config) {
 		rl.TransferPerSec == 0 {
 		*rl = d.Federation.RateLimit
 	}
+	// IntegrityCheckOnReconnect defaults to true when unset (nil
+	// pointer). An explicit false (operator opt-out) is preserved.
+	if c.Federation.IntegrityCheckOnReconnect == nil {
+		v := true
+		c.Federation.IntegrityCheckOnReconnect = &v
+	}
 
 	// Reputation
 	if c.Reputation.EvaluationIntervalS == 0 {
