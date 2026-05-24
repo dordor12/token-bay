@@ -58,6 +58,35 @@ func (s *Store) IsIdentityRevoked(ctx context.Context, identityID []byte) (bool,
 	return true, nil
 }
 
+// ListRevocationsForIdentity returns every peer_revocations row whose
+// identity_id matches, across all issuers. Used by the registry +
+// admission integration (slice 12) to enforce §6 third bullet: tear
+// down active sessions on revocation, refuse subsequent enrolls.
+func (s *Store) ListRevocationsForIdentity(ctx context.Context, identityID []byte) ([]PeerRevocation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT tracker_id, identity_id, reason, revoked_at, tracker_sig, received_at
+		FROM peer_revocations WHERE identity_id = ?
+		ORDER BY received_at ASC, tracker_id ASC`,
+		identityID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: ListRevocationsForIdentity: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []PeerRevocation
+	for rows.Next() {
+		var r PeerRevocation
+		if err := rows.Scan(&r.TrackerID, &r.IdentityID, &r.Reason, &r.RevokedAt, &r.TrackerSig, &r.ReceivedAt); err != nil {
+			return nil, fmt.Errorf("storage: ListRevocationsForIdentity scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: ListRevocationsForIdentity rows: %w", err)
+	}
+	return out, nil
+}
+
 // GetPeerRevocation returns the row for (trackerID, identityID), or
 // ok=false on miss.
 func (s *Store) GetPeerRevocation(ctx context.Context, trackerID, identityID []byte) (PeerRevocation, bool, error) {

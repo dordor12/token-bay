@@ -69,6 +69,41 @@ func TestGetPeerRevocation_Missing(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestListRevocationsForIdentity_MultipleIssuers(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	idA := bytes.Repeat([]byte{0xAA}, 32)
+	idB := bytes.Repeat([]byte{0xBB}, 32)
+	identity := bytes.Repeat([]byte{0xFF}, 32)
+	require.NoError(t, s.PutPeerRevocation(ctx, PeerRevocation{
+		TrackerID: idA, IdentityID: identity, Reason: 1, RevokedAt: 100,
+		TrackerSig: bytes.Repeat([]byte{1}, 64), ReceivedAt: 200,
+	}))
+	require.NoError(t, s.PutPeerRevocation(ctx, PeerRevocation{
+		TrackerID: idB, IdentityID: identity, Reason: 1, RevokedAt: 150,
+		TrackerSig: bytes.Repeat([]byte{2}, 64), ReceivedAt: 250,
+	}))
+	// Different identity must not show up in the result.
+	require.NoError(t, s.PutPeerRevocation(ctx, PeerRevocation{
+		TrackerID: idA, IdentityID: bytes.Repeat([]byte{0xEE}, 32), Reason: 1, RevokedAt: 100,
+		TrackerSig: bytes.Repeat([]byte{1}, 64), ReceivedAt: 200,
+	}))
+
+	got, err := s.ListRevocationsForIdentity(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, idA, got[0].TrackerID, "ORDER BY received_at ASC")
+	assert.Equal(t, idB, got[1].TrackerID)
+}
+
+func TestListRevocationsForIdentity_Empty(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	got, err := s.ListRevocationsForIdentity(ctx, bytes.Repeat([]byte{0xFF}, 32))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
 func TestIsIdentityRevoked_PresentAndMissing(t *testing.T) {
 	s := openTempStore(t)
 	ctx := context.Background()
