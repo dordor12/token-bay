@@ -162,7 +162,14 @@ func TestRunCmd_StartsAndStops(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- cmd.Execute() }()
 
-	time.Sleep(200 * time.Millisecond)
+	// sidecar.url should appear once ccproxy binds. Block on that
+	// rather than a fixed sleep so the test is fast on quick machines
+	// and resilient on slow ones.
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(discoveryFilename(dir))
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond, "expected sidecar.url to be written during run")
+
 	cancel()
 
 	select {
@@ -173,6 +180,10 @@ func TestRunCmd_StartsAndStops(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not return within 3s of ctx cancel")
 	}
+
+	// Discovery file must be cleaned up on shutdown.
+	_, err := os.Stat(discoveryFilename(dir))
+	require.True(t, os.IsNotExist(err), "sidecar.url should be removed on shutdown, got %v", err)
 }
 
 func TestResolveTrackerEndpoints_AutoWithoutSignerFails(t *testing.T) {
