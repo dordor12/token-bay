@@ -23,6 +23,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newEnrollCmd())
 	root.AddCommand(newTransferCmd())
+	root.AddCommand(newHooksCmd())
 	return root
 }
 
