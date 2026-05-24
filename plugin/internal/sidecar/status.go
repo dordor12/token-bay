@@ -29,3 +29,16 @@ func (a *App) Status() Status {
 		Tracker:    a.tracker.Status(),
 	}
 }
+
+// statusSnapshot is the closure handed to ccproxy.SetStatusProvider —
+// renders Status() as a CLI-friendly map. Tracker.State stringifies via
+// its String() method (trackerclient.ConnectionState is a Stringer).
+func (a *App) statusSnapshot() any {
+	s := a.Status()
+	return map[string]any{
+		"running":     s.Running,
+		"started_at":  s.StartedAt.UTC().Format(time.RFC3339),
+		"ccproxy_url": s.CCProxyURL,
+		"tracker":     s.Tracker.Phase.String(),
+	}
+}
