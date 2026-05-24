@@ -1,7 +1,9 @@
 package sidecar
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/ccproxy"
 	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
+	"github.com/token-bay/token-bay/plugin/internal/hooks"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/seederflow"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
@@ -94,7 +97,29 @@ type Deps struct {
 	// that don't exercise the consumer flow. Required when ConsumerFlow
 	// is set, since the two halves must observe the same map.
 	SessionStore *ccproxy.SessionModeStore
+
+	// HookSink, when non-nil, is wired into ccproxy via
+	// ccproxy.WithHookSink so POST /_hooks/{event} dispatches into it.
+	// The cmd layer typically passes ConsumerFlow here (it implements
+	// hooks.Sink). Optional: when nil the hook IPC endpoint still
+	// replies with hooks.EmptyResponse so a host turn never blocks.
+	HookSink hooks.Sink
+
+	// BalanceFn, when non-nil, supplies the snapshot rendered by GET
+	// /_balance. The cmd layer typically wraps trackerclient.BalanceCached
+	// so the slash command's `balance` subcommand reflects the same
+	// cached value the consumer-side envelopes use. Optional — when
+	// nil, /_balance returns 503.
+	BalanceFn BalanceFunc
 }
+
+// BalanceFunc resolves the supervisor's view of the local identity's
+// credit balance. Implementations typically call
+// trackerclient.BalanceCached and translate the proto snapshot into
+// the three CLI-facing fields. Implementations must be safe to call
+// concurrently — the ccproxy handler may invoke them from any
+// inbound request goroutine.
+type BalanceFunc func(ctx context.Context) (credits int64, lastUpdated time.Time, source string, err error)
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps
 // chain on failure.

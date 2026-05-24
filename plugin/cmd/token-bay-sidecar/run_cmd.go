@@ -80,7 +80,11 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
-			logger := zerolog.New(cmd.ErrOrStderr()).With().Timestamp().Logger()
+			// zerolog.SyncWriter serialises writes — required because
+			// run_cmd's tests pass a *bytes.Buffer (not goroutine-safe)
+			// as Stderr, and several subsystems (trackerclient, seederflow,
+			// consumerflow, the discovery goroutine) log concurrently.
+			logger := zerolog.New(zerolog.SyncWriter(cmd.ErrOrStderr())).With().Timestamp().Logger()
 
 			seederRoot := filepath.Join(cfgDir, "seeder-sessions")
 			runner := &ccbridge.ExecRunner{
@@ -166,6 +170,8 @@ func newRunCmd() *cobra.Command {
 				SeederFlow:       coord,
 				ConsumerFlow:     consumerCoord,
 				SessionStore:     sessionStore,
+				HookSink:         consumerCoord,
+				BalanceFn:        balanceFnFromTracker(tracker, signer),
 			}
 
 			app, err := sidecar.New(deps)
@@ -177,6 +183,16 @@ func newRunCmd() *cobra.Command {
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+
+			// Discovery file: poll the App's status until ccproxy URL is
+			// live, then write $cfgDir/sidecar.url so the hooks
+			// subprocess can find us. Removed on shutdown so a stale
+			// URL never points at a defunct process.
+			go writeDiscoveryFileWhenReady(ctx, cfgDir, func() string {
+				return app.Status().CCProxyURL
+			})
+			defer func() { _ = removeDiscoveryFile(cfgDir) }()
+
 			return app.Run(ctx)
 		},
 	}
@@ -294,4 +310,21 @@ func (deferredTracker) UsageReport(_ context.Context, _ *trackerclient.UsageRepo
 
 func (deferredTracker) Advertise(_ context.Context, _ *trackerclient.Advertisement) error {
 	return errors.New("deferredTracker: SetTracker was not called before use")
+}
+
+// balanceFnFromTracker adapts a trackerclient.Client + Signer to the
+// sidecar.BalanceFunc the supervisor wires into ccproxy.
+// SetBalanceProvider. The tracker.BalanceCached call returns a fresh
+// snapshot when the cache is empty or stale, otherwise the cached one —
+// the "source" field surfaces which to the CLI/slash-command renderer.
+func balanceFnFromTracker(tc *trackerclient.Client, signer *identity.Signer) sidecar.BalanceFunc {
+	return func(ctx context.Context) (int64, time.Time, string, error) {
+		snap, err := tc.BalanceCached(ctx, signer.IdentityID())
+		if err != nil {
+			return 0, time.Time{}, "error", err
+		}
+		body := snap.GetBody()
+		issuedAt := time.Unix(int64(body.GetIssuedAt()), 0).UTC() //nolint:gosec
+		return body.GetCredits(), issuedAt, "cached", nil
+	}
 }

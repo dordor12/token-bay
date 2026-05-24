@@ -94,6 +94,9 @@ func New(deps Deps) (*App, error) {
 	if deps.SessionStore != nil {
 		proxyOpts = append(proxyOpts, ccproxy.WithSessionStore(deps.SessionStore))
 	}
+	if deps.HookSink != nil {
+		proxyOpts = append(proxyOpts, ccproxy.WithHookSink(deps.HookSink))
+	}
 	proxy := ccproxy.New(proxyOpts...)
 
 	return &App{
@@ -126,6 +129,27 @@ func (a *App) Run(ctx context.Context) error {
 
 	if err := a.proxy.Start(ctx); err != nil {
 		return fmt.Errorf("sidecar: start ccproxy: %w", err)
+	}
+
+	// Wire the GET /_status and /_balance providers post-Start so the
+	// resolved CCProxyURL is available in the snapshot. Both are closures
+	// that observe live App / cmd-layer state every call — the JSON the
+	// slash commands render reflects current truth, not a stale boot
+	// snapshot.
+	a.proxy.SetStatusProvider(a.statusSnapshot)
+	if a.deps.BalanceFn != nil {
+		fn := a.deps.BalanceFn
+		a.proxy.SetBalanceProvider(func() any {
+			credits, lastUpdated, source, err := fn(ctx)
+			if err != nil {
+				return map[string]any{"error": err.Error()}
+			}
+			return map[string]any{
+				"credits":      credits,
+				"last_updated": lastUpdated.UTC().Format(time.RFC3339),
+				"source":       source,
+			}
+		})
 	}
 
 	if err := a.tracker.Start(ctx); err != nil {
