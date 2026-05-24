@@ -250,6 +250,75 @@ func (tc *transferCoordinator) emitTransferReject(ctx context.Context, dest ids.
 	tc.cfg.MetricsCounter("transfer_reject_sent")
 }
 
+// IssueTransferReversal (slice 14) builds, signs, and forwards a
+// TransferReversal envelope from the destination (this tracker) toward
+// the source. Used by the admin API after operator review of a
+// transfer-out that never settled at the destination after the §4.3
+// 24h window. The source side, on receipt, MAY refund — operator
+// policy decision; v1 is informational + auditable, no automatic
+// refund. Returns the signed wire bytes for audit logging.
+func (tc *transferCoordinator) IssueTransferReversal(
+	ctx context.Context, source ids.TrackerID, nonce [32]byte, evidence string,
+) ([]byte, error) {
+	srcID := source.Bytes()
+	myID := tc.cfg.MyTrackerID.Bytes()
+	rev := &fed.TransferReversal{
+		SourceTrackerId: srcID[:],
+		DestTrackerId:   myID[:],
+		Nonce:           nonce[:],
+		Evidence:        evidence,
+		Timestamp:       uint64(tc.cfg.Now().Unix()), //nolint:gosec
+	}
+	cb, err := fed.CanonicalTransferReversalPreSig(rev)
+	if err != nil {
+		return nil, fmt.Errorf("federation: canonical reversal: %w", err)
+	}
+	rev.DestTrackerSig = ed25519.Sign(tc.cfg.MyPriv, cb)
+	if err := fed.ValidateTransferReversal(rev); err != nil {
+		return nil, fmt.Errorf("federation: validate reversal: %w", err)
+	}
+	payload, err := proto.Marshal(rev)
+	if err != nil {
+		return nil, fmt.Errorf("federation: marshal reversal: %w", err)
+	}
+	if err := tc.cfg.Send(ctx, source, fed.Kind_KIND_TRANSFER_REVERSAL, payload); err != nil {
+		return nil, fmt.Errorf("federation: send reversal: %w", err)
+	}
+	tc.cfg.MetricsCounter("transfer_reversal_sent")
+	return payload, nil
+}
+
+// OnTransferReversal is the source-side dispatch hook. Validates the
+// envelope (sig + shape). v1 is informational only — emits a metric +
+// log line. Future operator-driven refund automation will hang off
+// this hook.
+func (tc *transferCoordinator) OnTransferReversal(_ context.Context, env *fed.Envelope, fromPeer ids.TrackerID) {
+	rev := &fed.TransferReversal{}
+	if err := proto.Unmarshal(env.Payload, rev); err != nil {
+		tc.cfg.MetricsCounter("transfer_reversal_shape")
+		return
+	}
+	if err := fed.ValidateTransferReversal(rev); err != nil {
+		tc.cfg.MetricsCounter("transfer_reversal_shape")
+		return
+	}
+	pub, ok := tc.cfg.PeerPubKey(fromPeer)
+	if !ok {
+		tc.cfg.MetricsCounter("transfer_reversal_unknown_issuer")
+		return
+	}
+	cb, err := fed.CanonicalTransferReversalPreSig(rev)
+	if err != nil {
+		tc.cfg.MetricsCounter("transfer_reversal_canonical")
+		return
+	}
+	if !ed25519.Verify(pub, cb, rev.DestTrackerSig) {
+		tc.cfg.MetricsCounter("transfer_reversal_sig")
+		return
+	}
+	tc.cfg.MetricsCounter("transfer_reversal_received")
+}
+
 // OnReject is the dest-side dispatch hook. Validates the envelope and
 // hands the parsed reject to the pending StartTransfer call via rejCh.
 // If no pending call matches the nonce, the reject is dropped silently

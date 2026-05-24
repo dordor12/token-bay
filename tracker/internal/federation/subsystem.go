@@ -295,6 +295,20 @@ func (f *Federation) ClearEquivocation(peer ids.TrackerID) bool {
 	return f.health.ClearEquivocation(peer)
 }
 
+// IssueTransferReversal is the slice-14 admin entry point. Builds,
+// signs, and forwards a TransferReversal envelope to source. Returns
+// the signed wire bytes (for audit logging) or an error. Returns
+// ErrTransferDisabled when the federation was opened without a
+// LedgerHooks dep.
+func (f *Federation) IssueTransferReversal(
+	ctx context.Context, source ids.TrackerID, nonce [32]byte, evidence string,
+) ([]byte, error) {
+	if f.transfer == nil || f.transfer.cfg.Ledger == nil {
+		return nil, ErrTransferDisabled
+	}
+	return f.transfer.IssueTransferReversal(ctx, source, nonce, evidence)
+}
+
 // Depeer removes a peer from the active set.
 func (f *Federation) Depeer(id ids.TrackerID, reason DepeerReason) error {
 	// Snapshot + delete under f.mu, then Stop outside the lock: p.Stop
@@ -560,6 +574,12 @@ func (f *Federation) makeDispatcher(c PeerConn, peerID ids.TrackerID) func(*fed.
 				return
 			}
 			f.transfer.OnReject(context.Background(), env, peerID)
+		case fed.Kind_KIND_TRANSFER_REVERSAL:
+			if f.transfer == nil {
+				f.dep.Metrics.InvalidFrames("transfer_disabled")
+				return
+			}
+			f.transfer.OnTransferReversal(context.Background(), env, peerID)
 		case fed.Kind_KIND_REVOCATION:
 			if f.revocation == nil {
 				f.dep.Metrics.InvalidFrames("revocation_disabled")

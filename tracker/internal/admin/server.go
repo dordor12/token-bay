@@ -83,6 +83,13 @@ type FederationActions interface {
 	// peer with the given TrackerID-hex. Returns true if the flag was
 	// previously set.
 	ClearEquivocation(trackerIDHex string) (bool, error)
+
+	// IssueTransferReversal (slice 14) signs and forwards a
+	// KIND_TRANSFER_REVERSAL envelope from this tracker (as
+	// destination) to the source tracker identified by trackerIDHex,
+	// referencing the unsettled transfer-out by hex-encoded nonce.
+	// Returns the signed wire bytes for audit logging.
+	IssueTransferReversal(sourceTrackerIDHex, nonceHex, evidence string) ([]byte, error)
 }
 
 // Server is the admin HTTP server. Single-call: a second Run returns
@@ -233,6 +240,8 @@ func (s *Server) buildMux() http.Handler {
 	if s.deps.FederationActions != nil {
 		mux.Handle("POST /federation/peers/{id}/clear_equivocation",
 			guard(http.HandlerFunc(s.handleClearEquivocation)))
+		mux.Handle("POST /federation/transfer_reversal",
+			guard(http.HandlerFunc(s.handleTransferReversal)))
 	}
 
 	return mux

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -425,6 +426,23 @@ func (f federationAdminActions) ClearEquivocation(trackerIDHex string) (bool, er
 		return false, err
 	}
 	return f.fed.ClearEquivocation(tid), nil
+}
+
+func (f federationAdminActions) IssueTransferReversal(sourceTrackerIDHex, nonceHex, evidence string) ([]byte, error) {
+	tid, err := hexToTrackerID(sourceTrackerIDHex)
+	if err != nil {
+		return nil, fmt.Errorf("source_tracker_id: %w", err)
+	}
+	nonceB, err := hex.DecodeString(nonceHex)
+	if err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
+	if len(nonceB) != 32 {
+		return nil, fmt.Errorf("nonce: must be 32 bytes (64 hex chars), got %d", len(nonceB))
+	}
+	var nonce [32]byte
+	copy(nonce[:], nonceB)
+	return f.fed.IssueTransferReversal(context.Background(), tid, nonce, evidence)
 }
 
 func buildAdminServer(

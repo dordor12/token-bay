@@ -72,3 +72,17 @@ func CanonicalTransferRejectPreSig(m *TransferReject) ([]byte, error) {
 	clone.SourceTrackerSig = nil
 	return signing.DeterministicMarshal(clone)
 }
+
+// CanonicalTransferReversalPreSig returns the deterministic byte
+// representation of m with dest_tracker_sig cleared. Slice 14.
+func CanonicalTransferReversalPreSig(m *TransferReversal) ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("federation: nil TransferReversal")
+	}
+	clone, ok := proto.Clone(m).(*TransferReversal)
+	if !ok {
+		return nil, errors.New("federation: clone TransferReversal")
+	}
+	clone.DestTrackerSig = nil
+	return signing.DeterministicMarshal(clone)
+}
