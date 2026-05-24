@@ -9,6 +9,7 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/ccproxy"
 	"github.com/token-bay/token-bay/plugin/internal/consumerflow"
+	"github.com/token-bay/token-bay/plugin/internal/hooks"
 	"github.com/token-bay/token-bay/plugin/internal/identity"
 	"github.com/token-bay/token-bay/plugin/internal/seederflow"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
@@ -94,6 +95,17 @@ type Deps struct {
 	// that don't exercise the consumer flow. Required when ConsumerFlow
 	// is set, since the two halves must observe the same map.
 	SessionStore *ccproxy.SessionModeStore
+
+	// HookSink is the destination for events POSTed to ccproxy's
+	// /_hooks/{event} endpoint by per-event hook subprocesses (the cmd
+	// layer's `token-bay-sidecar hooks` subcommand). When set, the
+	// supervisor passes it to ccproxy via WithHookSink so the in-process
+	// dispatcher routes parsed events to the configured Sink — in
+	// production this is the same *consumerflow.Coordinator wired into
+	// ConsumerFlow. Optional — nil leaves ccproxy responding 200 +
+	// EmptyResponse on hook POSTs (useful for tests that don't exercise
+	// the consumer flow).
+	HookSink hooks.Sink
 }
 
 // Validate enforces required-field invariants. Returns an ErrInvalidDeps

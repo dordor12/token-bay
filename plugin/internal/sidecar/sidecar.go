@@ -94,6 +94,14 @@ func New(deps Deps) (*App, error) {
 	if deps.SessionStore != nil {
 		proxyOpts = append(proxyOpts, ccproxy.WithSessionStore(deps.SessionStore))
 	}
+	if deps.HookSink != nil {
+		// Plumbs the consumerflow.Coordinator (or any other hooks.Sink the
+		// cmd layer chose) into ccproxy's /_hooks/{event} HTTP handler.
+		// Without this option, POSTs reach a NopSink and the Coordinator
+		// is never notified of StopFailure / SessionStart / SessionEnd /
+		// UserPromptSubmit events.
+		proxyOpts = append(proxyOpts, ccproxy.WithHookSink(deps.HookSink))
+	}
 	proxy := ccproxy.New(proxyOpts...)
 
 	return &App{
@@ -127,6 +135,26 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.proxy.Start(ctx); err != nil {
 		return fmt.Errorf("sidecar: start ccproxy: %w", err)
 	}
+
+	// Wire the /_status snapshot provider now that the proxy is bound.
+	// Captures a.Status() so slash commands can fetch the live state by
+	// GETting <sidecarURL>/_status without needing to read app internals.
+	a.proxy.SetStatusProvider(func() map[string]any {
+		st := a.Status()
+		out := map[string]any{
+			"running":       st.Running,
+			"started_at":    st.StartedAt,
+			"ccproxy_url":   st.CCProxyURL,
+			"tracker_phase": st.Tracker.Phase.String(),
+		}
+		if !st.Tracker.ConnectedAt.IsZero() {
+			out["tracker_connected_at"] = st.Tracker.ConnectedAt
+		}
+		if st.Tracker.LastError != nil {
+			out["tracker_last_error"] = st.Tracker.LastError.Error()
+		}
+		return out
+	})
 
 	if err := a.tracker.Start(ctx); err != nil {
 		// ccproxy is already running; tear it down before returning.
