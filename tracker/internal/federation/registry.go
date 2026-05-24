@@ -20,7 +20,8 @@ const (
 	ReasonHandshakeFailed
 	ReasonInvalidSignature
 	ReasonDisconnected
-	ReasonLowHealth // slice 11: sustained low health score
+	ReasonLowHealth         // slice 11: sustained low health score
+	ReasonLocalChainCorrupt // local ledger chain failed integrity check on peer reconnect
 )
 
 func (r DepeerReason) String() string {
@@ -37,6 +38,8 @@ func (r DepeerReason) String() string {
 		return "disconnected"
 	case ReasonLowHealth:
 		return "low_health"
+	case ReasonLocalChainCorrupt:
+		return "local_chain_corrupt"
 	}
 	return "unknown"
 }

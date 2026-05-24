@@ -76,6 +76,7 @@ federation:
     peer_exchange_per_sec: 0.05
     equivocation_evidence_per_sec: 1
     transfer_per_sec: 20
+  integrity_check_on_reconnect: true
 
 reputation:
   evaluation_interval_s: 60

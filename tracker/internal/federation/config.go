@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"context"
 	"crypto/ed25519"
 	"time"
 
@@ -60,6 +61,13 @@ type Config struct {
 	LowHealthThreshold       float64
 	LowHealthSustainedWindow time.Duration
 	HealthWatchInterval      time.Duration // default 5m
+
+	// IntegrityCheckOnReconnect gates the post-handshake ledger-chain
+	// integrity audit (spec §8). nil means "use default" (true); a
+	// non-nil pointer makes the operator's choice explicit. Hook
+	// implementations are wired via Deps.OnPeerReconnect — leaving that
+	// nil silently disables the gate regardless of this knob.
+	IntegrityCheckOnReconnect *bool
 }
 
 // Deps is the wired-in collaborators (Transport, RootSource, archive,
@@ -88,6 +96,14 @@ type Deps struct {
 	// returns ErrPeerExchangeDisabled and inbound KIND_PEER_EXCHANGE is
 	// rejected with metric reason "peer_exchange_disabled".
 	KnownPeers KnownPeersArchive
+
+	// OnPeerReconnect, when non-nil, is invoked asynchronously after
+	// every successful peer attach (steady transition). The composition
+	// root uses it to run the spec §8 ledger-chain integrity check and
+	// drop the peer on local-chain corruption. Gated by
+	// Config.IntegrityCheckOnReconnect (default true). Hooks must
+	// tolerate Federation.Close cancelling the supplied context.
+	OnPeerReconnect func(ctx context.Context, peer ids.TrackerID)
 }
 
 func (c Config) withDefaults() Config {

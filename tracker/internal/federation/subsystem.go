@@ -517,10 +517,34 @@ func (f *Federation) attachPeerLocked(res HandshakeResult, c PeerConn) *Peer {
 	// inflightAttaches before calling p.Stop on this pe. Done is fired
 	// after pe.Start completes spawning the recv goroutine.
 	f.inflightAttaches.Add(1)
+	// Spawning the §8 reconnect hook under the same lock — and on the
+	// inflightAttaches WG — keeps Close from observing zero pending
+	// work between this attach's Done and the hook's Add. The hook
+	// itself runs async (its own goroutine) so it never blocks the
+	// peer-steady transition.
+	f.spawnReconnectHook(res.PeerTrackerID)
 	f.mu.Unlock()
 	pe.Start(context.Background())
 	f.inflightAttaches.Done()
 	return pe
+}
+
+// spawnReconnectHook runs Deps.OnPeerReconnect on its own goroutine if
+// the gate is enabled. The goroutine is tracked via inflightAttaches so
+// Federation.Close drains it. Caller holds f.mu — the Add must happen
+// before any concurrent Close observes zero inflight work.
+func (f *Federation) spawnReconnectHook(peer ids.TrackerID) {
+	if f.dep.OnPeerReconnect == nil {
+		return
+	}
+	if f.cfg.IntegrityCheckOnReconnect != nil && !*f.cfg.IntegrityCheckOnReconnect {
+		return
+	}
+	f.inflightAttaches.Add(1)
+	go func() {
+		defer f.inflightAttaches.Done()
+		f.dep.OnPeerReconnect(f.listenCtx, peer)
+	}()
 }
 
 // makeDispatcher returns the recvLoop callback for one peer. The
