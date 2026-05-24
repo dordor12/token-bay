@@ -1,37 +1,32 @@
-MODULES := plugin shared tracker
+.PHONY: all test lint check build clean proto-check
 
-# Per-module sub-targets are declared phony so `make -jN` can run
-# them in parallel. The previous `for m in $(MODULES)` recipe was a
-# single shell command and could not be parallelized.
-.PHONY: all check clean proto-check
-.PHONY: test  $(addprefix test-,$(MODULES))
-.PHONY: lint  $(addprefix lint-,$(MODULES))
-.PHONY: build $(addprefix build-,$(MODULES))
+MODULES := plugin shared tracker
 
 all: check build
 
-test:  $(addprefix test-,$(MODULES))
-lint:  $(addprefix lint-,$(MODULES))
-build: $(addprefix build-,$(MODULES))
+test:
+	@for m in $(MODULES); do \
+		if [ -f $$m/Makefile ]; then \
+			echo "=== test: $$m ==="; \
+			$(MAKE) -C $$m test || exit 1; \
+		fi; \
+	done
 
-# Generate explicit per-module rules. Pattern rules (test-%:) cannot
-# be used here because .PHONY targets bypass implicit-rule lookup in
-# GNU make.
-define MODULE_RULES
-test-$(1):
-	@echo "=== test: $(1) ==="
-	@$$(MAKE) -C $(1) test
+lint:
+	@for m in $(MODULES); do \
+		if [ -f $$m/Makefile ]; then \
+			echo "=== lint: $$m ==="; \
+			$(MAKE) -C $$m lint || exit 1; \
+		fi; \
+	done
 
-lint-$(1):
-	@echo "=== lint: $(1) ==="
-	@$$(MAKE) -C $(1) lint
-
-build-$(1):
-	@echo "=== build: $(1) ==="
-	@$$(MAKE) -C $(1) build
-endef
-
-$(foreach m,$(MODULES),$(eval $(call MODULE_RULES,$(m))))
+build:
+	@for m in $(MODULES); do \
+		if [ -f $$m/Makefile ]; then \
+			echo "=== build: $$m ==="; \
+			$(MAKE) -C $$m build || exit 1; \
+		fi; \
+	done
 
 check: test lint
 
