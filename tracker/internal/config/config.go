@@ -96,6 +96,10 @@ type FederationConfig struct {
 	Peers             []FederationPeer          `yaml:"peers"`
 	Bootstrap         FederationBootstrapConfig `yaml:"bootstrap"`
 	Health            FederationHealthConfig    `yaml:"health"`
+
+	// PeerExchangeCadenceS drives the slice-7 periodic peer-exchange
+	// emit ticker. Default 3600 (1h, matching spec §7.1). 0 disables.
+	PeerExchangeCadenceS int `yaml:"peer_exchange_cadence_s"`
 }
 
 // FederationBootstrapConfig governs the plugin-facing signed
@@ -278,6 +282,7 @@ func DefaultConfig() *Config {
 				UptimeWeight:        0.7,
 				RevGossipWeight:     0.3,
 			},
+			PeerExchangeCadenceS: 3600,
 		},
 		Reputation: ReputationConfig{
 			EvaluationIntervalS: 60,

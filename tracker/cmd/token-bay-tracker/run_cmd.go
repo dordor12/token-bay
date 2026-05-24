@@ -155,6 +155,7 @@ func newRunCmd() *cobra.Command {
 					UptimeWeight:        cfg.Federation.Health.UptimeWeight,
 					RevGossipWeight:     cfg.Federation.Health.RevGossipWeight,
 				},
+				PeerExchangeCadence: time.Duration(cfg.Federation.PeerExchangeCadenceS) * time.Second,
 			}, federation.Deps{
 				Transport:         fedTransport,
 				RootSrc:           ledgerRootSourceAdapter{led: led},

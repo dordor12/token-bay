@@ -37,6 +37,11 @@ type Config struct {
 	IssuedProofCap   int           // default 4096; source-side replay cache LRU cap
 	Peers            []AllowlistedPeer
 	Health           HealthConfig
+
+	// PeerExchangeCadence drives the slice-7 periodic emit goroutine.
+	// Zero or negative disables the ticker entirely (operators must
+	// call Federation.PublishPeerExchange explicitly). Default 1h.
+	PeerExchangeCadence time.Duration
 }
 
 // Deps is the wired-in collaborators (Transport, RootSource, archive,
@@ -103,6 +108,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.IssuedProofCap == 0 {
 		c.IssuedProofCap = 4096
+	}
+	if c.PeerExchangeCadence == 0 {
+		c.PeerExchangeCadence = time.Hour
 	}
 	return c
 }

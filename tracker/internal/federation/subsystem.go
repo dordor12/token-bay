@@ -200,6 +200,12 @@ func Open(cfg Config, dep Deps) (*Federation, error) {
 	f.listenCancel = cancel
 	go func() { _ = dep.Transport.Listen(ctx, f.acceptInbound) }()
 
+	// Slice 7: periodic peer-exchange emit goroutine. Cancelled
+	// alongside listenCtx by Close. Zero/negative cadence disables.
+	if peerExchange != nil && cfg.PeerExchangeCadence > 0 {
+		go f.runPeerExchangeTicker(ctx)
+	}
+
 	// Dial each operator-allowlisted peer in a Dialer goroutine. The
 	// Dialer redials with exponential backoff after every drop; its
 	// OnConnected callback runs the federation handshake and blocks on
@@ -245,6 +251,24 @@ func (f *Federation) attachAndWait(p AllowlistedPeer) func(PeerConn) {
 			return
 		}
 		pe.Wait()
+	}
+}
+
+// runPeerExchangeTicker is the slice-7 periodic emit driver. Fires
+// EmitNow on each tick; errors are logged at Warn and never fatal.
+// Exits cleanly when ctx is cancelled (Close).
+func (f *Federation) runPeerExchangeTicker(ctx context.Context) {
+	t := time.NewTicker(f.cfg.PeerExchangeCadence)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := f.PublishPeerExchange(ctx); err != nil {
+				f.dep.Logger.Warn().Err(err).Msg("federation: periodic peer-exchange emit failed")
+			}
+		}
 	}
 }
 

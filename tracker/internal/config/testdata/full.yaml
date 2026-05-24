@@ -67,6 +67,7 @@ federation:
     rev_gossip_buffer_size: 16
     uptime_weight: 0.7
     rev_gossip_weight: 0.3
+  peer_exchange_cadence_s: 3600
 
 reputation:
   evaluation_interval_s: 60

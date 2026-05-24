@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 
 	fed "github.com/token-bay/token-bay/shared/federation"
@@ -991,6 +992,70 @@ func TestIntegration_PeerExchange_ThreeTracker_LineGraph(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatal("C never archived D through B")
+}
+
+func TestIntegration_PeerExchange_TickerFires(t *testing.T) {
+	t.Parallel()
+	// Slice 7 sanity: opening a Federation with a short PeerExchangeCadence
+	// causes EmitNow to fire at least once on its own (no PublishPeerExchange
+	// call from the test). Uses newTwoTrackerWithKnownPeers' wiring but
+	// overrides one side's cadence at Open time.
+	a := newPeerCfg(t)
+	b := newPeerCfg(t)
+	hub := federation.NewInprocHub()
+	trA := federation.NewInprocTransport(hub, "A", a.pub, a.priv)
+	trB := federation.NewInprocTransport(hub, "B", b.pub, b.priv)
+	archA, archB := newFakeArchive(), newFakeArchive()
+	kpA := newFakeKnownPeersArchiveExt()
+	kpB := newFakeKnownPeersArchiveExt()
+
+	aID := ids.TrackerID(sha256.Sum256(a.pub))
+	bID := ids.TrackerID(sha256.Sum256(b.pub))
+	healthCfg := federation.HealthConfig{
+		UptimeWindow:        2 * time.Hour,
+		RevGossipWindow:     600 * time.Second,
+		RevGossipBufferSize: 16,
+		UptimeWeight:        0.7,
+		RevGossipWeight:     0.3,
+	}
+
+	mA := federation.NewMetrics(prometheus.NewRegistry())
+	aFed, err := federation.Open(federation.Config{
+		MyTrackerID:         aID,
+		MyPriv:              a.priv,
+		Peers:               []federation.AllowlistedPeer{{TrackerID: bID, PubKey: b.pub, Addr: "B"}},
+		Health:              healthCfg,
+		PeerExchangeCadence: 60 * time.Millisecond, // fast cadence for the test
+	}, federation.Deps{Transport: trA, RootSrc: &fakeRootSrc{ok: false}, Archive: archA, KnownPeers: kpA, Metrics: mA, Logger: zerolog.Nop(), Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = aFed.Close() })
+	bFed, err := federation.Open(federation.Config{
+		MyTrackerID: bID,
+		MyPriv:      b.priv,
+		Peers:       []federation.AllowlistedPeer{{TrackerID: aID, PubKey: a.pub, Addr: "A"}},
+		Health:      healthCfg,
+		// no ticker on b
+	}, federation.Deps{Transport: trB, RootSrc: &fakeRootSrc{ok: false}, Archive: archB, KnownPeers: kpB, Metrics: federation.NewMetrics(prometheus.NewRegistry()), Logger: zerolog.Nop(), Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bFed.Close() })
+
+	// Wait until B has received at least one peer-exchange from A's ticker.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		// kpB will hold A's seed row (allowlist) and at minimum nothing
+		// else; we just want to observe A's EmitNow firing. Use the
+		// metrics counter as the signal — it bumps on each EmitNow.
+		got := testutil.ToFloat64(mA.PeerExchangeEmittedCounter())
+		if got >= 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("periodic peer-exchange ticker never fired ≥ 2 times")
 }
 
 func TestIntegration_PeerHealth_RootAttestationLiftsScore(t *testing.T) {

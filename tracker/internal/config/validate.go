@@ -304,6 +304,16 @@ func (v *validator) checkFederation(c *Config) {
 		v.add("federation.health",
 			"uptime_weight + rev_gossip_weight must sum to 1.0")
 	}
+	// PeerExchangeCadenceS: 0 disables; positive must be sane (>= 60s,
+	// <= 24h sanity ceiling).
+	if c.Federation.PeerExchangeCadenceS < 0 {
+		v.add("federation.peer_exchange_cadence_s",
+			"must be >= 0 (0 disables), got "+strconv.Itoa(c.Federation.PeerExchangeCadenceS))
+	} else if c.Federation.PeerExchangeCadenceS > 0 &&
+		(c.Federation.PeerExchangeCadenceS < 60 || c.Federation.PeerExchangeCadenceS > 86400) {
+		v.add("federation.peer_exchange_cadence_s",
+			"must be in [60, 86400] when non-zero, got "+strconv.Itoa(c.Federation.PeerExchangeCadenceS))
+	}
 	if c.Federation.ListenAddr != "" {
 		if _, _, err := net.SplitHostPort(c.Federation.ListenAddr); err != nil {
 			v.add("federation.listen_addr",

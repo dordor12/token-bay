@@ -147,6 +147,9 @@ func ApplyDefaults(c *Config) {
 		c.Federation.Health.UptimeWeight = d.Federation.Health.UptimeWeight
 		c.Federation.Health.RevGossipWeight = d.Federation.Health.RevGossipWeight
 	}
+	if c.Federation.PeerExchangeCadenceS == 0 {
+		c.Federation.PeerExchangeCadenceS = d.Federation.PeerExchangeCadenceS
+	}
 
 	// Reputation
 	if c.Reputation.EvaluationIntervalS == 0 {
