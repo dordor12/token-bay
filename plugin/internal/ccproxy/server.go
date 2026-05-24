@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/token-bay/token-bay/plugin/internal/hooks"
 )
 
 // Server is the ccproxy HTTP listener.
@@ -22,6 +24,18 @@ type Server struct {
 	listener     net.Listener
 	srv          *http.Server
 	resolvedAddr string
+
+	// hookSink is the (optional) destination for /_hooks/{event} POSTs.
+	// Wired by the sidecar supervisor via WithHookSink; remains nil in
+	// tests that never exercise the IPC seam. Read without locking from
+	// handleHook — assignment happens exclusively during option-apply,
+	// before Start, so concurrent mutation is structurally impossible.
+	hookSink hooks.Sink
+
+	// statusFn renders the /_status endpoint's body. Wired post-Start by
+	// the supervisor (the URL is only known after the OS picks a port).
+	// Guarded by mu because SetStatusProvider may race with handleStatus.
+	statusFn func() map[string]any
 }
 
 // Option is a functional configuration option.
@@ -75,6 +89,13 @@ func (s *Server) Start(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token-bay/health", s.handleHealth)
+	// Plugin CLAUDE.md rule #3: the /_hooks/* and /_status paths are SEPARATE
+	// from upstream Anthropic proxying — they must be explicit mux entries
+	// that do NOT fall through to handleAnthropic (which would forward the
+	// hook event body to api.anthropic.com). The leading underscore keeps
+	// the namespace disjoint from anything the Anthropic SDK ships.
+	mux.HandleFunc(hookRoutePrefix, s.handleHook)
+	mux.HandleFunc(statusRoutePath, s.handleStatus)
 	mux.HandleFunc("/", s.handleAnthropic)
 
 	s.srv = &http.Server{
