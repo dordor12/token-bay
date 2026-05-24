@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"time"
@@ -25,11 +26,31 @@ import (
 //
 // Construct via OpenSettlement; tear down via Close.
 type Settlement struct {
-	cfg  config.SettlementConfig
-	deps Deps
-	mgr  *session.Manager
-	stop chan struct{}
-	wg   sync.WaitGroup
+	cfg     config.SettlementConfig
+	deps    Deps
+	mgr     *session.Manager
+	metrics *brokerMetrics
+	stop    chan struct{}
+	wg      sync.WaitGroup
+
+	// pendingMu guards pending. Each entry tracks per-request settlement
+	// coordination state owned by Settlement (the seeder-pushed body bytes
+	// the consumer must counter-sign, plus the verification verdict the
+	// per-request goroutine reads to decide ConsumerSigMissing on append).
+	pendingMu sync.Mutex
+	pending   map[[16]byte]*pendingSettle
+}
+
+// pendingSettle holds Settlement-internal state for a single in-flight
+// settlement. The body bytes are the DeterministicMarshal output of the
+// USAGE EntryBody the seeder signed and the consumer is asked to
+// counter-sign; verified records whether HandleSettle observed and
+// accepted that sig; refused records a verification failure that must
+// suppress the timer-fallback append.
+type pendingSettle struct {
+	body     []byte
+	verified bool
+	refused  bool
 }
 
 // OpenSettlement constructs a ready Settlement. Required deps: Ledger, Pusher.
@@ -49,10 +70,12 @@ func OpenSettlement(cfg config.SettlementConfig, deps Deps, mgr *session.Manager
 		mgr = session.New()
 	}
 	s := &Settlement{
-		cfg:  cfg,
-		deps: deps,
-		mgr:  mgr,
-		stop: make(chan struct{}),
+		cfg:     cfg,
+		deps:    deps,
+		mgr:     mgr,
+		metrics: newBrokerMetrics(),
+		stop:    make(chan struct{}),
+		pending: make(map[[16]byte]*pendingSettle),
 	}
 	s.startReaper()
 	return s, nil
@@ -74,13 +97,12 @@ func (s *Settlement) Close() error {
 // after validating + queuing the consumer-sig wait; the ledger append happens
 // asynchronously inside a per-request goroutine.
 //
-// v1 limitation: consumer pubkey resolution is deferred (T17.5 follow-up plan).
-// Until that lands, every settlement appends the entry with
-// ConsumerSigMissing=true on timer expiry. The Settle dispatcher is wired
-// through (HandleSettle) but the goroutine ignores the sig.
-//
-// TODO(broker-followup): T17.5 — wire consumer pubkey resolver so HandleSettle
-// can verify the consumer_sig and pass ConsumerSigMissing=false to AppendUsage.
+// Consumer-sig verification is wired via HandleSettle (deps.Identity resolves
+// the consumer pubkey). The body the seeder signs is pushed verbatim to the
+// consumer, so the consumer's counter-sig is verified over the same bytes.
+// Verification verdicts flow through Settlement.pending into appendUsageEntry,
+// which sets ConsumerSigMissing=true when the sig is absent or unverifiable
+// and false when verified.
 func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityID, r *tbproto.UsageReport) (*tbproto.UsageAck, error) {
 	if r == nil || len(r.RequestId) != 16 {
 		return nil, errors.New("settlement: malformed UsageReport")
@@ -94,7 +116,15 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 		return nil, session.ErrUnknownRequest
 	}
 
-	// 2. Seeder must be the caller.
+	// 2. State guard — spec §5.2 step 2. Reject any request not in
+	// {ASSIGNED, SERVING} with INVALID_STATE before touching the ledger.
+	// Catches: a queued/selecting request whose seeder never confirmed, or
+	// a terminated request that should not accept a usage_report.
+	if req.State != session.StateAssigned && req.State != session.StateServing {
+		return nil, ErrInvalidState
+	}
+
+	// 3. Seeder must be the caller.
 	if req.AssignedSeeder != peerID {
 		return nil, ErrSeederMismatch
 	}
@@ -174,6 +204,10 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 		return nil, ierr
 	}
 
+	// Record the preimage body so HandleSettle can verify the consumer's
+	// counter-sig over the exact bytes the seeder vouched for and pushed.
+	s.putPending(reqID, bodyBytes)
+
 	// 9. Push SettlementPush to consumer (best-effort).
 	push := &tbproto.SettlementPush{
 		PreimageHash: preimageHash[:],
@@ -181,7 +215,7 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 	}
 	s.deps.Pusher.PushSettlementTo(req.ConsumerID, push)
 
-	// 10. Spawn awaitSettle goroutine — timer-only path in v1 (see T17.5 TODO).
+	// 10. Spawn awaitSettle goroutine — handles consumer-sig arrival or timeout.
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -191,45 +225,79 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 	return &tbproto.UsageAck{}, nil
 }
 
-// awaitSettle waits for a consumer counter-sig or the settlement timeout.
+// putPending records the preimage body bytes for an in-flight settlement
+// and initialises a fresh verification verdict. Called by HandleUsageReport
+// after IndexByHash so HandleSettle observes the body before the consumer
+// can possibly counter-sign.
+func (s *Settlement) putPending(reqID [16]byte, body []byte) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pending[reqID] = &pendingSettle{body: body}
+}
+
+// getPending returns the pending settlement entry for reqID, or nil if
+// none. Safe for concurrent use.
+func (s *Settlement) getPending(reqID [16]byte) *pendingSettle {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return s.pending[reqID]
+}
+
+// dropPending removes the pending settlement entry for reqID. Called after
+// the per-request goroutine has decided on its append outcome.
+func (s *Settlement) dropPending(reqID [16]byte) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	delete(s.pending, reqID)
+}
+
+// awaitSettle waits for a consumer counter-sig or the settlement timeout
+// and dispatches the verdict to appendUsageEntry. Three terminating
+// branches:
 //
-// v1 semantic: settlement ALWAYS appends with ConsumerSigMissing=true.
+//   - sig signal: HandleSettle observed the consumer's counter-sig. The
+//     verdict on Settlement.pending says whether verification succeeded
+//     (ConsumerSigMissing=false), or the pubkey was unknown / verification
+//     was skipped (ConsumerSigMissing=true).
+//   - timer expiry: no sig arrived; if HandleSettle did not previously
+//     refuse a tampered sig, append with ConsumerSigMissing=true.
+//   - stop / ctx cancel: tracker shutting down; abandon the request.
 //
-// The deps.Identity resolver (broker.IdentityResolver → *server.Server.PeerPubkey)
-// is wired and the consumer sig is now available here, BUT we cannot yet verify
-// it and flip ConsumerSigMissing=false. The reason is a wire-format constraint:
-// the seeder signs the entry body with ConsumerSigMissing=true pre-set (see
-// HandleUsageReport and buildSeederSignedReport in settlement_test.go). If we
-// rebuild the body with ConsumerSigMissing=false we invalidate the seeder sig
-// already stored, and the seeder is no longer present to re-sign.
-//
-// TODO(broker-followup): T17.5 wire-format amendment — remove ConsumerSigMissing
-// from the seeder-signed preimage (or use a two-phase sign) so the broker can
-// independently decide the flag value at settlement time. Once that lands,
-// resolve the consumer pubkey here, verify the sig, and call appendUsageEntry
-// with consumerSigMissing=false when verification succeeds.
+// A refused-sig verdict (verification failure) suppresses the timer path
+// so no entry is written — spec §5.2 "Verify fail: no ledger touch."
 func (s *Settlement) awaitSettle(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte) {
+	defer s.dropPending(req.RequestID)
+
 	timeout := time.Duration(s.cfg.SettlementTimeoutS) * time.Second
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-req.SettleSig:
-		// Sig arrived. deps.Identity is wired (see T17.5 plumbing) but
-		// sig verification is deferred pending a wire-format amendment
-		// (see TODO above). Fall through to missing-sig append.
-		_ = s.deps.Identity // suppress "field never used" if linter complains; wired for future use.
+		p := s.getPending(req.RequestID)
+		if p != nil && p.refused {
+			// HandleSettle observed a tampered sig and rejected it;
+			// no ledger entry should be written.
+			return
+		}
+		consumerSigMissing := p == nil || !p.verified
+		s.appendUsageEntry(ctx, req, body, seederSig, consumerSigMissing)
 	case <-timer.C:
+		p := s.getPending(req.RequestID)
+		if p != nil && p.refused {
+			return
+		}
+		s.appendUsageEntry(ctx, req, body, seederSig, true)
 	case <-s.stop:
 		return
 	case <-ctx.Done():
 		return
 	}
-	s.appendUsageEntry(ctx, req, body, seederSig)
 }
 
 // appendUsageEntry writes the usage entry to the ledger, retrying on
-// ErrStaleTip up to cfg.StaleTipRetries times.
-func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte) {
+// ErrStaleTip up to cfg.StaleTipRetries times. consumerSigMissing flows
+// from awaitSettle's verdict and is stored on the entry verbatim.
+func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte, consumerSigMissing bool) {
 	rec := ledger.UsageRecord{
 		PrevHash:           body.PrevHash,
 		Seq:                body.Seq,
@@ -241,7 +309,7 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 		CostCredits:        body.CostCredits,
 		Timestamp:          body.Timestamp,
 		RequestID:          body.RequestId,
-		ConsumerSigMissing: true, // v1 limitation — T17.5 follow-up
+		ConsumerSigMissing: consumerSigMissing,
 		SeederSig:          seederSig,
 		SeederPub:          req.SeederPubkey,
 	}
@@ -267,19 +335,35 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 	_, _ = s.deps.Registry.DecLoad(req.AssignedSeeder)
 	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted, s.deps.Now())
 	if s.deps.Reputation != nil {
+		var flags uint32
+		if consumerSigMissing {
+			flags = 1 // bit 0 = consumer_sig_missing
+		}
 		s.deps.Reputation.OnLedgerEvent(admission.LedgerEvent{
 			Kind:        admission.LedgerEventSettlement,
 			ConsumerID:  req.ConsumerID,
 			SeederID:    req.AssignedSeeder,
 			CostCredits: rec.CostCredits,
-			Flags:       1,                                  // bit 0 = consumer_sig_missing; v1 limitation per T17.5 follow-up
+			Flags:       flags,
 			Timestamp:   time.Unix(int64(rec.Timestamp), 0), //nolint:gosec // G115: always positive
 		})
 	}
 }
 
 // HandleSettle accepts the consumer's counter-signature for a settled usage
-// entry identified by its preimage hash. See broker-design §5.3.
+// entry identified by its preimage hash. See broker-design §5.2 / §5.3.
+//
+// When the consumer pubkey is resolvable via deps.Identity, the sig is
+// verified over the preimage body bytes recorded by HandleUsageReport.
+// Outcomes:
+//
+//   - verified: dispatch the sig and mark the request's pending entry so
+//     awaitSettle appends with ConsumerSigMissing=false.
+//   - tampered: return ErrConsumerSig, emit a "refused_consumer_sig" audit
+//     entry, and suppress the timer-fallback append (no ledger touch).
+//   - pubkey unknown (Identity nil, peer not connected, or pending entry
+//     missing): bump ConsumerPubkeyUnknown, dispatch the sig, and let
+//     awaitSettle append with ConsumerSigMissing=true.
 func (s *Settlement) HandleSettle(_ context.Context, peerID ids.IdentityID, r *tbproto.SettleRequest) (*tbproto.SettleAck, error) {
 	if r == nil || len(r.PreimageHash) != 32 {
 		return nil, errors.New("settlement: malformed Settle")
@@ -296,10 +380,69 @@ func (s *Settlement) HandleSettle(_ context.Context, peerID ids.IdentityID, r *t
 	if req.SettleSig == nil {
 		return nil, ErrUnknownPreimage
 	}
+
+	// Resolve the consumer pubkey and verify the sig against the
+	// preimage body the seeder pushed (and that we recorded in
+	// putPending). Missing resolver / missing pubkey / missing pending
+	// entry all degrade to "unverifiable" — bump the counter and let
+	// awaitSettle append with ConsumerSigMissing=true.
+	verdict := s.verifyConsumerSig(req, r.ConsumerSig)
+	switch verdict {
+	case sigVerified:
+		// fall through to dispatch
+	case sigRefused:
+		s.deps.Logger.Info().
+			Str("event", "refused_consumer_sig").
+			Str("request_id", hex.EncodeToString(req.RequestID[:])).
+			Str("consumer_id", hex.EncodeToString(req.ConsumerID[:])).
+			Msg("")
+		return nil, ErrConsumerSig
+	case sigUnverifiable:
+		s.metrics.ConsumerPubkeyUnknown.Inc()
+		// fall through to dispatch; awaitSettle will see verified=false.
+	}
+
 	select {
 	case req.SettleSig <- r.ConsumerSig:
 	default:
 		return nil, ErrDuplicateSettle
 	}
 	return &tbproto.SettleAck{}, nil
+}
+
+// sigVerdict is the per-call result of verifyConsumerSig.
+type sigVerdict int
+
+const (
+	sigVerified sigVerdict = iota
+	sigRefused
+	sigUnverifiable
+)
+
+// verifyConsumerSig classifies the consumer's counter-sig and, on
+// success, marks the pending entry so awaitSettle can append with
+// ConsumerSigMissing=false. On verification failure it marks the entry
+// refused so awaitSettle's timer fallback also skips the append.
+func (s *Settlement) verifyConsumerSig(req *session.Request, sig []byte) sigVerdict {
+	if s.deps.Identity == nil {
+		return sigUnverifiable
+	}
+	p := s.getPending(req.RequestID)
+	if p == nil || len(p.body) == 0 {
+		return sigUnverifiable
+	}
+	pub, ok := s.deps.Identity.PeerPubkey(req.ConsumerID)
+	if !ok || len(pub) != ed25519.PublicKeySize {
+		return sigUnverifiable
+	}
+	if !ed25519.Verify(pub, p.body, sig) {
+		s.pendingMu.Lock()
+		p.refused = true
+		s.pendingMu.Unlock()
+		return sigRefused
+	}
+	s.pendingMu.Lock()
+	p.verified = true
+	s.pendingMu.Unlock()
+	return sigVerified
 }

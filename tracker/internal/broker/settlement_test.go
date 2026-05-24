@@ -1,13 +1,18 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/shared/ids"
@@ -494,6 +499,294 @@ func TestSettlement_IdentityResolverWired(t *testing.T) {
 		_, _ = deps.Identity.PeerPubkey(ids.IdentityID{0xAB})
 		require.Equal(t, 1, resolver.hits, "resolver was not called")
 	})
+}
+
+// sha256Of returns the SHA-256 digest of b.
+func sha256Of(b []byte) [32]byte { return sha256.Sum256(b) }
+
+// counterValue reads the current value of a prometheus.Counter.
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	require.NoError(t, c.Write(&m))
+	return m.GetCounter().GetValue()
+}
+
+// ---------------------------------------------------------------------------
+// T13: pre-transition state guard
+// ---------------------------------------------------------------------------
+
+// TestHandleUsageReport_InvalidState ensures HandleUsageReport rejects with
+// ErrInvalidState — and does NO ledger work — when the request is not in
+// {ASSIGNED, SERVING}. spec §5.2 step 2.
+func TestHandleUsageReport_InvalidState(t *testing.T) {
+	deps := testDeps(t)
+
+	cap := &fakeLedgerCapturing{}
+	deps.Ledger = cap
+
+	mgr := session.New()
+
+	requestID := [16]byte{0x07}
+	consumerID := ids.IdentityID{0xCC}
+	seederID := ids.IdentityID{0xDD}
+	model := "claude-sonnet-4-6"
+
+	seederPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
+	req.State = session.StateSelecting // not ASSIGNED or SERVING
+	mgr.Inflight.Insert(req)
+
+	s, err := OpenSettlement(testSettlementCfg(), deps, mgr)
+	require.NoError(t, err)
+	defer s.Close()
+
+	r := &tbproto.UsageReport{
+		RequestId: requestID[:],
+		Model:     model,
+	}
+	_, err = s.HandleUsageReport(context.Background(), seederID, r)
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.Equal(t, 0, cap.Count(), "no ledger touch expected on INVALID_STATE")
+}
+
+// ---------------------------------------------------------------------------
+// T8: consumer-sig verification on settlement
+// ---------------------------------------------------------------------------
+
+// runHandleUsageReport drives HandleUsageReport with a properly-signed report
+// and waits for the per-request goroutine to be parked on req.SettleSig. It
+// returns the body bytes the consumer must sign to satisfy the verifier.
+func runHandleUsageReport(t *testing.T, s *Settlement, mgr *session.Manager, deps Deps, requestID [16]byte, consumerID, seederID ids.IdentityID, seederPriv ed25519.PrivateKey, model string, fixedTS uint64) []byte {
+	t.Helper()
+	report := buildSeederSignedReport(t, seederPriv, requestID, model, 100, 200, make([]byte, 32), 0, consumerID, seederID, fixedTS)
+	_, err := s.HandleUsageReport(context.Background(), seederID, report)
+	require.NoError(t, err)
+
+	// Reconstruct exactly the body bytes HandleUsageReport pushed to the
+	// consumer (and that the consumer signs over).
+	pt := DefaultPriceTable()
+	cost, _ := pt.ActualCost(model, 100, 200)
+	body, err := entry.BuildUsageEntry(entry.UsageInput{
+		PrevHash:           make([]byte, 32),
+		Seq:                1,
+		ConsumerID:         consumerID[:],
+		SeederID:           seederID[:],
+		Model:              model,
+		InputTokens:        100,
+		OutputTokens:       200,
+		CostCredits:        cost,
+		Timestamp:          fixedTS,
+		RequestID:          requestID[:],
+		ConsumerSigMissing: true,
+	})
+	require.NoError(t, err)
+	bodyBytes, err := signing.DeterministicMarshal(body)
+	require.NoError(t, err)
+	_ = deps // keep signature stable for future helpers
+	_ = mgr
+	return bodyBytes
+}
+
+// TestHandleSettle_TamperedConsumerSig — verify fail returns ErrConsumerSig,
+// emits a "refused_consumer_sig" audit entry, and does NOT touch the ledger.
+func TestHandleSettle_TamperedConsumerSig(t *testing.T) {
+	deps := testDeps(t)
+
+	cap := &fakeLedgerCapturing{}
+	deps.Ledger = cap
+
+	// Capture audit log output.
+	var logBuf bytes.Buffer
+	deps.Logger = zerolog.New(&logBuf)
+
+	consumerPub, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	consumerID := ids.IdentityID{0xCC}
+	seederID := ids.IdentityID{0xDD}
+	deps.Identity = &mockIdentityResolver{
+		keys: map[ids.IdentityID]ed25519.PublicKey{consumerID: consumerPub},
+	}
+
+	mgr := session.New()
+	requestID := [16]byte{0x20}
+	model := "claude-sonnet-4-6"
+
+	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
+	mgr.Inflight.Insert(req)
+	_ = mgr.Reservations.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
+
+	// Long settlement timeout so the timer doesn't race the test.
+	cfg := testSettlementCfg()
+	cfg.SettlementTimeoutS = 900
+
+	const fixedTS uint64 = 1700000000
+	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
+
+	s, err := OpenSettlement(cfg, deps, mgr)
+	require.NoError(t, err)
+	defer s.Close()
+
+	bodyBytes := runHandleUsageReport(t, s, mgr, deps, requestID, consumerID, seederID, seederPriv, model, fixedTS)
+
+	// Produce a valid sig then flip a bit to tamper it.
+	sig := ed25519.Sign(consumerPriv, bodyBytes)
+	sig[0] ^= 0xFF
+
+	hash := sha256Of(bodyBytes)
+	_, err = s.HandleSettle(context.Background(), consumerID, &tbproto.SettleRequest{
+		PreimageHash: hash[:],
+		ConsumerSig:  sig,
+	})
+	require.ErrorIs(t, err, ErrConsumerSig)
+
+	require.Contains(t, logBuf.String(), "refused_consumer_sig",
+		"expected an audit log entry tagged 'refused_consumer_sig'")
+	require.Equal(t, 0, cap.Count(), "no ledger touch expected on consumer-sig refusal")
+}
+
+// TestHandleSettle_ValidSigAppendsVerified — a valid consumer sig causes the
+// per-request goroutine to call AppendUsage with ConsumerSigMissing=false.
+func TestHandleSettle_ValidSigAppendsVerified(t *testing.T) {
+	deps := testDeps(t)
+
+	cap := &fakeLedgerCapturing{}
+	deps.Ledger = cap
+
+	fr := newFakeRegistry()
+	seederRec := seederRecord(t, ids.IdentityID{0xDD}, 0.9, "claude-sonnet-4-6")
+	fr.Add(seederRec)
+	_, _ = fr.IncLoad(seederRec.IdentityID)
+	deps.Registry = fr
+
+	consumerPub, consumerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	consumerID := ids.IdentityID{0xCC}
+	seederID := ids.IdentityID{0xDD}
+	deps.Identity = &mockIdentityResolver{
+		keys: map[ids.IdentityID]ed25519.PublicKey{consumerID: consumerPub},
+	}
+
+	mgr := session.New()
+	requestID := [16]byte{0x21}
+	model := "claude-sonnet-4-6"
+
+	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
+	mgr.Inflight.Insert(req)
+	_ = mgr.Reservations.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
+
+	cfg := testSettlementCfg()
+	cfg.SettlementTimeoutS = 900
+
+	const fixedTS uint64 = 1700000000
+	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
+
+	s, err := OpenSettlement(cfg, deps, mgr)
+	require.NoError(t, err)
+	defer s.Close()
+
+	bodyBytes := runHandleUsageReport(t, s, mgr, deps, requestID, consumerID, seederID, seederPriv, model, fixedTS)
+
+	sig := ed25519.Sign(consumerPriv, bodyBytes)
+	hash := sha256Of(bodyBytes)
+
+	_, err = s.HandleSettle(context.Background(), consumerID, &tbproto.SettleRequest{
+		PreimageHash: hash[:],
+		ConsumerSig:  sig,
+	})
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cap.Count() > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	last, ok := cap.Last()
+	require.True(t, ok, "expected AppendUsage to have been called")
+	require.False(t, last.ConsumerSigMissing,
+		"expected ConsumerSigMissing=false when consumer sig verified")
+}
+
+// TestHandleSettle_UnknownConsumerPubkey — when the IdentityResolver doesn't
+// know the consumer, the settlement still appends but with
+// ConsumerSigMissing=true and the ConsumerPubkeyUnknown counter is bumped.
+func TestHandleSettle_UnknownConsumerPubkey(t *testing.T) {
+	deps := testDeps(t)
+
+	cap := &fakeLedgerCapturing{}
+	deps.Ledger = cap
+
+	fr := newFakeRegistry()
+	seederRec := seederRecord(t, ids.IdentityID{0xDD}, 0.9, "claude-sonnet-4-6")
+	fr.Add(seederRec)
+	_, _ = fr.IncLoad(seederRec.IdentityID)
+	deps.Registry = fr
+
+	// Resolver returns ok=false for any id.
+	deps.Identity = &mockIdentityResolver{keys: map[ids.IdentityID]ed25519.PublicKey{}}
+
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	consumerID := ids.IdentityID{0xCC}
+	seederID := ids.IdentityID{0xDD}
+
+	mgr := session.New()
+	requestID := [16]byte{0x22}
+	model := "claude-sonnet-4-6"
+
+	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
+	mgr.Inflight.Insert(req)
+	_ = mgr.Reservations.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
+
+	cfg := testSettlementCfg()
+	cfg.SettlementTimeoutS = 900
+
+	const fixedTS uint64 = 1700000000
+	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
+
+	s, err := OpenSettlement(cfg, deps, mgr)
+	require.NoError(t, err)
+	defer s.Close()
+
+	bodyBytes := runHandleUsageReport(t, s, mgr, deps, requestID, consumerID, seederID, seederPriv, model, fixedTS)
+
+	// Any non-empty sig — the tracker can't verify without a pubkey.
+	sig := make([]byte, ed25519.SignatureSize)
+	hash := sha256Of(bodyBytes)
+
+	beforeCounter := counterValue(t, s.metrics.ConsumerPubkeyUnknown)
+
+	_, err = s.HandleSettle(context.Background(), consumerID, &tbproto.SettleRequest{
+		PreimageHash: hash[:],
+		ConsumerSig:  sig,
+	})
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cap.Count() > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	last, ok := cap.Last()
+	require.True(t, ok, "expected AppendUsage to have been called")
+	require.True(t, last.ConsumerSigMissing,
+		"expected ConsumerSigMissing=true when consumer pubkey is unknown")
+
+	afterCounter := counterValue(t, s.metrics.ConsumerPubkeyUnknown)
+	require.Equal(t, beforeCounter+1, afterCounter,
+		"expected ConsumerPubkeyUnknown counter to be incremented")
 }
 
 func TestHandleSettle_Duplicate(t *testing.T) {

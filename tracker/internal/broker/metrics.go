@@ -18,11 +18,12 @@ type brokerMetrics struct {
 	ReservationTTLExpired   prometheus.Counter
 
 	// Settlement
-	SettlementDecisions *prometheus.CounterVec
-	SettlementDuration  prometheus.Histogram
-	ConsumerSigMissing  prometheus.Counter
-	LedgerAppendFailure prometheus.Counter
-	StaleTipRetries     prometheus.Counter
+	SettlementDecisions   *prometheus.CounterVec
+	SettlementDuration    prometheus.Histogram
+	ConsumerSigMissing    prometheus.Counter
+	ConsumerPubkeyUnknown prometheus.Counter
+	LedgerAppendFailure   prometheus.Counter
+	StaleTipRetries       prometheus.Counter
 
 	// Operational
 	QueueDrainPops             prometheus.Counter
@@ -79,6 +80,10 @@ func newBrokerMetrics() *brokerMetrics {
 		ConsumerSigMissing: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "broker_consumer_sig_missing_total",
 			Help: "Cumulative settlements where no consumer counter-sig arrived before timeout.",
+		}),
+		ConsumerPubkeyUnknown: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "broker_consumer_pubkey_unknown_total",
+			Help: "Cumulative HandleSettle calls where the consumer's pubkey was not resolvable; settlement falls through to ConsumerSigMissing=true.",
 		}),
 		LedgerAppendFailure: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "broker_ledger_append_failure_total",
@@ -138,6 +143,7 @@ func (m *brokerMetrics) collectors() []prometheus.Collector {
 		m.SettlementDecisions,
 		m.SettlementDuration,
 		m.ConsumerSigMissing,
+		m.ConsumerPubkeyUnknown,
 		m.LedgerAppendFailure,
 		m.StaleTipRetries,
 		m.QueueDrainPops,
