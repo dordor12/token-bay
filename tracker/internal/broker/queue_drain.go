@@ -95,6 +95,7 @@ func (b *Broker) drainOnce(ctx context.Context) {
 		if !ok {
 			return
 		}
+		b.metrics.QueueDrainPops.Inc()
 		b.pendingMu.Lock()
 		p, exists := b.pendingQueued[entry.RequestID]
 		if exists {
@@ -109,10 +110,27 @@ func (b *Broker) drainOnce(ctx context.Context) {
 		if err != nil {
 			result = &Result{Outcome: OutcomeNoCapacity, NoCap: &NoCapacityDetails{Reason: "broker_error"}}
 		}
+		b.metrics.QueueDrainAdmitOutcomes.WithLabelValues(outcomeLabel(result.Outcome)).Inc()
 		select {
 		case p.deliver <- result:
 		default:
 		}
 		close(p.deliver)
+	}
+}
+
+// outcomeLabel renders a broker.Outcome as a stable Prometheus label string.
+func outcomeLabel(o Outcome) string {
+	switch o {
+	case OutcomeAdmit:
+		return "admit"
+	case OutcomeQueued:
+		return "queued"
+	case OutcomeRejected:
+		return "rejected"
+	case OutcomeNoCapacity:
+		return "no_capacity"
+	default:
+		return "unspecified"
 	}
 }

@@ -57,6 +57,12 @@ type pendingSettle struct {
 // Optional: Now (defaults to time.Now). When mgr is nil a fresh session.Manager
 // is allocated. Starts the reservation TTL reaper (T19).
 func OpenSettlement(cfg config.SettlementConfig, deps Deps, mgr *session.Manager) (*Settlement, error) {
+	return openSettlementWithMetrics(cfg, deps, mgr, newBrokerMetrics())
+}
+
+// openSettlementWithMetrics is the internal constructor that lets Subsystems
+// share a single brokerMetrics instance across Broker + Settlement.
+func openSettlementWithMetrics(cfg config.SettlementConfig, deps Deps, mgr *session.Manager, metrics *brokerMetrics) (*Settlement, error) {
 	if deps.Ledger == nil {
 		return nil, errors.New("settlement: Ledger required")
 	}
@@ -69,11 +75,14 @@ func OpenSettlement(cfg config.SettlementConfig, deps Deps, mgr *session.Manager
 	if mgr == nil {
 		mgr = session.New()
 	}
+	if metrics == nil {
+		metrics = newBrokerMetrics()
+	}
 	s := &Settlement{
 		cfg:     cfg,
 		deps:    deps,
 		mgr:     mgr,
-		metrics: newBrokerMetrics(),
+		metrics: metrics,
 		stop:    make(chan struct{}),
 		pending: make(map[[16]byte]*pendingSettle),
 	}
@@ -319,6 +328,7 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 		if !errors.Is(appendErr, ledger.ErrStaleTip) {
 			break
 		}
+		s.metrics.StaleTipRetries.Inc()
 		tipSeq, tipHash, _, terr := s.deps.Ledger.Tip(ctx)
 		if terr != nil {
 			appendErr = terr
@@ -328,6 +338,7 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 		rec.Seq = tipSeq + 1
 	}
 	if appendErr != nil {
+		s.metrics.LedgerAppendFailure.Inc()
 		_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateFailed, s.deps.Now())
 		return
 	}

@@ -263,6 +263,14 @@ func newRunCmd() *cobra.Command {
 			}
 			defer brokerSubs.Close() //nolint:errcheck
 
+			// Expose broker + settlement metrics on /metrics. Counters bumped
+			// on the Submit / Settle / reaper / queue-drain hot paths; the
+			// composite collector also includes a dynamic pending-queue-depth
+			// gauge sampled at scrape time.
+			if err := prometheus.DefaultRegisterer.Register(brokerSubs.Collector()); err != nil {
+				return fmt.Errorf("broker metrics register: %w", err)
+			}
+
 			alloc, err := stunturn.NewAllocator(stunturn.AllocatorConfig{
 				MaxKbpsPerSeeder: cfg.STUNTURN.TURNRelayMaxKbps,
 				SessionTTL:       time.Duration(cfg.STUNTURN.SessionTTLSeconds) * time.Second,

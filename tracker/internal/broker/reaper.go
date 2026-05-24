@@ -33,6 +33,9 @@ func (s *Settlement) startReaper() {
 // compensation here (DecLoad on AssignedSeeder for Assigned-state expirations).
 func (s *Settlement) runReap(now time.Time) {
 	expired := s.mgr.SweepExpiredAndFail(now)
+	if len(expired) > 0 {
+		s.metrics.ReservationTTLExpired.Add(float64(len(expired)))
+	}
 	for _, e := range expired {
 		if e.PriorState == session.StateAssigned && e.AssignedSeeder != (ids.IdentityID{}) {
 			_, _ = s.deps.Registry.DecLoad(e.AssignedSeeder)
