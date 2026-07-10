@@ -342,7 +342,7 @@ func newRunCmd() *cobra.Command {
 			// stop() cancels ctx, which drains both the QUIC server and
 			// the admin server. /maintenance reuses the same path so an
 			// HTTP shutdown trigger is identical to SIGTERM.
-			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, fed, stop)
+			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, fed, rep, stop)
 			if err != nil {
 				return fmt.Errorf("admin: %w", err)
 			}
@@ -557,6 +557,7 @@ func buildAdminServer(
 	brokerSubs *broker.Subsystems,
 	adm *admission.Subsystem,
 	fed *federation.Federation,
+	rep *reputation.Subsystem,
 	stop func(),
 ) (*admin.Server, error) {
 	token := os.Getenv(adminTokenEnvVar)
@@ -589,5 +590,6 @@ func buildAdminServer(
 		AdmissionMount:     admissionMount,
 		TriggerMaintenance: stop,
 		FederationActions:  federationAdminActions{fed: fed},
+		Reputation:         reputationAdminActions{rep: rep},
 	})
 }

@@ -97,6 +97,41 @@ func (s *stubFederation) Depeer(id ids.TrackerID) error {
 
 func (s *stubFederation) ListenAddr() string { return s.listen }
 
+// reputationCall records one Freeze/Unfreeze dispatch for assertions.
+type reputationCall struct {
+	idHex    string
+	operator string
+}
+
+// stubReputation implements ReputationActions for tests. It records
+// calls so tests can assert dispatch reached the right identity with the
+// right operator, and can be configured to return an error to exercise
+// the handler's error path (e.g. simulating the cmd-side adapter
+// rejecting a malformed id).
+type stubReputation struct {
+	freezeErr   error
+	unfreezeErr error
+
+	frozen   []reputationCall
+	unfrozen []reputationCall
+}
+
+func (s *stubReputation) Freeze(idHex, operator string) error {
+	if s.freezeErr != nil {
+		return s.freezeErr
+	}
+	s.frozen = append(s.frozen, reputationCall{idHex: idHex, operator: operator})
+	return nil
+}
+
+func (s *stubReputation) Unfreeze(idHex, operator string) error {
+	if s.unfreezeErr != nil {
+		return s.unfreezeErr
+	}
+	s.unfrozen = append(s.unfrozen, reputationCall{idHex: idHex, operator: operator})
+	return nil
+}
+
 func newTestDeps() Deps {
 	cfg := config.DefaultConfig()
 	cfg.Admin.ListenAddr = "127.0.0.1:0"

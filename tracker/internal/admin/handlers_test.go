@@ -393,6 +393,125 @@ func TestIdentity_FromLedgerOnly(t *testing.T) {
 	assert.EqualValues(t, 17, balance["chain_tip_seq"])
 }
 
+func TestFreeze_NoReputation_501(t *testing.T) {
+	srv := newTestServer(t, nil)
+	defer srv.Close()
+
+	id := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/identity/"+id+"/freeze", "test-token", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+}
+
+func TestFreeze_Success_202(t *testing.T) {
+	stub := &stubReputation{}
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = stub })
+	defer srv.Close()
+
+	id := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/identity/"+id+"/freeze", "test-token", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	var out map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.Equal(t, id, out["identity_id"])
+	assert.Equal(t, true, out["frozen"])
+
+	require.Len(t, stub.frozen, 1)
+	assert.Equal(t, id, stub.frozen[0].idHex)
+	assert.Equal(t, "admin", stub.frozen[0].operator)
+}
+
+func TestFreeze_Unauthenticated_401(t *testing.T) {
+	stub := &stubReputation{}
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = stub })
+	defer srv.Close()
+
+	id := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/identity/"+id+"/freeze", "", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Empty(t, stub.frozen)
+}
+
+func TestFreeze_ActionError_400(t *testing.T) {
+	// Simulates the cmd-side adapter rejecting a malformed identity id.
+	stub := &stubReputation{freezeErr: errors.New("identity id: malformed hex")}
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = stub })
+	defer srv.Close()
+
+	resp := adminReq(t, "POST", srv.URL+"/identity/not-hex/freeze", "test-token", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestUnfreeze_NoReputation_501(t *testing.T) {
+	srv := newTestServer(t, nil)
+	defer srv.Close()
+
+	id := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/identity/"+id+"/unfreeze", "test-token", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+}
+
+func TestUnfreeze_Success_202(t *testing.T) {
+	stub := &stubReputation{}
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = stub })
+	defer srv.Close()
+
+	id := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/identity/"+id+"/unfreeze", "test-token", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	var out map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.Equal(t, id, out["identity_id"])
+	assert.Equal(t, false, out["frozen"])
+
+	require.Len(t, stub.unfrozen, 1)
+	assert.Equal(t, id, stub.unfrozen[0].idHex)
+	assert.Equal(t, "admin", stub.unfrozen[0].operator)
+}
+
+func TestUnfreeze_Unauthenticated_401(t *testing.T) {
+	stub := &stubReputation{}
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = stub })
+	defer srv.Close()
+
+	id := strings.Repeat("ab", 32)
+	resp := adminReq(t, "POST", srv.URL+"/identity/"+id+"/unfreeze", "wrong-token", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Empty(t, stub.unfrozen)
+}
+
+func TestUnfreeze_ActionError_400(t *testing.T) {
+	stub := &stubReputation{unfreezeErr: errors.New("identity id: malformed hex")}
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = stub })
+	defer srv.Close()
+
+	resp := adminReq(t, "POST", srv.URL+"/identity/not-hex/unfreeze", "test-token", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestIdentityGet_StillWorksAlongsideFreezeRoutes guards the mux
+// registration: GET /identity/{id} and POST /identity/{id}/freeze are
+// distinct-shaped patterns (different segment counts), so Go 1.22's
+// ServeMux must not treat them as conflicting.
+func TestIdentityGet_StillWorksAlongsideFreezeRoutes(t *testing.T) {
+	srv := newTestServer(t, func(d *Deps) { d.Reputation = &stubReputation{} })
+	defer srv.Close()
+
+	id := strings.Repeat("ff", 32)
+	resp := adminReq(t, "GET", srv.URL+"/identity/"+id, "test-token", "")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode) // unknown identity, but route matched (not 400/501)
+}
+
 func TestMaintenance_TriggersCallbackAndReturns202(t *testing.T) {
 	var fired atomic.Int32
 	done := make(chan struct{}, 1)
