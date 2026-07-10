@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/plugin/internal/ratelimit"
-	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/shared/signing"
 )
 
@@ -71,32 +70,30 @@ func newSettlementTestBox(t *testing.T) *settlementTestBox {
 	return &settlementTestBox{c: c, broker: broker, audit: audit, ident: ident, metrics: metrics}
 }
 
-// makeEntryBody builds a synthetic settlement preimage body for a given
-// request_id with caller-supplied token counts.
-func makeEntryBody(requestID [16]byte, model string, inputTokens, outputTokens uint32) *tbproto.EntryBody {
-	return &tbproto.EntryBody{
-		PrevHash:     bytesOfLen(32, 0x11),
-		Seq:          42,
-		Kind:         tbproto.EntryKind_ENTRY_KIND_USAGE,
-		ConsumerId:   bytesOfLen(32, 0xAB),
-		SeederId:     bytesOfLen(32, 0xEE),
+// makeAssertionBody builds a canonical usage-assertion preimage for a given
+// request_id with caller-supplied token counts — the exact bytes the tracker
+// pushes as SettlementPush.preimage_body (broker settlement §5.2).
+func makeAssertionBody(t *testing.T, requestID [16]byte, model string, inputTokens, outputTokens uint32) []byte {
+	t.Helper()
+	body, err := signing.CanonicalUsageAssertionPreSig(signing.UsageAssertion{
+		RequestID:    requestID[:],
+		ConsumerID:   bytesOfLen(32, 0xAB),
+		SeederID:     bytesOfLen(32, 0xEE),
 		Model:        model,
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		CostCredits:  1234,
-		Timestamp:    1714000020,
-		RequestId:    requestID[:],
-	}
+	})
+	require.NoError(t, err)
+	return body
 }
 
 // makeSettlementRequest assembles a SettlementRequest with a self-consistent
 // preimage hash + body so the handler's own SHA-256 check passes.
-func makeSettlementRequest(t *testing.T, body *tbproto.EntryBody) *SettlementRequest {
+func makeSettlementRequest(t *testing.T, body []byte) *SettlementRequest {
 	t.Helper()
-	bodyBytes, err := signing.DeterministicMarshal(body)
-	require.NoError(t, err)
-	hash := sha256.Sum256(bodyBytes)
-	return &SettlementRequest{PreimageHash: hash, PreimageBody: bodyBytes}
+	hash := sha256.Sum256(body)
+	return &SettlementRequest{PreimageHash: hash, PreimageBody: body}
 }
 
 // reservationToken constructs the 16-byte reservation_token returned in a
@@ -131,6 +128,41 @@ func enterNetworkModeForTest(t *testing.T, c *Coordinator, broker *fakeBroker, s
 
 // ---- tests -----------------------------------------------------------------
 
+// TestParseUsageAssertionPreimage_RoundTrip pins the local parser to the
+// canonical encoder in shared/signing: encode → parse must be lossless.
+// If shared/signing's layout ever changes, this test fails loudly instead
+// of the consumer silently mis-reading settlement pushes.
+func TestParseUsageAssertionPreimage_RoundTrip(t *testing.T) {
+	want := signing.UsageAssertion{
+		RequestID:    bytesOfLen(16, 0x5A),
+		ConsumerID:   bytesOfLen(32, 0xAB),
+		SeederID:     bytesOfLen(32, 0xEE),
+		Model:        "claude-sonnet-4-6",
+		InputTokens:  1234,
+		OutputTokens: 5678,
+		CostCredits:  88872,
+	}
+	body, err := signing.CanonicalUsageAssertionPreSig(want)
+	require.NoError(t, err)
+
+	got, err := parseUsageAssertionPreimage(body)
+	require.NoError(t, err)
+	assert.Equal(t, want.RequestID, got.RequestID)
+	assert.Equal(t, want.ConsumerID, got.ConsumerID)
+	assert.Equal(t, want.SeederID, got.SeederID)
+	assert.Equal(t, want.Model, got.Model)
+	assert.Equal(t, want.InputTokens, got.InputTokens)
+	assert.Equal(t, want.OutputTokens, got.OutputTokens)
+	assert.Equal(t, want.CostCredits, got.CostCredits)
+}
+
+func TestParseUsageAssertionPreimage_RejectsGarbage(t *testing.T) {
+	_, err := parseUsageAssertionPreimage(bytes.Repeat([]byte{0xFF}, 200))
+	require.Error(t, err, "non-canonical bytes must not parse")
+	_, err = parseUsageAssertionPreimage(nil)
+	require.Error(t, err, "empty body must not parse")
+}
+
 func TestHandleSettlement_HappyPath_CallsSettleAndAudits(t *testing.T) {
 	box := newSettlementTestBox(t)
 	enterNetworkModeForTest(t, box.c, box.broker, "sess-A", 0xA1)
@@ -139,7 +171,7 @@ func TestHandleSettlement_HappyPath_CallsSettleAndAudits(t *testing.T) {
 	for i := range reqID {
 		reqID[i] = 0xA1
 	}
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 100, 200)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 100, 200)
 	req := makeSettlementRequest(t, body)
 
 	require.NoError(t, box.c.HandleSettlement(context.Background(), req))
@@ -171,7 +203,7 @@ func TestHandleSettlement_OverBudget_RefusesAndAudits(t *testing.T) {
 		reqID[i] = 0xB2
 	}
 	// Default test deps have MaxOutputTokens=8192; report well over.
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 100, 9_000)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 100, 9_000)
 	req := makeSettlementRequest(t, body)
 
 	err := box.c.HandleSettlement(context.Background(), req)
@@ -193,7 +225,7 @@ func TestHandleSettlement_UnknownRequest_Refuses(t *testing.T) {
 
 	var reqID [16]byte
 	reqID[0] = 0xCC
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 1, 1)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 1, 1)
 	req := makeSettlementRequest(t, body)
 
 	err := box.c.HandleSettlement(context.Background(), req)
@@ -218,7 +250,7 @@ func TestHandleSettlement_AfterExit_Refuses_Spec64(t *testing.T) {
 	for i := range reqID {
 		reqID[i] = 0xD4
 	}
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 1, 1)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 1, 1)
 	req := makeSettlementRequest(t, body)
 
 	err := box.c.HandleSettlement(context.Background(), req)
@@ -234,7 +266,7 @@ func TestHandleSettlement_PreimageMismatch_Refuses(t *testing.T) {
 	for i := range reqID {
 		reqID[i] = 0xE5
 	}
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 1, 1)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 1, 1)
 	req := makeSettlementRequest(t, body)
 	// Tamper: swap the hash so it no longer matches the body.
 	req.PreimageHash[0] ^= 0xFF
@@ -269,7 +301,7 @@ func TestHandleSettlement_SignError_Refuses(t *testing.T) {
 	for i := range reqID {
 		reqID[i] = 0xF6
 	}
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 1, 1)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 1, 1)
 	req := makeSettlementRequest(t, body)
 
 	err := box.c.HandleSettlement(context.Background(), req)
@@ -287,7 +319,7 @@ func TestHandleSettlement_TrackerSettleError_Surfaces(t *testing.T) {
 	for i := range reqID {
 		reqID[i] = 0xC7
 	}
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 1, 1)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 1, 1)
 	req := makeSettlementRequest(t, body)
 
 	err := box.c.HandleSettlement(context.Background(), req)
@@ -305,7 +337,7 @@ func TestHandleSettlement_HappyPathThenDuplicateRefuses(t *testing.T) {
 	for i := range reqID {
 		reqID[i] = 0xC8
 	}
-	body := makeEntryBody(reqID, "claude-sonnet-4-6", 1, 1)
+	body := makeAssertionBody(t, reqID, "claude-sonnet-4-6", 1, 1)
 	req := makeSettlementRequest(t, body)
 
 	require.NoError(t, box.c.HandleSettlement(context.Background(), req))

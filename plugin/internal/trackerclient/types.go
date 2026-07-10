@@ -185,6 +185,12 @@ type Offer struct {
 	// offers without it so the inbound tunnel listener can pin the
 	// consumer's cert.
 	ConsumerEphemeralPub []byte
+	// RequestID is the tracker's 16-byte reservation token for this offer
+	// (OfferPush.request_id). The seeder echoes it in UsageReport.request_id
+	// and signs it into the usage-assertion so the tracker can bind the
+	// report to its in-flight request. Zero when a legacy tracker omits
+	// the field.
+	RequestID [16]byte
 }
 
 // OfferDecision is what the seeder returns to the tracker.

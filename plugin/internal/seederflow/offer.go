@@ -74,6 +74,8 @@ func (c *Coordinator) HandleOffer(ctx trackerclient.Ctx, o *trackerclient.Offer)
 	res := &reservation{
 		envelopeHash:         o.EnvelopeHash,
 		consumerIDHash:       sha256.Sum256(o.ConsumerID[:]),
+		requestID:            o.RequestID,
+		consumerID:           o.ConsumerID.Bytes(),
 		model:                o.Model,
 		maxInputTokens:       o.MaxInputTokens,
 		maxOutputTokens:      o.MaxOutputTokens,

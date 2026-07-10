@@ -26,6 +26,10 @@ func makeOffer(model string) *trackerclient.Offer {
 	for i := range consumerPub {
 		consumerPub[i] = byte(0x40 + i)
 	}
+	var requestID [16]byte
+	for i := range requestID {
+		requestID[i] = byte(0x10 + i)
+	}
 	return &trackerclient.Offer{
 		ConsumerID:           consumerID,
 		EnvelopeHash:         envHash,
@@ -33,6 +37,7 @@ func makeOffer(model string) *trackerclient.Offer {
 		MaxInputTokens:       4096,
 		MaxOutputTokens:      1024,
 		ConsumerEphemeralPub: consumerPub,
+		RequestID:            requestID,
 	}
 }
 
