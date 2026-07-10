@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
@@ -56,6 +57,11 @@ type options struct {
 	DataDir  string
 	CtrlAddr string
 
+	// TunnelAddr is the seeder's tunnel-listener bind (host:port; port 0 =
+	// ephemeral). Empty defaults to defaultTunnelBind. Only used when the
+	// seeder role is active.
+	TunnelAddr string
+
 	// Transport is an optional injected transport seam. nil => QUIC (prod).
 	// Tests pass a loopback transport wired to a fakeserver.
 	Transport trackerclient.Transport
@@ -70,6 +76,10 @@ type Actor struct {
 	opts   options
 	signer *identity.Signer
 	client *trackerclient.Client
+
+	// seeder is non-nil when opts.Role has the seeder bit; it owns the
+	// advertise loop, the OfferHandler, and the tunnel-serve/usage flow.
+	seeder *seeder
 
 	ln  net.Listener
 	srv *http.Server
@@ -102,6 +112,22 @@ func newActor(opts options) (*Actor, error) {
 		return nil, err
 	}
 
+	// The seeder must exist BEFORE the trackerclient: Config.OfferHandler
+	// is fixed at New time, and the dispatcher starts handling pushes at
+	// Start. Its back-reference to the Actor is wired below, before run.
+	var sdr *seeder
+	if opts.Role&RoleSeeder != 0 {
+		bindStr := opts.TunnelAddr
+		if bindStr == "" {
+			bindStr = defaultTunnelBind
+		}
+		bind, err := netip.ParseAddrPort(bindStr)
+		if err != nil {
+			return nil, fmt.Errorf("actor: parse tunnel bind %q: %w", bindStr, err)
+		}
+		sdr = newSeeder(bind, opts.Logger)
+	}
+
 	cfg := trackerclient.Config{
 		Endpoints: []trackerclient.TrackerEndpoint{{
 			Addr:         opts.TrackerAddr,
@@ -115,6 +141,9 @@ func newActor(opts options) (*Actor, error) {
 	// trackerclient.New default to the QUIC driver.
 	if opts.Transport != nil {
 		cfg.Transport = opts.Transport
+	}
+	if sdr != nil {
+		cfg.OfferHandler = sdr
 	}
 	client, err := trackerclient.New(cfg)
 	if err != nil {
@@ -130,7 +159,11 @@ func newActor(opts options) (*Actor, error) {
 		opts:   opts,
 		signer: signer,
 		client: client,
+		seeder: sdr,
 		ln:     ln,
+	}
+	if sdr != nil {
+		sdr.actor = a
 	}
 	a.srv = &http.Server{
 		Handler:           a.mux(),
@@ -158,14 +191,24 @@ func (a *Actor) run(ctx context.Context) error {
 
 	if err := a.connectAndEnroll(ctx); err != nil {
 		// Best-effort teardown before surfacing the failure.
+		if a.seeder != nil {
+			a.seeder.stop()
+		}
 		a.shutdownControl()
 		_ = a.client.Close()
 		<-serveErr
 		return err
 	}
 
+	if a.seeder != nil {
+		go a.seeder.advertiseLoop()
+	}
+
 	<-ctx.Done()
 
+	if a.seeder != nil {
+		a.seeder.stop()
+	}
 	a.shutdownControl()
 	_ = a.client.Close()
 	return <-serveErr
@@ -232,6 +275,15 @@ func (a *Actor) ready() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.connected && a.enrolled
+}
+
+// enrollIdentityID returns the tracker-issued enroll id — the SeederID the
+// seeder signs into usage-assertions (the tracker registers peers under the
+// SPKI-hash identity it minted at enroll).
+func (a *Actor) enrollIdentityID() ids.IdentityID {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.enrollID
 }
 
 // identitySnapshot returns the tracker-issued enroll id and the local pubkey,

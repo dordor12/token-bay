@@ -45,6 +45,7 @@ func realMain(args []string, stderr *os.File) error {
 		region          = fs.String("region", "A", "region hint for the tracker A endpoint")
 		dataDir         = fs.String("data-dir", "", "directory for the actor's persistent identity key")
 		ctrlAddr        = fs.String("ctrl-addr", "127.0.0.1:0", "HTTP control-API listen address")
+		tunnelAddr      = fs.String("tunnel-addr", defaultTunnelBind, "seeder tunnel-listener bind address (host:port; port 0 = ephemeral)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -89,6 +90,7 @@ func realMain(args []string, stderr *os.File) error {
 		TrackerBHash: hashB,
 		DataDir:      *dataDir,
 		CtrlAddr:     *ctrlAddr,
+		TunnelAddr:   *tunnelAddr,
 		Logger:       logger,
 	})
 	if err != nil {
