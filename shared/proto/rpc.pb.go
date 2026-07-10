@@ -1944,6 +1944,7 @@ type OfferPush struct {
 	// backward compatibility with pre-binding tracker builds; the plugin
 	// seederflow Coordinator rejects offers without it.
 	ConsumerEphemeralPub []byte `protobuf:"bytes,6,opt,name=consumer_ephemeral_pub,json=consumerEphemeralPub,proto3" json:"consumer_ephemeral_pub,omitempty"`
+	RequestId            []byte `protobuf:"bytes,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 16 bytes; the tracker's reservation token for this offer
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2016,6 +2017,13 @@ func (x *OfferPush) GetMaxOutputTokens() uint32 {
 func (x *OfferPush) GetConsumerEphemeralPub() []byte {
 	if x != nil {
 		return x.ConsumerEphemeralPub
+	}
+	return nil
+}
+
+func (x *OfferPush) GetRequestId() []byte {
+	if x != nil {
+		return x.RequestId
 	}
 	return nil
 }
@@ -2253,7 +2261,7 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\f\n" +
 	"\x01t\x18\x02 \x01(\x04R\x01t\"!\n" +
 	"\rHeartbeatPong\x12\x10\n" +
-	"\x03seq\x18\x01 \x01(\x04R\x03seq\"\xf3\x01\n" +
+	"\x03seq\x18\x01 \x01(\x04R\x03seq\"\x92\x02\n" +
 	"\tOfferPush\x12\x1f\n" +
 	"\vconsumer_id\x18\x01 \x01(\fR\n" +
 	"consumerId\x12#\n" +
@@ -2261,7 +2269,9 @@ const file_proto_rpc_proto_rawDesc = "" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12(\n" +
 	"\x10max_input_tokens\x18\x04 \x01(\rR\x0emaxInputTokens\x12*\n" +
 	"\x11max_output_tokens\x18\x05 \x01(\rR\x0fmaxOutputTokens\x124\n" +
-	"\x16consumer_ephemeral_pub\x18\x06 \x01(\fR\x14consumerEphemeralPub\"w\n" +
+	"\x16consumer_ephemeral_pub\x18\x06 \x01(\fR\x14consumerEphemeralPub\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\a \x01(\fR\trequestId\"w\n" +
 	"\rOfferDecision\x12\x16\n" +
 	"\x06accept\x18\x01 \x01(\bR\x06accept\x12)\n" +
 	"\x10ephemeral_pubkey\x18\x02 \x01(\fR\x0fephemeralPubkey\x12#\n" +

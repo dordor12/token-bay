@@ -51,8 +51,9 @@ func fixtureEnvelopeBody() *EnvelopeBody {
 			},
 			TrackerSig: make64(0x55),
 		},
-		CapturedAt: 1714000025,
-		Nonce:      []byte("envelope-nonce12"), // 16 bytes
+		CapturedAt:           1714000025,
+		Nonce:                []byte("envelope-nonce12"), // 16 bytes
+		ConsumerEphemeralPub: make32(0x66),
 	}
 }
 

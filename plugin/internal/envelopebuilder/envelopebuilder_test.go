@@ -157,6 +157,36 @@ func TestBuild_HappyPath(t *testing.T) {
 	require.NoError(t, tbproto.ValidateEnvelopeBody(env.Body))
 }
 
+func TestBuild_CopiesConsumerEphemeralPub(t *testing.T) {
+	signer := newFakeSigner()
+	b := newTestBuilder(signer)
+
+	spec := validSpec()
+	spec.ConsumerEphemeralPub = bytesOfLen(32, 0x99)
+
+	env, err := b.Build(spec, validProof(), validBalance())
+	require.NoError(t, err)
+	require.NotNil(t, env)
+
+	assert.Equal(t, spec.ConsumerEphemeralPub, env.Body.ConsumerEphemeralPub)
+	require.NoError(t, tbproto.ValidateEnvelopeBody(env.Body))
+}
+
+func TestBuild_ConsumerEphemeralPubOptional(t *testing.T) {
+	// A RequestSpec that leaves ConsumerEphemeralPub unset (legacy callers,
+	// or callers built before Task 18 wires the consumer actor) must still
+	// build and validate cleanly — the field is 0-or-32 bytes.
+	signer := newFakeSigner()
+	b := newTestBuilder(signer)
+
+	env, err := b.Build(validSpec(), validProof(), validBalance())
+	require.NoError(t, err)
+	require.NotNil(t, env)
+
+	assert.Empty(t, env.Body.ConsumerEphemeralPub)
+	require.NoError(t, tbproto.ValidateEnvelopeBody(env.Body))
+}
+
 func TestNewBuilder_PanicsOnNilSigner(t *testing.T) {
 	assert.Panics(t, func() { NewBuilder(nil) })
 }

@@ -7,12 +7,13 @@
 package proto
 
 import (
-	exhaustionproof "github.com/token-bay/token-bay/shared/exhaustionproof"
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	exhaustionproof "github.com/token-bay/token-bay/shared/exhaustionproof"
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -89,8 +90,13 @@ type EnvelopeBody struct {
 	BalanceProof    *SignedBalanceSnapshot             `protobuf:"bytes,9,opt,name=balance_proof,json=balanceProof,proto3" json:"balance_proof,omitempty"`
 	CapturedAt      uint64                             `protobuf:"varint,10,opt,name=captured_at,json=capturedAt,proto3" json:"captured_at,omitempty"` // unix seconds — when envelope was assembled
 	Nonce           []byte                             `protobuf:"bytes,11,opt,name=nonce,proto3" json:"nonce,omitempty"`                              // 16 bytes — envelope-level replay protection
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// consumer_ephemeral_pub is the consumer's per-session Ed25519 pubkey for
+	// the seeder tunnel TLS handshake. 0 bytes (legacy) or 32. Signed as part
+	// of the body so the tracker can forward an authenticated ephemeral key to
+	// the seeder (OfferPush.consumer_ephemeral_pub) for tunnel pinning.
+	ConsumerEphemeralPub []byte `protobuf:"bytes,12,opt,name=consumer_ephemeral_pub,json=consumerEphemeralPub,proto3" json:"consumer_ephemeral_pub,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *EnvelopeBody) Reset() {
@@ -200,6 +206,13 @@ func (x *EnvelopeBody) GetNonce() []byte {
 	return nil
 }
 
+func (x *EnvelopeBody) GetConsumerEphemeralPub() []byte {
+	if x != nil {
+		return x.ConsumerEphemeralPub
+	}
+	return nil
+}
+
 // EnvelopeSigned — wire form. Receiver verifies sig via
 // shared/signing.VerifyEnvelope (Task 7).
 type EnvelopeSigned struct {
@@ -258,7 +271,7 @@ var File_proto_envelope_proto protoreflect.FileDescriptor
 
 const file_proto_envelope_proto_rawDesc = "" +
 	"\n" +
-	"\x14proto/envelope.proto\x12\x11tokenbay.proto.v1\x1a\x1bexhaustionproof/proof.proto\x1a\x13proto/balance.proto\"\xf8\x03\n" +
+	"\x14proto/envelope.proto\x12\x11tokenbay.proto.v1\x1a\x1bexhaustionproof/proof.proto\x1a\x13proto/balance.proto\"\xae\x04\n" +
 	"\fEnvelopeBody\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
 	"\vconsumer_id\x18\x02 \x01(\fR\n" +
@@ -273,7 +286,8 @@ const file_proto_envelope_proto_rawDesc = "" +
 	"\vcaptured_at\x18\n" +
 	" \x01(\x04R\n" +
 	"capturedAt\x12\x14\n" +
-	"\x05nonce\x18\v \x01(\fR\x05nonce\"h\n" +
+	"\x05nonce\x18\v \x01(\fR\x05nonce\x124\n" +
+	"\x16consumer_ephemeral_pub\x18\f \x01(\fR\x14consumerEphemeralPub\"h\n" +
 	"\x0eEnvelopeSigned\x123\n" +
 	"\x04body\x18\x01 \x01(\v2\x1f.tokenbay.proto.v1.EnvelopeBodyR\x04body\x12!\n" +
 	"\fconsumer_sig\x18\x02 \x01(\fR\vconsumerSig*\\\n" +
@@ -294,15 +308,17 @@ func file_proto_envelope_proto_rawDescGZIP() []byte {
 	return file_proto_envelope_proto_rawDescData
 }
 
-var file_proto_envelope_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_envelope_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_proto_envelope_proto_goTypes = []any{
-	(PrivacyTier)(0),                          // 0: tokenbay.proto.v1.PrivacyTier
-	(*EnvelopeBody)(nil),                      // 1: tokenbay.proto.v1.EnvelopeBody
-	(*EnvelopeSigned)(nil),                    // 2: tokenbay.proto.v1.EnvelopeSigned
-	(*exhaustionproof.ExhaustionProofV1)(nil), // 3: tokenbay.exhaustionproof.v1.ExhaustionProofV1
-	(*SignedBalanceSnapshot)(nil),             // 4: tokenbay.proto.v1.SignedBalanceSnapshot
-}
+var (
+	file_proto_envelope_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+	file_proto_envelope_proto_msgTypes  = make([]protoimpl.MessageInfo, 2)
+	file_proto_envelope_proto_goTypes   = []any{
+		(PrivacyTier)(0),                          // 0: tokenbay.proto.v1.PrivacyTier
+		(*EnvelopeBody)(nil),                      // 1: tokenbay.proto.v1.EnvelopeBody
+		(*EnvelopeSigned)(nil),                    // 2: tokenbay.proto.v1.EnvelopeSigned
+		(*exhaustionproof.ExhaustionProofV1)(nil), // 3: tokenbay.exhaustionproof.v1.ExhaustionProofV1
+		(*SignedBalanceSnapshot)(nil),             // 4: tokenbay.proto.v1.SignedBalanceSnapshot
+	}
+)
 var file_proto_envelope_proto_depIdxs = []int32{
 	0, // 0: tokenbay.proto.v1.EnvelopeBody.tier:type_name -> tokenbay.proto.v1.PrivacyTier
 	3, // 1: tokenbay.proto.v1.EnvelopeBody.exhaustion_proof:type_name -> tokenbay.exhaustionproof.v1.ExhaustionProofV1

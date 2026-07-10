@@ -222,6 +222,7 @@ message OfferPush {
   // backward compatibility with pre-binding tracker builds; the plugin
   // seederflow Coordinator rejects offers without it.
   bytes  consumer_ephemeral_pub = 6;
+  bytes  request_id             = 7;  // 16 bytes; the tracker's reservation token for this offer
 }
 
 message OfferDecision {

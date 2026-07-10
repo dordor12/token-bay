@@ -31,6 +31,12 @@ message EnvelopeBody {
 
   uint64 captured_at = 10;        // unix seconds — when envelope was assembled
   bytes  nonce       = 11;        // 16 bytes — envelope-level replay protection
+
+  // consumer_ephemeral_pub is the consumer's per-session Ed25519 pubkey for
+  // the seeder tunnel TLS handshake. 0 bytes (legacy) or 32. Signed as part
+  // of the body so the tracker can forward an authenticated ephemeral key to
+  // the seeder (OfferPush.consumer_ephemeral_pub) for tunnel pinning.
+  bytes consumer_ephemeral_pub = 12;
 }
 
 // EnvelopeSigned — wire form. Receiver verifies sig via

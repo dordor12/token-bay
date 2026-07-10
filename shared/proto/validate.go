@@ -60,6 +60,9 @@ func ValidateEnvelopeBody(b *EnvelopeBody) error {
 	if len(b.Nonce) != envelopeNonceLen {
 		return fmt.Errorf("proto: nonce length %d, want %d", len(b.Nonce), envelopeNonceLen)
 	}
+	if n := len(b.ConsumerEphemeralPub); n != 0 && n != 32 {
+		return fmt.Errorf("proto: consumer_ephemeral_pub length %d, want 0 or 32", n)
+	}
 	return nil
 }
 
@@ -314,6 +317,8 @@ func ValidateBrokerRequestResponse(r *BrokerRequestResponse) error {
 // ValidateOfferPush — non-empty consumer_id (32) + envelope_hash (32) + model.
 // consumer_ephemeral_pub is optional: empty for legacy trackers that
 // don't yet populate it; otherwise must be exactly 32 bytes (Ed25519).
+// request_id is optional: empty for legacy trackers; otherwise must be
+// exactly 16 bytes (the tracker's reservation token for this offer).
 func ValidateOfferPush(o *OfferPush) error {
 	if o == nil {
 		return errors.New("proto: OfferPush is nil")
@@ -329,6 +334,9 @@ func ValidateOfferPush(o *OfferPush) error {
 	}
 	if n := len(o.ConsumerEphemeralPub); n != 0 && n != 32 {
 		return fmt.Errorf("proto: OfferPush.ConsumerEphemeralPub len=%d, want 0 or 32", n)
+	}
+	if n := len(o.RequestId); n != 0 && n != 16 {
+		return fmt.Errorf("proto: OfferPush.RequestId len=%d, want 0 or 16", n)
 	}
 	return nil
 }

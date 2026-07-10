@@ -238,7 +238,7 @@ func (b *Broker) Submit(ctx context.Context, env *tbproto.EnvelopeSigned) (*Resu
 			continue
 		}
 
-		accepted, ephPub, oerr := runOffer(ctx, b.deps.Pusher, seeder.IdentityID, body, envHash,
+		accepted, ephPub, oerr := runOffer(ctx, b.deps.Pusher, seeder.IdentityID, body, envHash, requestID,
 			time.Duration(b.cfg.OfferTimeoutMs)*time.Millisecond)
 		if errors.Is(oerr, context.Canceled) || errors.Is(oerr, context.DeadlineExceeded) {
 			_, _ = b.deps.Registry.DecLoad(seeder.IdentityID)

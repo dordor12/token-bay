@@ -36,6 +36,10 @@ type RequestSpec struct {
 	MaxOutputTokens uint64
 	Tier            tbproto.PrivacyTier
 	BodyHash        []byte // SHA-256, len 32
+	// ConsumerEphemeralPub is the consumer's per-session Ed25519 pubkey for
+	// the seeder tunnel TLS handshake. Optional (0 bytes) or 32 bytes; see
+	// EnvelopeBody.consumer_ephemeral_pub for the wire-format contract.
+	ConsumerEphemeralPub []byte
 }
 
 // Signer abstracts the consumer's identity. Production impl lives in
@@ -96,17 +100,18 @@ func (b *Builder) Build(
 
 	id := b.Signer.IdentityID()
 	body := &tbproto.EnvelopeBody{
-		ProtocolVersion: uint32(tbproto.ProtocolVersion),
-		ConsumerId:      append([]byte(nil), id[:]...),
-		Model:           spec.Model,
-		MaxInputTokens:  spec.MaxInputTokens,
-		MaxOutputTokens: spec.MaxOutputTokens,
-		Tier:            spec.Tier,
-		BodyHash:        spec.BodyHash,
-		ExhaustionProof: proof,
-		BalanceProof:    balance,
-		CapturedAt:      unixSecondsU(b.Now()),
-		Nonce:           nonce,
+		ProtocolVersion:      uint32(tbproto.ProtocolVersion),
+		ConsumerId:           append([]byte(nil), id[:]...),
+		Model:                spec.Model,
+		MaxInputTokens:       spec.MaxInputTokens,
+		MaxOutputTokens:      spec.MaxOutputTokens,
+		Tier:                 spec.Tier,
+		BodyHash:             spec.BodyHash,
+		ExhaustionProof:      proof,
+		BalanceProof:         balance,
+		CapturedAt:           unixSecondsU(b.Now()),
+		Nonce:                nonce,
+		ConsumerEphemeralPub: spec.ConsumerEphemeralPub,
 	}
 
 	if err := tbproto.ValidateEnvelopeBody(body); err != nil {
