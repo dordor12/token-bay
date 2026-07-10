@@ -195,10 +195,29 @@ func (s *Server) serveConn(qc *quicgo.Conn) {
 	s.deps.Logger.Info().Hex("peer", peerID[:]).Str("addr", addr.String()).
 		Msg("server: peer connected")
 
+	// Register every connecting peer as an unavailable SeederRecord. The
+	// server cannot distinguish consumer from seeder role at connect time
+	// (mTLS gives only identity+pubkey), so registration alone does not
+	// make the peer selectable — only a subsequent ADVERTISE flips
+	// Available. This makes the reflexive addr (observed here, from the
+	// live QUIC connection) available to ADVERTISE/Heartbeat as pure
+	// updates instead of upserts.
+	if s.deps.Registry != nil {
+		s.deps.Registry.Register(registry.SeederRecord{
+			IdentityID:    peerID,
+			NetCoords:     registry.NetCoords{ExternalAddr: addr},
+			Available:     false,
+			LastHeartbeat: s.deps.Now(),
+		})
+	}
+
 	defer func() {
 		s.mu.Lock()
 		delete(s.connsByPeer, peerID)
 		s.mu.Unlock()
+		if s.deps.Registry != nil {
+			s.deps.Registry.Deregister(peerID)
+		}
 		c.Close()
 		s.deps.Logger.Info().Hex("peer", peerID[:]).Msg("server: peer disconnected")
 	}()
