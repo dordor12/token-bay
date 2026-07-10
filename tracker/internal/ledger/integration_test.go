@@ -68,10 +68,12 @@ func TestIntegration_MixedAppendsPassAudit(t *testing.T) {
 	l := openTempLedger(t)
 	ctx := context.Background()
 
-	consumerID := bytes.Repeat([]byte{0x11}, 32)
-	seederID := bytes.Repeat([]byte{0x22}, 32)
 	cPub, cPriv := labeledKeypair("consumer")
 	sPub, sPriv := labeledKeypair("seeder")
+	// Transfer-out binds the debited identity to sha256(SPKI(ConsumerPub)),
+	// so the consumer identity must be SPKI-derived here.
+	consumerID := spkiIdentityID(t, cPub)
+	seederID := bytes.Repeat([]byte{0x22}, 32)
 
 	// 5 starter grants pre-fund consumer + seeder.
 	for range 5 {
@@ -88,7 +90,7 @@ func TestIntegration_MixedAppendsPassAudit(t *testing.T) {
 
 	// 3 transfer-outs from consumer.
 	for range 3 {
-		rec, _ := signedTransferOutRecord(t, l, consumerID, 100)
+		rec := signedTransferOutRecord(t, l, 100)
 		_, err := l.AppendTransferOut(ctx, rec)
 		require.NoError(t, err)
 	}

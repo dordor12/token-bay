@@ -36,10 +36,10 @@ type appendInput struct {
 	// participantSigsPreVerified marks consumerSig/seederSig as already
 	// verified by the caller over a signing domain OTHER than the EntryBody
 	// (USAGE: the sequencing-independent usage-assertion, verified by
-	// AppendUsage). When true, appendLocked stores the sigs verbatim and
-	// skips its EntryBody-domain signing.VerifyEntry checks; the tracker
-	// sig over the EntryBody is unaffected. Kinds whose participant sigs
-	// are over the EntryBody (TRANSFER_OUT) leave this false.
+	// AppendUsage; TRANSFER_OUT: the transfer-proof-request intent,
+	// verified by AppendTransferOut). When true, appendLocked stores the
+	// sigs verbatim and skips its EntryBody-domain signing.VerifyEntry
+	// checks; the tracker sig over the EntryBody is unaffected.
 	participantSigsPreVerified bool
 }
 
@@ -56,10 +56,9 @@ type balanceDelta struct {
 //
 // The caller fills body.PrevHash + body.Seq before calling — this method
 // verifies they match the current tip and returns ErrStaleTip if not.
-// For EntryBody-domain counterparty sigs (TRANSFER_OUT) a fresh tip means
-// fresh sigs are required; USAGE participant sigs are over the
-// sequencing-independent usage-assertion, so the caller retries with the
-// same sigs after refreshing (prev_hash, seq).
+// USAGE and TRANSFER_OUT participant sigs are over sequencing-independent
+// canonical intents (usage-assertion / transfer-proof-request), so the
+// caller retries with the same sigs after refreshing (prev_hash, seq).
 //
 // For tracker-only-signed kinds (STARTER_GRANT) where rebuilding is cheap
 // and there are no counterparty sigs to invalidate, callers should use
