@@ -125,6 +125,73 @@ func builtUsageInput(t *testing.T, seq uint64, prevHash []byte) AppendInput {
 	}
 }
 
+// builtTransferOutInput constructs a TRANSFER_OUT AppendInput at
+// (seq, prevHash) with a fixed 32-byte ref. Used by the HasTransferRef
+// single-use probe tests.
+func builtTransferOutInput(t *testing.T, seq uint64, prevHash []byte) AppendInput {
+	t.Helper()
+	consumerID := bytes.Repeat([]byte{0x11}, 32)
+	ref := bytes.Repeat([]byte{0x66}, 32)
+
+	body, err := entry.BuildTransferOutEntry(entry.TransferOutInput{
+		PrevHash:    prevHash,
+		Seq:         seq,
+		ConsumerID:  consumerID,
+		Amount:      1500,
+		Timestamp:   1714000000 + seq,
+		TransferRef: ref,
+	})
+	require.NoError(t, err)
+
+	_, cPriv := keyFor("consumer")
+	_, tPriv := keyFor("tracker")
+	cSig, _ := signing.SignEntry(cPriv, body)
+	tSig, _ := signing.SignEntry(tPriv, body)
+
+	hash, err := entry.Hash(body)
+	require.NoError(t, err)
+
+	return AppendInput{
+		Entry: &tbproto.Entry{Body: body, ConsumerSig: cSig, TrackerSig: tSig},
+		Hash:  hash,
+		Balances: []BalanceUpdate{
+			{IdentityID: consumerID, Credits: -1500, LastSeq: seq, UpdatedAt: 1714000000 + seq},
+		},
+	}
+}
+
+// builtTransferInInput constructs a TRANSFER_IN AppendInput at
+// (seq, prevHash) reusing the SAME ref bytes as builtTransferOutInput —
+// by design, the destination's transfer_in carries the source's nonce.
+func builtTransferInInput(t *testing.T, seq uint64, prevHash []byte) AppendInput {
+	t.Helper()
+	identityID := bytes.Repeat([]byte{0x11}, 32)
+	ref := bytes.Repeat([]byte{0x66}, 32)
+
+	body, err := entry.BuildTransferInEntry(entry.TransferInInput{
+		PrevHash:    prevHash,
+		Seq:         seq,
+		Amount:      1500,
+		Timestamp:   1714000000 + seq,
+		TransferRef: ref,
+	})
+	require.NoError(t, err)
+
+	_, tPriv := keyFor("tracker")
+	tSig, _ := signing.SignEntry(tPriv, body)
+
+	hash, err := entry.Hash(body)
+	require.NoError(t, err)
+
+	return AppendInput{
+		Entry: &tbproto.Entry{Body: body, TrackerSig: tSig},
+		Hash:  hash,
+		Balances: []BalanceUpdate{
+			{IdentityID: identityID, Credits: 1500, LastSeq: seq, UpdatedAt: 1714000000 + seq},
+		},
+	}
+}
+
 // builtStarterGrantInput constructs a starter-grant entry — useful for
 // AppendEntry tests that want a single balance update.
 func builtStarterGrantInput(t *testing.T, seq uint64, prevHash []byte) AppendInput {

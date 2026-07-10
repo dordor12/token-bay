@@ -150,3 +150,36 @@ func TestHasUsageRequestID_ScopedToUsageKind(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got, "non-USAGE kinds are out of scope")
 }
+
+func TestHasTransferRef(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtTransferOutInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasTransferRef(ctx, in.Entry.Body.Ref)
+	require.NoError(t, err)
+	assert.True(t, got, "committed TRANSFER_OUT ref must be found")
+
+	got, err = s.HasTransferRef(ctx, bytes.Repeat([]byte{0x7F}, 32))
+	require.NoError(t, err)
+	assert.False(t, got, "unused ref must not match")
+}
+
+func TestHasTransferRef_ScopedToTransferOutKind(t *testing.T) {
+	// A destination-side transfer_in legitimately reuses the source's
+	// nonce as its ref. It must NEVER trip the TRANSFER_OUT single-use
+	// probe — only same-kind duplicates are double-debits.
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtTransferInInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasTransferRef(ctx, in.Entry.Body.Ref)
+	require.NoError(t, err)
+	assert.False(t, got, "TRANSFER_IN shares the ref by design and must not match")
+}

@@ -15,14 +15,13 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 )
 
-// ErrTransferRefExists means a transfer entry with the same TransferRef
-// is already on the chain. v1 callers MUST treat this as an idempotent
-// success at the federation layer; the ledger never returns it today
-// (the in-memory federation caches handle within-process retries).
-// v2 will detect on-chain duplicates by an indexed lookup once
-// tracker/internal/ledger/storage adds idx_entries_ref_kind. Reserved
-// here so federation code can prepare for the v2 contract without
-// a follow-up rebase.
+// ErrTransferRefExists means a TRANSFER_OUT entry with the same
+// TransferRef is already on the chain. Returned by AppendTransferOut via
+// the appendLocked single-use ref check (backed by storage.HasTransferRef
+// + idx_entries_ref_kind) — the on-chain cross-region double-debit
+// defense. Callers MUST treat this as an idempotent outcome, never retry
+// the debit. Scoped to kind=TRANSFER_OUT: a destination-side transfer_in
+// legitimately reuses the source's nonce as its ref and does not trip it.
 var ErrTransferRefExists = errors.New("ledger: transfer ref already on chain")
 
 // ErrTransferIdentityMismatch means the transfer_out's debited identity
@@ -81,6 +80,9 @@ type TransferOutRecord struct {
 // Returns ErrStaleTip if the body's (PrevHash, Seq) no longer matches the
 // current tip; because the intent sig is sequencing-independent, the
 // caller refreshes (PrevHash, Seq) and retries with the SAME ConsumerSig.
+// Returns ErrTransferRefExists if a TRANSFER_OUT with this TransferRef is
+// already on chain (single-use ref — double-debit defense); callers must
+// NOT retry that.
 func (l *Ledger) AppendTransferOut(ctx context.Context, r TransferOutRecord) (*tbproto.Entry, error) {
 	if len(r.ConsumerSig) == 0 || len(r.ConsumerPub) != ed25519.PublicKeySize {
 		return nil, errors.New("ledger: AppendTransferOut requires consumer sig + pubkey")
@@ -175,10 +177,12 @@ type TransferInRecord struct {
 // IdentityID directly.
 //
 // Returns ErrStaleTip if PrevHash/Seq don't match the current tip.
-// v1 has no on-chain idempotency check at the ledger layer; the
-// federation layer's in-memory pending-and-issued maps cover
-// within-process retries. Persistent idempotency is a follow-up (see
-// the federation cross-region transfer subsystem spec §14).
+// Unlike TRANSFER_OUT there is no on-chain ref-uniqueness check for
+// transfer_in at the ledger layer; destination-side replay protection is
+// the federation coordinator's completed-transfer cache, and the
+// source's on-chain TRANSFER_OUT ref check bounds cross-restart replays
+// (a replayed request is rejected at the source before a fresh proof can
+// be minted).
 func (l *Ledger) AppendTransferIn(ctx context.Context, r TransferInRecord) (*tbproto.Entry, error) {
 	if r.Amount == 0 {
 		return nil, errors.New("ledger: transfer_in amount must be > 0")

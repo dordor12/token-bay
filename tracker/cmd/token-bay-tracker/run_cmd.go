@@ -204,6 +204,7 @@ func newRunCmd() *cobra.Command {
 				Transport:         fedTransport,
 				RootSrc:           ledgerRootSourceAdapter{led: led},
 				Archive:           storeAsArchive{store: store},
+				Ledger:            ledgerHooksAdapter{led: led},
 				RevocationArchive: store, // *storage.Store satisfies PeerRevocationArchive
 				KnownPeers:        store, // *storage.Store satisfies KnownPeersArchive
 				Metrics:           federation.NewMetrics(prometheus.DefaultRegisterer),

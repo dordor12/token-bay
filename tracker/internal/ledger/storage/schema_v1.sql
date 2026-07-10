@@ -35,6 +35,10 @@ CREATE INDEX IF NOT EXISTS idx_entries_time     ON entries(timestamp);
 -- Backs the single-use USAGE request_id check (HasUsageRequestID); the
 -- per-append existence probe must not scan the whole chain.
 CREATE INDEX IF NOT EXISTS idx_entries_request  ON entries(kind, request_id);
+-- Backs the single-use TRANSFER_OUT ref check (HasTransferRef) — the
+-- cross-region double-debit defense. Idempotent CREATE INDEX only; no
+-- table alteration, append-only preserved.
+CREATE INDEX IF NOT EXISTS idx_entries_ref_kind ON entries(kind, ref);
 
 CREATE TABLE IF NOT EXISTS balances (
     identity_id BLOB PRIMARY KEY,

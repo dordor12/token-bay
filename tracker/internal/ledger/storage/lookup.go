@@ -56,6 +56,27 @@ func (s *Store) HasUsageRequestID(ctx context.Context, requestID []byte) (bool, 
 	return true, nil
 }
 
+// HasTransferRef reports whether a TRANSFER_OUT entry with the given ref
+// already exists on-chain. Backs the orchestrator's single-use
+// TRANSFER_OUT ref invariant (cross-region double-debit defense —
+// ledger.AppendTransferOut). Scoped to kind=TRANSFER_OUT ONLY: the
+// destination's transfer_in legitimately reuses the source's nonce as
+// its ref and must never collide. Backed by idx_entries_ref_kind.
+func (s *Store) HasTransferRef(ctx context.Context, ref []byte) (bool, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM entries WHERE kind = ? AND ref = ? LIMIT 1`,
+		int32(tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT), ref)
+	var one int
+	err := row.Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("storage: HasTransferRef: %w", err)
+	}
+	return true, nil
+}
+
 // Balance returns the current balance projection for an identity, or
 // ok=false on a clean miss.
 func (s *Store) Balance(ctx context.Context, identityID []byte) (BalanceRow, bool, error) {

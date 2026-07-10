@@ -259,6 +259,55 @@ func TestAppendTransferOut_RejectsMissingConsumerSig(t *testing.T) {
 	assert.Contains(t, err.Error(), "consumer sig + pubkey")
 }
 
+func TestAppendTransferOut_DuplicateRefRejected(t *testing.T) {
+	l := openTempLedger(t)
+	ctx := context.Background()
+	cPub, _ := labeledKeypair("consumer")
+	consumerID := spkiIdentityID(t, cPub)
+
+	_, err := l.IssueStarterGrant(ctx, consumerID, 5000)
+	require.NoError(t, err)
+
+	rec := signedTransferOutRecord(t, l, 1000)
+	_, err = l.AppendTransferOut(ctx, rec)
+	require.NoError(t, err)
+
+	// Replay the SAME signed intent with a refreshed (prev, seq). The
+	// intent sig is sequencing-independent, so it still verifies — this
+	// is exactly the double-debit vector the on-chain ref-uniqueness
+	// check closes. The in-memory federation cache is NOT a defense
+	// (lost on restart, check-then-act race).
+	dup := rec
+	dup.PrevHash, dup.Seq = nextTipForTest(t, l)
+	_, err = l.AppendTransferOut(ctx, dup)
+	require.ErrorIs(t, err, ErrTransferRefExists)
+
+	// Debit applied exactly ONCE: 5000 - 1000, and only one transfer_out
+	// on chain (grant at seq 1, transfer_out at seq 2).
+	bal, ok, err := l.store.Balance(ctx, consumerID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(4000), bal.Credits, "duplicate ref must NOT double-debit")
+
+	tipSeq, _, hasTip, err := l.Tip(ctx)
+	require.NoError(t, err)
+	require.True(t, hasTip)
+	assert.Equal(t, uint64(2), tipSeq, "second transfer_out must not land")
+
+	// Kind scoping: a transfer_in reusing the same ref (refund / mirrored
+	// entry shape) is NOT a duplicate transfer_out and must append fine.
+	prev, seq := nextTipForTest(t, l)
+	_, err = l.AppendTransferIn(ctx, TransferInRecord{
+		PrevHash:    prev,
+		Seq:         seq,
+		IdentityID:  consumerID,
+		Amount:      1000,
+		Timestamp:   1714000100,
+		TransferRef: rec.TransferRef,
+	})
+	require.NoError(t, err, "TRANSFER_IN with the same ref is legitimate")
+}
+
 func TestAppendTransferOut_InsufficientBalance(t *testing.T) {
 	l := openTempLedger(t)
 	ctx := context.Background()

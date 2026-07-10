@@ -144,6 +144,25 @@ func (l *Ledger) appendLocked(ctx context.Context, in appendInput, verifyPreFill
 		}
 	}
 
+	// TRANSFER_OUT refs are single-use (cross-region double-debit
+	// defense). The transfer intent sig is sequencing-independent, so a
+	// replayed intent with a refreshed (prev, seq) would otherwise land a
+	// second debit; the federation in-memory issued cache is NOT a defense
+	// (lost on restart, check-then-act race). Mirrors the USAGE
+	// request_id pattern: runs under Ledger.mu, atomic with the tip check
+	// and the storage commit. Scoped to kind=TRANSFER_OUT only —
+	// TRANSFER_IN shares the same ref by design (the destination reuses
+	// the source's nonce) and must not collide.
+	if in.body.Kind == tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT {
+		exists, err := l.store.HasTransferRef(ctx, in.body.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: transfer ref lookup: %w", err)
+		}
+		if exists {
+			return nil, ErrTransferRefExists
+		}
+	}
+
 	if !in.participantSigsPreVerified {
 		if len(in.consumerSig) != 0 {
 			if !signing.VerifyEntry(in.consumerPub, in.body, in.consumerSig) {
