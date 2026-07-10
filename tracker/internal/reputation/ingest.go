@@ -232,6 +232,84 @@ func (s *Subsystem) RecordCategoricalBreach(id ids.IdentityID, kind BreachKind) 
 	return s.refreshOne(ctx, id)
 }
 
+// Freeze manually transitions id to FROZEN and gossips the federation
+// REVOCATION via notifyFreeze, exactly as the evaluator's freeze_repeat
+// path does. This is the operator lever: a real z-score-driven FROZEN
+// transition needs >=3 zscore/breach reasons inside a 7-day window,
+// which external traffic cannot produce in test/demo time, so tooling
+// (and the deferred admin route) that needs a deterministic FROZEN
+// identity calls this directly. Freeze is region-local authoritative
+// (tracker CLAUDE.md rule 4); the notifyFreeze gossip to peers is
+// advisory only.
+//
+// Freezing an already-FROZEN identity is a no-op (errInvalidTransition
+// is swallowed) — no duplicate reason, no duplicate revocation gossip.
+func (s *Subsystem) Freeze(ctx context.Context, id ids.IdentityID, operator string) error {
+	if s.closed.Load() {
+		return ErrSubsystemClosed
+	}
+
+	s.breachMu.Lock()
+	defer s.breachMu.Unlock()
+
+	now := s.now()
+	if err := s.store.ensureState(ctx, id, now); err != nil {
+		return fmt.Errorf("reputation: Freeze: %w", err)
+	}
+
+	reason := ReasonRecord{
+		Kind:     "manual",
+		Operator: operator,
+		At:       now.Unix(),
+	}
+	if err := s.store.transition(ctx, id, StateFrozen, reason, now); err != nil {
+		if errors.Is(err, errInvalidTransition) {
+			// Already FROZEN — nothing to do, no double revocation gossip.
+			return nil
+		}
+		return fmt.Errorf("reputation: Freeze: %w", err)
+	}
+
+	if err := s.refreshOne(ctx, id); err != nil {
+		return fmt.Errorf("reputation: Freeze: %w", err)
+	}
+
+	s.notifyFreeze(ctx, id, "operator", now)
+	return nil
+}
+
+// Unfreeze reverses a FROZEN identity back to OK. canTransition blocks
+// leaving FROZEN on every other path, so Unfreeze goes through
+// storage.clearFrozen, the one sanctioned bypass — it still appends a
+// "manual" reason (append-only; the freeze reason is never rewritten
+// or removed), it just skips the transition-legality guard.
+//
+// v1 does not un-gossip a REVOCATION: once notifyFreeze has told peer
+// regions about a freeze, Unfreeze does not emit a follow-up message
+// to retract it. Federation-gossiped revocations are advisory anyway
+// (tracker CLAUDE.md rule 4) — peers that need to know a freeze was
+// reversed must be told out of band in v1.
+func (s *Subsystem) Unfreeze(ctx context.Context, id ids.IdentityID, operator string) error {
+	if s.closed.Load() {
+		return ErrSubsystemClosed
+	}
+
+	s.breachMu.Lock()
+	defer s.breachMu.Unlock()
+
+	now := s.now()
+	reason := ReasonRecord{
+		Kind:     "manual",
+		Operator: operator,
+		At:       now.Unix(),
+	}
+	if err := s.store.clearFrozen(ctx, id, reason, now); err != nil {
+		return fmt.Errorf("reputation: Unfreeze: %w", err)
+	}
+
+	return s.refreshOne(ctx, id)
+}
+
 // refreshOne updates a single identity's cache entry. Caller must hold
 // breachMu.
 func (s *Subsystem) refreshOne(ctx context.Context, id ids.IdentityID) error {
