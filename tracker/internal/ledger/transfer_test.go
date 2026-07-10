@@ -353,6 +353,71 @@ func TestAppendTransferIn_HappyPath(t *testing.T) {
 	assert.Equal(t, int64(1500), bal.Credits)
 }
 
+func TestAppendTransferIn_DuplicateRefRejected(t *testing.T) {
+	l := openTempLedger(t)
+	ctx := context.Background()
+	cPub, cPriv := labeledKeypair("consumer")
+	consumerID := spkiIdentityID(t, cPub)
+	transferRef := bytes.Repeat([]byte{0x44}, 32)
+
+	prev, seq := nextTipForTest(t, l)
+	_, err := l.AppendTransferIn(ctx, TransferInRecord{
+		PrevHash:    prev,
+		Seq:         seq,
+		IdentityID:  consumerID,
+		Amount:      1500,
+		Timestamp:   1714000000,
+		TransferRef: transferRef,
+	})
+	require.NoError(t, err)
+
+	// Replay the same transfer_in with a FRESH (prev, seq) — the exact
+	// dest-restart shape: the federation completed cache is gone, the
+	// source's WARM issued cache replays the original proof without
+	// re-entering AppendTransferOut, and the destination re-drives
+	// AppendTransferIn. The on-chain TRANSFER_IN ref check is the only
+	// durable defense left and must reject the duplicate.
+	dup := TransferInRecord{
+		IdentityID:  consumerID,
+		Amount:      1500,
+		Timestamp:   1714000001,
+		TransferRef: transferRef,
+	}
+	dup.PrevHash, dup.Seq = nextTipForTest(t, l)
+	_, err = l.AppendTransferIn(ctx, dup)
+	require.ErrorIs(t, err, ErrTransferRefExists)
+
+	// Credit applied exactly ONCE, and only one transfer_in on chain.
+	bal, ok, err := l.store.Balance(ctx, consumerID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(1500), bal.Credits, "duplicate ref must NOT double-credit")
+
+	tipSeq, _, hasTip, err := l.Tip(ctx)
+	require.NoError(t, err)
+	require.True(t, hasTip)
+	assert.Equal(t, uint64(1), tipSeq, "second transfer_in must not land")
+
+	// Kind scoping (mirror of TestAppendTransferOut_DuplicateRefRejected's
+	// closing assertion): a transfer_out reusing the same ref on the same
+	// ledger is NOT a duplicate transfer_in — within one ledger only a
+	// same-kind ref reuse is the double-spend to reject.
+	rec := TransferOutRecord{
+		ConsumerID:      consumerID,
+		Amount:          1000,
+		Timestamp:       1714000002,
+		TransferRef:     transferRef,
+		SourceTrackerID: testSourceTrackerID,
+		DestTrackerID:   testDestTrackerID,
+		ConsumerPub:     cPub,
+	}
+	rec.PrevHash, rec.Seq = nextTipForTest(t, l)
+	rec.ConsumerSig, err = fed.SignTransferProofRequest(cPriv, intentFromRecord(rec))
+	require.NoError(t, err)
+	_, err = l.AppendTransferOut(ctx, rec)
+	require.NoError(t, err, "TRANSFER_OUT with the same ref is legitimate")
+}
+
 func TestAppendTransferIn_RejectsZeroAmount(t *testing.T) {
 	l := openTempLedger(t)
 	prev, seq := nextTipForTest(t, l)

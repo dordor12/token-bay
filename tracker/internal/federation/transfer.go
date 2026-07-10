@@ -5,9 +5,14 @@
 //   - the source-side issued-proof replay cache keyed by Nonce
 //   - the destination-side completed-transfer cache keyed by Nonce
 //
-// All three are in-memory; the durable double-spend backstop is the
-// ledger's on-chain single-use TRANSFER_OUT ref check at the source
-// (ledger.ErrTransferRefExists), which holds across restarts.
+// All three are in-memory; the durable double-spend backstops are the
+// ledger's on-chain per-kind single-use transfer ref checks
+// (ledger.ErrTransferRefExists), which hold across restarts: the
+// TRANSFER_OUT check at the source (double-debit) and the TRANSFER_IN
+// check at the destination (double-credit). Both are needed — a source
+// answers a replayed request from its warm issued cache without
+// re-entering the ledger, so only the destination's own on-chain check
+// bounds a dest-restart replay.
 package federation
 
 import (
@@ -494,11 +499,18 @@ func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransf
 		Timestamp:   proof.Timestamp,
 		TransferRef: in.Nonce,
 	}); err != nil {
-		// ErrTransferRefExists is treated as success: the credit is already
-		// booked. v1 ledger never returns it, but the contract is in place.
+		// ErrTransferRefExists is treated as IDEMPOTENT SUCCESS: a
+		// TRANSFER_IN with this ref is already on the local chain, i.e.
+		// the credit was booked by an earlier run. This is the
+		// dest-restart replay path — the completed cache above was wiped,
+		// the source replayed its cached proof (verified against the
+		// source pubkey just above), and the ledger's durable on-chain
+		// check refused the second credit. Fall through and return the
+		// proof-derived result to the caller as if freshly completed.
 		if !isLedgerTransferRefExists(err) {
 			return StartTransferOutput{}, fmt.Errorf("federation: append transfer_in: %w", err)
 		}
+		tc.cfg.MetricsCounter("transfer_in_ref_exists_idempotent")
 	}
 
 	// Send TransferApplied back to source. Best-effort; failures here are
@@ -634,11 +646,12 @@ func (tc *transferCoordinator) OnApplied(_ context.Context, env *fed.Envelope, f
 // for the ledger's ErrTransferRefExists sentinel. The ledger orchestrator
 // package is not imported here to keep federation's dependency surface
 // independent of ledger-package identifier renames. The ledger returns
-// the sentinel unwrapped (appendLocked's single-use TRANSFER_OUT ref
-// check), and the production ledgerHooksAdapter propagates it verbatim,
-// so the exact-message match is stable. Note the ref check is
-// TRANSFER_OUT-scoped, so AppendTransferIn never returns it today; the
-// predicate stays in place for a future dest-side on-chain check.
+// the sentinel unwrapped (appendLocked's per-kind single-use transfer
+// ref check — TRANSFER_OUT at the source, TRANSFER_IN at the
+// destination), and the production ledgerHooksAdapter propagates it
+// verbatim, so the exact-message match is stable. StartTransfer relies
+// on it to turn a dest-restart replay (AppendTransferIn refusing a
+// duplicate on-chain TRANSFER_IN ref) into idempotent success.
 func isLedgerTransferRefExists(err error) bool {
 	if err == nil {
 		return false

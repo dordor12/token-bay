@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -553,6 +554,155 @@ func TestTransferCoordinator_StartTransfer_ReplayReturnsCachedResult(t *testing.
 		t.Fatalf("replay must not send anything, sent kind=%v", s.Kind)
 	default:
 	}
+}
+
+// durableFakeLedger mirrors the real ledger's durable per-kind
+// TRANSFER_IN ref check: the first AppendTransferIn for a ref books the
+// credit, every later one returns the ledger's ErrTransferRefExists
+// sentinel (matched by isLedgerTransferRefExists via its exact message).
+// Unlike the coordinator's in-memory caches it survives a simulated dest
+// restart — the test keeps the fake while recreating the coordinator,
+// standing in for the SQLite chain outliving the process.
+type durableFakeLedger struct {
+	fakeLedger
+	booked  map[[32]byte]bool
+	credits int // count of credits actually applied (must never exceed 1 per ref)
+}
+
+func (f *durableFakeLedger) AppendTransferIn(_ context.Context, in TransferInHookIn) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inCalls = append(f.inCalls, in)
+	if f.booked == nil {
+		f.booked = make(map[[32]byte]bool)
+	}
+	if f.booked[in.TransferRef] {
+		// Must byte-match the ledger sentinel: the production adapter
+		// propagates ledger.ErrTransferRefExists verbatim.
+		return errors.New("ledger: transfer ref already on chain")
+	}
+	f.booked[in.TransferRef] = true
+	f.credits++
+	return nil
+}
+
+// TestTransferCoordinator_StartTransfer_DestRestartReplayIdempotent
+// simulates the dest-restart replay the durable TRANSFER_IN ref check
+// exists for: the transfer completes, the destination restarts (fresh
+// coordinator — completed cache gone; same ledger), and the same signed
+// StartTransfer is re-driven. The source answers from its warm issued
+// cache with the ORIGINAL proof bytes (no second AppendTransferOut), the
+// dest re-enters AppendTransferIn, the ledger refuses the duplicate ref,
+// and StartTransfer must surface that as idempotent SUCCESS — the caller
+// gets the completed result, and the credit is applied exactly once.
+func TestTransferCoordinator_StartTransfer_DestRestartReplayIdempotent(t *testing.T) {
+	t.Parallel()
+	srcPub, srcPriv := keypairFromSeed(0x11)
+	dstPub, dstPriv := keypairFromSeed(0x22)
+	conPub, conPriv := keypairFromSeed(0x33)
+
+	srcID := trackerID(srcPub)
+	dstID := trackerID(dstPub)
+
+	ledger := &durableFakeLedger{}
+
+	identityID := bytes32(0x44)
+	nonce := bytes32(0x55)
+	srcIDBytes := srcID.Bytes()
+	dstIDBytes := dstID.Bytes()
+
+	// The proof the source mints once and then replays verbatim from its
+	// issued cache on the second request.
+	proof := &fed.TransferProof{
+		SourceTrackerId:    srcIDBytes[:],
+		DestTrackerId:      dstIDBytes[:],
+		IdentityId:         identityID[:],
+		Amount:             1500,
+		Nonce:              nonce[:],
+		SourceChainTipHash: bytes.Repeat([]byte{0xCC}, 32),
+		SourceSeq:          7,
+		Timestamp:          1714000000,
+	}
+	cb, err := fed.CanonicalTransferProofPreSig(proof)
+	require.NoError(t, err)
+	proof.SourceTrackerSig = ed25519.Sign(srcPriv, cb)
+	proofPayload, err := proto.Marshal(proof)
+	require.NoError(t, err)
+
+	in := StartTransferInput{
+		SourceTrackerID: srcID,
+		IdentityID:      ids.IdentityID(identityID),
+		Amount:          1500,
+		Nonce:           nonce,
+		ConsumerPub:     conPub,
+		Timestamp:       1714000000,
+	}
+	canonical, err := fed.CanonicalTransferProofRequestPreSig(&fed.TransferProofRequest{
+		SourceTrackerId: srcIDBytes[:],
+		DestTrackerId:   dstIDBytes[:],
+		IdentityId:      identityID[:],
+		Amount:          1500,
+		Nonce:           nonce[:],
+		ConsumerPub:     conPub,
+		Timestamp:       1714000000,
+	})
+	require.NoError(t, err)
+	in.ConsumerSig = ed25519.Sign(conPriv, canonical)
+
+	// newCoordinator builds a coordinator whose Send answers every
+	// TRANSFER_PROOF_REQUEST with the SAME cached proof — exactly what a
+	// source with a warm issued cache does on a replay.
+	newCoordinator := func() *transferCoordinator {
+		var tc *transferCoordinator
+		tc = newTransferCoordinator(transferCoordinatorCfg{
+			MyTrackerID: dstID,
+			MyPriv:      dstPriv,
+			Ledger:      ledger,
+			IssuedCap:   16,
+			Now:         func() time.Time { return time.Unix(1714000000, 0) },
+			PeerPubKey: func(id ids.TrackerID) (ed25519.PublicKey, bool) {
+				if id == srcID {
+					return srcPub, true
+				}
+				return nil, false
+			},
+			Send: func(_ context.Context, _ ids.TrackerID, kind fed.Kind, _ []byte) error {
+				if kind == fed.Kind_KIND_TRANSFER_PROOF_REQUEST {
+					go func() {
+						env, envErr := SignEnvelope(srcPriv, srcIDBytes[:], fed.Kind_KIND_TRANSFER_PROOF, proofPayload)
+						if envErr == nil {
+							tc.OnProof(context.Background(), env, srcID)
+						}
+					}()
+				}
+				return nil
+			},
+		})
+		return tc
+	}
+
+	// Round 1: normal completion.
+	tc1 := newCoordinator()
+	first, err := tc1.StartTransfer(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), first.SourceSeq)
+
+	ledger.mu.Lock()
+	assert.Equal(t, 1, ledger.credits, "first run books exactly one credit")
+	require.Len(t, ledger.inCalls, 1)
+	ledger.mu.Unlock()
+
+	// Dest restart: a FRESH coordinator (completed + pending caches empty)
+	// over the SAME durable ledger. Re-drive the identical signed request.
+	tc2 := newCoordinator()
+	replay, err := tc2.StartTransfer(context.Background(), in)
+	require.NoError(t, err, "dest-restart replay must be idempotent success, not an error")
+	assert.Equal(t, first, replay, "replay must return the original completed result")
+
+	ledger.mu.Lock()
+	assert.Equal(t, 1, ledger.credits, "dest-restart replay must NOT double-credit")
+	assert.Len(t, ledger.inCalls, 2, "the replay reaches the ledger and is refused there, not before")
+	ledger.mu.Unlock()
 }
 
 func TestTransferCoordinator_OnProof_Orphan(t *testing.T) {

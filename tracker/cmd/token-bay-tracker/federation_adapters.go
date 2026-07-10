@@ -135,8 +135,11 @@ const staleTipRetries = 8
 // on ErrStaleTip. The transfer_out commits durably BEFORE the federation
 // layer signs and returns the TransferProof (ordering invariant: no proof
 // without an on-chain debit). The ledger's on-chain single-use
-// TRANSFER_OUT ref check (ledger.ErrTransferRefExists) is the durable
-// double-debit backstop; the adapter propagates it verbatim.
+// per-kind transfer ref checks (ledger.ErrTransferRefExists) are the
+// durable backstops — TRANSFER_OUT against double-debit at the source,
+// TRANSFER_IN against double-credit at the destination (dest-restart
+// replay); the adapter propagates the sentinel verbatim so federation's
+// isLedgerTransferRefExists can classify it.
 type ledgerHooksAdapter struct {
 	led *ledger.Ledger
 }

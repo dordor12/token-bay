@@ -15,13 +15,17 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 )
 
-// ErrTransferRefExists means a TRANSFER_OUT entry with the same
-// TransferRef is already on the chain. Returned by AppendTransferOut via
-// the appendLocked single-use ref check (backed by storage.HasTransferRef
-// + idx_entries_ref_kind) — the on-chain cross-region double-debit
-// defense. Callers MUST treat this as an idempotent outcome, never retry
-// the debit. Scoped to kind=TRANSFER_OUT: a destination-side transfer_in
-// legitimately reuses the source's nonce as its ref and does not trip it.
+// ErrTransferRefExists means a transfer entry of the SAME KIND with the
+// same TransferRef is already on the chain. Returned by AppendTransferOut
+// (duplicate TRANSFER_OUT — the on-chain cross-region double-debit
+// defense at the source) and by AppendTransferIn (duplicate TRANSFER_IN —
+// the on-chain double-credit defense at the destination), both via the
+// appendLocked single-use ref check (backed by storage.HasTransferRef +
+// idx_entries_ref_kind). Callers MUST treat this as an idempotent
+// outcome, never retry the debit/credit. The check is kind-scoped: the
+// two halves of one transfer legitimately share the same ref (the
+// destination reuses the source's nonce), so a transfer_out and a
+// transfer_in never trip each other — only a same-kind duplicate does.
 var ErrTransferRefExists = errors.New("ledger: transfer ref already on chain")
 
 // ErrTransferIdentityMismatch means the transfer_out's debited identity
@@ -177,12 +181,17 @@ type TransferInRecord struct {
 // IdentityID directly.
 //
 // Returns ErrStaleTip if PrevHash/Seq don't match the current tip.
-// Unlike TRANSFER_OUT there is no on-chain ref-uniqueness check for
-// transfer_in at the ledger layer; destination-side replay protection is
-// the federation coordinator's completed-transfer cache, and the
-// source's on-chain TRANSFER_OUT ref check bounds cross-restart replays
-// (a replayed request is rejected at the source before a fresh proof can
-// be minted).
+// Returns ErrTransferRefExists if a TRANSFER_IN with this TransferRef is
+// already on chain — the destination's OWN durable double-credit
+// defense, symmetric with the TRANSFER_OUT check at the source. It is
+// needed because the source-side check does NOT bound dest-side replays:
+// on the warm path the source answers a replayed request from its issued
+// cache with the original signed proof WITHOUT re-entering
+// AppendTransferOut, so after a dest restart wipes the federation
+// completed-transfer cache, a re-driven transfer would credit a second
+// time were it not for this check. Callers (federation StartTransfer)
+// treat ErrTransferRefExists as idempotent success — the credit is
+// already booked; never retry it.
 func (l *Ledger) AppendTransferIn(ctx context.Context, r TransferInRecord) (*tbproto.Entry, error) {
 	if r.Amount == 0 {
 		return nil, errors.New("ledger: transfer_in amount must be > 0")
