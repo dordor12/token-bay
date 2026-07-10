@@ -115,6 +115,13 @@ func generate(opts genOpts) error {
 		return err
 	}
 
+	if err := writeFedID(opts.OutDir, "tracker-a", idA); err != nil {
+		return err
+	}
+	if err := writeFedID(opts.OutDir, "tracker-b", idB); err != nil {
+		return err
+	}
+
 	cfgA := buildTrackerConfig("/gen/identity-a.key", []config.FederationPeer{
 		{
 			TrackerID: hex.EncodeToString(idB.trackerID[:]),
@@ -235,6 +242,22 @@ func writeSPKIHash(outDir, trackerName string, id identity) error {
 	path := filepath.Join(outDir, trackerName+".spki")
 	hexHash := hex.EncodeToString(id.spkiHash[:])
 	if err := os.WriteFile(path, []byte(hexHash), 0o644); err != nil { //nolint:gosec // world-readable like identity keys: bind-mounted into containers running as a non-owner uid
+		return fmt.Errorf("generate: write %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeFedID writes the hex-encoded SHA-256 of trackerName's raw Ed25519
+// public key to <trackerName>.fedid — the FEDERATION tracker_id (the
+// identity.trackerID field also used in federation.peers[].tracker_id),
+// which the consumer actor's /transfer needs to identify a tracker's
+// region. This is a distinct encoding from the mTLS SPKI hash written by
+// writeSPKIHash: sha256(raw pubkey) here vs. sha256(DER SPKI) there. No
+// trailing newline: the file is exactly the hex digest.
+func writeFedID(outDir, trackerName string, id identity) error {
+	path := filepath.Join(outDir, trackerName+".fedid")
+	hexID := hex.EncodeToString(id.trackerID[:])
+	if err := os.WriteFile(path, []byte(hexID), 0o644); err != nil { //nolint:gosec // world-readable like identity keys: bind-mounted into containers running as a non-owner uid
 		return fmt.Errorf("generate: write %s: %w", path, err)
 	}
 	return nil

@@ -96,6 +96,15 @@ func TestRender_ProducesValidConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, hex.EncodeToString(wantSPKIHashA[:]), string(gotSPKIHashA))
 
+	// tracker-a.fedid is the hex SHA-256 of tracker A's RAW Ed25519
+	// pubkey (the FEDERATION tracker_id, distinct from the mTLS SPKI
+	// hash above — see identity's doc comment in render.go).
+	wantFedIDHashA := sha256.Sum256(pubA)
+	gotFedIDHashA, err := os.ReadFile(filepath.Join(dir, "tracker-a.fedid"))
+	require.NoError(t, err)
+	require.Equal(t, hex.EncodeToString(wantFedIDHashA[:]), string(gotFedIDHashA))
+	require.NotEqual(t, string(gotFedIDHashA), string(gotSPKIHashA), "fedid and spki must be distinct encodings")
+
 	// tracker-b's config has only A as a peer.
 	rawB, err := os.ReadFile(filepath.Join(dir, "tracker-b.yaml"))
 	require.NoError(t, err)

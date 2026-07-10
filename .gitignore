@@ -27,3 +27,6 @@ Thumbs.db
 # Local runtime data
 ~/.token-bay/
 .token-bay-local/
+
+# Generated e2e artifacts (keys, configs, SPKI/fed-id hashes)
+tracker/test/e2e/.gen/

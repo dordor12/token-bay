@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1.6
+
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+COPY . .
+RUN mkdir -p /out \
+ && go work sync \
+ && CGO_ENABLED=0 go build -o /out/tokenbay-e2e-actor ./plugin/cmd/tokenbay-e2e-actor \
+ && CGO_ENABLED=0 go build -o /out/fedactor ./tracker/test/e2e/cmd/fedactor
+
+FROM alpine:3.20
+RUN mkdir -p /data && chown 1000:1000 /data
+COPY --from=builder /out/tokenbay-e2e-actor /usr/local/bin/tokenbay-e2e-actor
+COPY --from=builder /out/fedactor /usr/local/bin/fedactor
+USER 1000:1000
+# entrypoint set per-service in compose

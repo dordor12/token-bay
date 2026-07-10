@@ -9,7 +9,7 @@ RUN mkdir -p /out \
  && CGO_ENABLED=0 go build -o /out/token-bay-tracker ./cmd/token-bay-tracker
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates sqlite
 COPY --from=builder /out/token-bay-tracker /usr/local/bin/token-bay-tracker
 RUN mkdir -p /data && chown 1000:1000 /data
 USER 1000:1000
