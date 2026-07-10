@@ -120,6 +120,13 @@ func (s *Settlement) Close() error {
 // identity pubkey). Verification verdicts flow through Settlement.pending
 // into awaitSettle, which appends with ConsumerSigMissing=true when the sig
 // is absent or unverifiable and carries the verified sig + pubkey when not.
+//
+// Settlement authorization is single-use per request_id: a report arriving
+// while a settlement for the same request is already in flight returns
+// ErrDuplicateUsageReport (the putPending gate), and one arriving after the
+// request reached a terminal state returns ErrInvalidState (the state
+// guard). The ledger enforces the same invariant independently via
+// ledger.ErrUsageRequestExists.
 func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityID, r *tbproto.UsageReport) (*tbproto.UsageAck, error) {
 	if r == nil || len(r.RequestId) != 16 {
 		return nil, errors.New("settlement: malformed UsageReport")
@@ -220,8 +227,13 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 
 	// Record the assertion + preimage bytes so HandleSettle can verify the
 	// consumer's counter-sig over the exact bytes the seeder vouched for
-	// and that were pushed.
-	s.putPending(reqID, assertion, preSig)
+	// and that were pushed. putPending is the atomic check-and-insert
+	// dedupe gate: a pre-existing entry means a settlement for this
+	// request is already in flight, so this report is a duplicate (seeder
+	// retry or replay) and must not spawn a second awaitSettle/append.
+	if !s.putPending(reqID, assertion, preSig) {
+		return nil, ErrDuplicateUsageReport
+	}
 
 	// 9. Push SettlementPush to consumer (best-effort).
 	push := &tbproto.SettlementPush{
@@ -261,10 +273,21 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 // an in-flight settlement and initialises a fresh verification verdict.
 // Called by HandleUsageReport after IndexByHash so HandleSettle observes
 // the assertion before the consumer can possibly counter-sign.
-func (s *Settlement) putPending(reqID [16]byte, assertion signing.UsageAssertion, preSig []byte) {
+//
+// The check-and-insert is atomic under pendingMu: it returns false — and
+// leaves the existing entry untouched — when a settlement for reqID is
+// already pending, so two racing reports can never both win the gate. The
+// entry lives until awaitSettle's dropPending, which runs strictly after
+// the request leaves SERVING on append success/failure; a duplicate report
+// arriving after that is rejected by HandleUsageReport's state guard.
+func (s *Settlement) putPending(reqID [16]byte, assertion signing.UsageAssertion, preSig []byte) bool {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
+	if _, exists := s.pending[reqID]; exists {
+		return false
+	}
 	s.pending[reqID] = &pendingSettle{assertion: assertion, preSig: preSig}
+	return true
 }
 
 // getPending returns the pending settlement entry for reqID, or nil if

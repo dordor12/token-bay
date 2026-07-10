@@ -39,7 +39,7 @@ func TestApplyMigrations_Idempotent(t *testing.T) {
 func TestApplyMigrations_CreatesIndexes(t *testing.T) {
 	db := openTempDB(t)
 
-	for _, name := range []string{"idx_entries_consumer", "idx_entries_seeder", "idx_entries_time"} {
+	for _, name := range []string{"idx_entries_consumer", "idx_entries_seeder", "idx_entries_time", "idx_entries_request"} {
 		var got string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='index' AND name=?", name).Scan(&got)
 		require.NoError(t, err, "index %q missing", name)

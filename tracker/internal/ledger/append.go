@@ -130,6 +130,21 @@ func (l *Ledger) appendLocked(ctx context.Context, in appendInput, verifyPreFill
 		return nil, fmt.Errorf("ledger: validate body: %w", err)
 	}
 
+	// USAGE request_ids are single-use (settlement replay defense). The
+	// check runs under Ledger.mu — atomically with the tip check and the
+	// storage commit — so two racing appends for the same request_id
+	// serialize and exactly one wins. Scoped to kind=USAGE: other kinds
+	// carry all-zero request_ids by design. See ErrUsageRequestExists.
+	if in.body.Kind == tbproto.EntryKind_ENTRY_KIND_USAGE {
+		exists, err := l.store.HasUsageRequestID(ctx, in.body.RequestId)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: usage request_id lookup: %w", err)
+		}
+		if exists {
+			return nil, ErrUsageRequestExists
+		}
+	}
+
 	if !in.participantSigsPreVerified {
 		if len(in.consumerSig) != 0 {
 			if !signing.VerifyEntry(in.consumerPub, in.body, in.consumerSig) {

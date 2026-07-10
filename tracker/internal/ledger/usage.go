@@ -11,6 +11,19 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 )
 
+// ErrUsageRequestExists means a USAGE entry with this request_id is already
+// on-chain. USAGE request_ids are single-use: participant sigs cover the
+// sequencing-independent usage-assertion (not prev_hash/seq), so without
+// this invariant a replayed usage_report could re-append the same
+// settlement with the same sigs and double-debit the consumer. The check is
+// scoped to kind=USAGE — transfer and starter-grant entries carry all-zero
+// request_ids by design and never collide.
+//
+// A genuine stale-tip retry is unaffected: it re-appends an entry whose
+// first attempt failed with ErrStaleTip and committed nothing, so the
+// request_id is still unused when the retry lands.
+var ErrUsageRequestExists = errors.New("ledger: usage entry with this request_id already exists")
+
 // UsageRecord is the typed input to AppendUsage. The caller (broker) has
 // already collected ConsumerSig + SeederSig over the sequencing-independent
 // usage-assertion (signing.UsageAssertion) derived from these fields —

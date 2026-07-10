@@ -791,6 +791,78 @@ func TestHandleSettle_UnknownConsumerPubkey(t *testing.T) {
 		"expected ConsumerPubkeyUnknown counter to be incremented")
 }
 
+// ---------------------------------------------------------------------------
+// Settlement replay defense: duplicate usage_report rejection
+// ---------------------------------------------------------------------------
+
+// TestHandleUsageReport_DuplicateRejected — a second usage_report for the
+// same request_id while the first settlement is in flight (benign seeder
+// retry after a lost UsageAck, or a malicious replay) must be rejected with
+// ErrDuplicateUsageReport and must NOT spawn a second settlement goroutine:
+// exactly one ledger append happens for the request.
+func TestHandleUsageReport_DuplicateRejected(t *testing.T) {
+	deps := testDeps(t)
+
+	cap := &fakeLedgerCapturing{}
+	deps.Ledger = cap
+
+	fr := newFakeRegistry()
+	seederRec := seederRecord(t, ids.IdentityID{0xDD}, 0.9, "claude-sonnet-4-6")
+	fr.Add(seederRec)
+	_, _ = fr.IncLoad(seederRec.IdentityID)
+	deps.Registry = fr
+
+	mgr := session.New()
+
+	requestID := [16]byte{0x30}
+	consumerID := ids.IdentityID{0xCC}
+	seederID := ids.IdentityID{0xDD}
+	model := "claude-sonnet-4-6"
+
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
+	mgr.Inflight.Insert(req)
+	_ = mgr.Reservations.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
+
+	// Long settlement timeout: the first settlement stays in flight while
+	// the duplicate arrives.
+	cfg := testSettlementCfg()
+	cfg.SettlementTimeoutS = 900
+
+	const fixedTS uint64 = 1700000000
+	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
+
+	s, err := OpenSettlement(cfg, deps, mgr)
+	require.NoError(t, err)
+	defer s.Close()
+
+	report := buildSeederSignedReport(t, seederPriv, requestID, model, 100, 200, consumerID, seederID)
+
+	_, err = s.HandleUsageReport(context.Background(), seederID, report)
+	require.NoError(t, err, "first report must be accepted")
+
+	// Seeder resends the identical report (UsageAck lost / replay).
+	_, err = s.HandleUsageReport(context.Background(), seederID, report)
+	require.ErrorIs(t, err, ErrDuplicateUsageReport)
+	require.Equal(t, 0, cap.Count(), "no append may happen while the settlement is still pending")
+
+	// Release the parked settlement goroutine by delivering a consumer
+	// sig. (No Identity resolver wired — the sig is unverifiable, which is
+	// fine; only the append count matters here.)
+	req.SettleSig <- []byte("consumer-sig")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cap.Count() > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.Equal(t, 1, cap.Count(), "exactly one ledger append per request_id")
+}
+
 func TestHandleSettle_Duplicate(t *testing.T) {
 	deps := testDeps(t)
 	mgr := session.New()

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -116,4 +117,36 @@ func TestBalance_Miss(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Empty(t, got.IdentityID)
+}
+
+func TestHasUsageRequestID(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtUsageInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasUsageRequestID(ctx, in.Entry.Body.RequestId)
+	require.NoError(t, err)
+	assert.True(t, got, "committed USAGE request_id must be found")
+
+	got, err = s.HasUsageRequestID(ctx, bytes.Repeat([]byte{0x7F}, 16))
+	require.NoError(t, err)
+	assert.False(t, got, "unused request_id must not match")
+}
+
+func TestHasUsageRequestID_ScopedToUsageKind(t *testing.T) {
+	// Transfer / starter-grant entries carry all-zero request_ids by
+	// design; they must never trip the USAGE single-use check.
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtStarterGrantInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasUsageRequestID(ctx, in.Entry.Body.RequestId)
+	require.NoError(t, err)
+	assert.False(t, got, "non-USAGE kinds are out of scope")
 }

@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE INDEX IF NOT EXISTS idx_entries_consumer ON entries(consumer_id, seq);
 CREATE INDEX IF NOT EXISTS idx_entries_seeder   ON entries(seeder_id, seq);
 CREATE INDEX IF NOT EXISTS idx_entries_time     ON entries(timestamp);
+-- Backs the single-use USAGE request_id check (HasUsageRequestID); the
+-- per-append existence probe must not scan the whole chain.
+CREATE INDEX IF NOT EXISTS idx_entries_request  ON entries(kind, request_id);
 
 CREATE TABLE IF NOT EXISTS balances (
     identity_id BLOB PRIMARY KEY,

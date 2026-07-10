@@ -36,6 +36,26 @@ func (s *Store) EntryByHash(ctx context.Context, hash []byte) (*tbproto.Entry, b
 	return scanEntry(row)
 }
 
+// HasUsageRequestID reports whether a USAGE entry with the given request_id
+// already exists on-chain. Backs the orchestrator's single-use USAGE
+// request_id invariant (settlement replay defense — ledger.AppendUsage).
+// Scoped to kind=USAGE: transfer and starter-grant entries carry all-zero
+// request_ids by design and must not collide.
+func (s *Store) HasUsageRequestID(ctx context.Context, requestID []byte) (bool, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM entries WHERE kind = ? AND request_id = ? LIMIT 1`,
+		int32(tbproto.EntryKind_ENTRY_KIND_USAGE), requestID)
+	var one int
+	err := row.Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("storage: HasUsageRequestID: %w", err)
+	}
+	return true, nil
+}
+
 // Balance returns the current balance projection for an identity, or
 // ok=false on a clean miss.
 func (s *Store) Balance(ctx context.Context, identityID []byte) (BalanceRow, bool, error) {
