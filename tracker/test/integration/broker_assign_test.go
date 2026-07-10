@@ -226,7 +226,10 @@ func newBrokerAssignFixture(t *testing.T, pusher broker.PushService) *brokerAssi
 // QUIC handshake completes, but opening a client-side stream (OpenStreamSync)
 // does not synchronize with the server having run that far — mirrors the
 // waitForPeers polling idiom in internal/server/server_test.go for the same
-// race.
+// race. Callers should pass a generous timeout (seconds, not hundreds of
+// milliseconds): the poll exits as soon as the record appears, so a large
+// budget costs nothing on the happy path but keeps the test robust when the
+// full suite runs on a heavily loaded machine.
 func waitForRegistryRecord(reg *registry.Registry, id ids.IdentityID, timeout time.Duration) (registry.SeederRecord, bool) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -236,7 +239,7 @@ func waitForRegistryRecord(reg *registry.Registry, id ids.IdentityID, timeout ti
 		if time.Now().After(deadline) {
 			return registry.SeederRecord{}, false
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -373,8 +376,11 @@ func TestIntegration_BrokerAssign(t *testing.T) {
 	openHB(t, seederConn)
 
 	// Task 2's fix registers every connecting peer as Available=false at
-	// connect time; confirm that landed before ADVERTISE flips it.
-	preRec, ok := waitForRegistryRecord(f.reg, seederID, 2*time.Second)
+	// connect time; confirm that landed before ADVERTISE flips it. 5s budget:
+	// normally this resolves in one or two 10ms polls, but the serveConn
+	// goroutine can be scheduled late when the full integration suite runs
+	// under load.
+	preRec, ok := waitForRegistryRecord(f.reg, seederID, 5*time.Second)
 	if !ok {
 		t.Fatal("seeder record never appeared in the registry after connect")
 	}

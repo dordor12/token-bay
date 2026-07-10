@@ -22,7 +22,6 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/broker"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
-	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
 )
@@ -108,14 +107,10 @@ func newBrokerE2EFixture(t *testing.T, scfg config.SettlementConfig) *brokerE2EF
 }
 
 func (f *brokerE2EFixture) openBroker(t *testing.T, bcfg config.BrokerConfig, scfg config.SettlementConfig, pusher broker.PushService) *broker.Subsystems {
-	return f.openBrokerWithClock(t, bcfg, scfg, pusher, time.Now)
-}
-
-func (f *brokerE2EFixture) openBrokerWithClock(t *testing.T, bcfg config.BrokerConfig, scfg config.SettlementConfig, pusher broker.PushService, now func() time.Time) *broker.Subsystems {
 	t.Helper()
 	deps := broker.Deps{
 		Logger:    zerolog.Nop(),
-		Now:       now,
+		Now:       time.Now,
 		Registry:  f.reg,
 		Ledger:    f.led,
 		Admission: f.adm,
@@ -213,14 +208,14 @@ func buildEnvelopeWithBalance(t *testing.T, consumerID ids.IdentityID, led *ledg
 	}
 }
 
-// buildSeederSignedReportE2E builds a UsageReport signed by seederPriv over
-// the entry body that the broker's settlement will reconstruct. The timestamp
-// is taken from the caller's fixed clock (must equal the broker's Now()) so
-// the body bytes are identical when HandleUsageReport and the ledger rebuild it.
-//
-// In v1 the settlement always stores ConsumerSigMissing=true; the body is
-// built with this flag pre-set so the seeder signature matches what the ledger
-// will re-verify on append.
+// buildSeederSignedReportE2E builds a UsageReport whose SeederSig is the
+// seeder's signature over the canonical usage-assertion
+// (shared/signing.UsageAssertion) — the same sequencing-independent message
+// HandleUsageReport reconstructs and verifies against the offer's ephemeral
+// pubkey. The assertion omits ledger sequencing (prev_hash/seq/timestamp/
+// flags), so no clock or tip coordination with the tracker is needed.
+// CostCredits must equal the tracker-computed actual cost, so it is derived
+// from the same DefaultPriceTable the broker fixture is wired with.
 func buildSeederSignedReportE2E(
 	t *testing.T,
 	seederPriv ed25519.PrivateKey,
@@ -228,38 +223,22 @@ func buildSeederSignedReportE2E(
 	model string,
 	inTok, outTok uint32,
 	consumerID, seederID ids.IdentityID,
-	led *ledger.Ledger,
-	now time.Time,
 ) *tbproto.UsageReport {
 	t.Helper()
 	pt := broker.DefaultPriceTable()
 	cost, err := pt.ActualCost(model, inTok, outTok)
 	require.NoError(t, err)
 
-	tipSeq, tipHash, _, err := led.Tip(context.Background())
-	require.NoError(t, err)
-
-	body, err := entry.BuildUsageEntry(entry.UsageInput{
-		PrevHash:     tipHash,
-		Seq:          tipSeq + 1,
+	sig, err := signing.SignUsageAssertion(seederPriv, signing.UsageAssertion{
+		RequestID:    requestID[:],
 		ConsumerID:   consumerID[:],
 		SeederID:     seederID[:],
 		Model:        model,
 		InputTokens:  inTok,
 		OutputTokens: outTok,
 		CostCredits:  cost,
-		Timestamp:    uint64(now.Unix()), //nolint:gosec // G115 — fixed past timestamp
-		RequestID:    requestID[:],
-		// v1: settlement always stores ConsumerSigMissing=true. The seeder
-		// signs the body with this flag pre-set so the signature matches
-		// what the ledger will re-verify on append.
-		ConsumerSigMissing: true,
 	})
 	require.NoError(t, err)
-
-	bodyBytes, err := signing.DeterministicMarshal(body)
-	require.NoError(t, err)
-	sig := ed25519.Sign(seederPriv, bodyBytes)
 
 	return &tbproto.UsageReport{
 		RequestId:    requestID[:],
@@ -271,8 +250,10 @@ func buildSeederSignedReportE2E(
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 1: Admit → offer accept → usage_report → ledger entry
-//             (ConsumerSigMissing path, fast SettlementTimeoutS=1)
+// Scenario 1: Admit → offer accept → usage_report → ledger entry via the
+//             timeout/dispute path: the consumer never counter-signs, so
+//             after SettlementTimeoutS (=1 here for speed) the tracker
+//             appends a USAGE entry with ConsumerSigMissing=true.
 // ---------------------------------------------------------------------------
 
 func TestBrokerE2E_AdmitUsageReportLedgerEntry(t *testing.T) {
@@ -301,18 +282,13 @@ func TestBrokerE2E_AdmitUsageReportLedgerEntry(t *testing.T) {
 		LastHeartbeat: time.Now(),
 	})
 
-	// Use a fixed clock so the timestamp in the seeder's pre-signed body
-	// matches what HandleUsageReport reconstructs.
-	fixedNow := time.Unix(1_750_000_000, 0)
-	nowFn := func() time.Time { return fixedNow }
-
 	// Build stub pusher that accepts the offer and uses seederPub as ephemeral.
 	pusher := &stubPusher{
 		offerAccept: true,
 		offerEphPub: seederPub,
 	}
 
-	subs := fix.openBrokerWithClock(t, defaultBrokerE2EConfig(), scfg, pusher, nowFn)
+	subs := fix.openBroker(t, defaultBrokerE2EConfig(), scfg, pusher)
 
 	// Consumer identity.
 	var consumerID ids.IdentityID
@@ -334,11 +310,11 @@ func TestBrokerE2E_AdmitUsageReportLedgerEntry(t *testing.T) {
 
 	requestID := res.Admit.RequestID
 
-	// Build the usage report signed with seederPriv. The seeder pre-signs
-	// with ConsumerSigMissing=true because in v1 the consumer sig is never
-	// collected; the settlement builds the body with this flag so the seeder
-	// must sign the same bytes.
-	report := buildSeederSignedReportE2E(t, seederPriv, requestID, model, 100, 200, consumerID, seederID, fix.led, fixedNow)
+	// Build the usage report: SeederSig is over the canonical usage-assertion.
+	// The consumer never counter-signs in this test, so the settlement takes
+	// the timeout path — after SettlementTimeoutS the tracker appends the
+	// USAGE entry with ConsumerSigMissing=true.
+	report := buildSeederSignedReportE2E(t, seederPriv, requestID, model, 100, 200, consumerID, seederID)
 
 	// Submit the usage report via HandleUsageReport.
 	ack, err := subs.Settlement.HandleUsageReport(context.Background(), seederID, report)
