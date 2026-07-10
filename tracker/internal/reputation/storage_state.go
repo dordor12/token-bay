@@ -163,6 +163,15 @@ func (s *storage) appendReason(ctx context.Context, id ids.IdentityID,
 // and clearFrozen is the one sanctioned bypass, reserved for the operator
 // Unfreeze API (Subsystem.Unfreeze). The audit trail invariant still
 // holds — this appends, it never edits or truncates rep_state.reasons.
+//
+// clearFrozen only acts on an identity that is currently FROZEN. If the
+// identity is in AUDIT or OK (or has no row at all), it is a no-op:
+// no state change, no since bump, no reason appended, err=nil. This
+// mirrors Freeze swallowing errInvalidTransition on an already-FROZEN
+// identity — the two operators stay symmetric, and Unfreeze can never
+// be used as a side door to force an AUDIT identity to OK (bypassing
+// the evaluator's 48h audit_cleared cooldown) or to re-bump an
+// already-OK identity's since/reasons.
 func (s *storage) clearFrozen(ctx context.Context, id ids.IdentityID,
 	reason ReasonRecord, now time.Time,
 ) error {
@@ -175,6 +184,11 @@ func (s *storage) clearFrozen(ctx context.Context, id ids.IdentityID,
 	}
 	if !ok {
 		return fmt.Errorf("reputation: clearFrozen: identity not found")
+	}
+	if cur.State != StateFrozen {
+		// Not frozen — nothing to clear. No-op, same as Freeze's
+		// swallowed errInvalidTransition on an already-FROZEN identity.
+		return nil
 	}
 	cur.Reasons = append(cur.Reasons, reason)
 	payload, err := json.Marshal(cur.Reasons)

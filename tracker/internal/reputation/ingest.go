@@ -284,6 +284,13 @@ func (s *Subsystem) Freeze(ctx context.Context, id ids.IdentityID, operator stri
 // "manual" reason (append-only; the freeze reason is never rewritten
 // or removed), it just skips the transition-legality guard.
 //
+// clearFrozen only acts when the identity is currently FROZEN. Calling
+// Unfreeze on an AUDIT or OK identity (or one with no row at all) is a
+// no-op: no state change, no since bump, no reason appended, err=nil.
+// This is deliberate — it is what keeps Unfreeze from being a side door
+// that forces an AUDIT identity straight to OK, bypassing the
+// evaluator's 48h audit_cleared cooldown.
+//
 // v1 does not un-gossip a REVOCATION: once notifyFreeze has told peer
 // regions about a freeze, Unfreeze does not emit a follow-up message
 // to retract it. Federation-gossiped revocations are advisory anyway

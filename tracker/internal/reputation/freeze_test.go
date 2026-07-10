@@ -97,6 +97,57 @@ func TestUnfreeze_OnClosedSubsystemReturnsError(t *testing.T) {
 		ErrSubsystemClosed)
 }
 
+// TestUnfreeze_OnAuditIdentityIsNoOp guards against Unfreeze being used
+// as an undocumented side door that forces an AUDIT identity straight
+// to OK, bypassing the evaluator's 48h audit_cleared cooldown. AUDIT is
+// driven directly via storage.transition (bypassing the evaluator),
+// the same pattern TestSubsystemIsFrozen_TrueForFrozenState uses.
+func TestUnfreeze_OnAuditIdentityIsNoOp(t *testing.T) {
+	clk := &frozenClock{t: time.Unix(1_700_000_000, 0)}
+	s := openForListenerTest(t, clk)
+
+	id := mkID(0xA7)
+	now := clk.Now()
+	require.NoError(t, s.store.ensureState(context.Background(), id, now))
+	require.NoError(t, s.store.transition(context.Background(), id, StateAudit,
+		ReasonRecord{Kind: "breach", BreachKind: "invalid_proof_signature", At: now.Unix()}, now))
+	require.NoError(t, s.reloadCache(context.Background()))
+	require.Equal(t, StateAudit, s.Status(id).State)
+	sinceBefore := s.Status(id).Since
+	reasonsBefore := s.Status(id).Reasons
+
+	clk.Add(time.Minute)
+	require.NoError(t, s.Unfreeze(context.Background(), id, "bob@example.com"))
+
+	st := s.Status(id)
+	require.Equal(t, StateAudit, st.State, "Unfreeze must not force an AUDIT identity to OK")
+	require.Equal(t, sinceBefore, st.Since, "since must not be bumped by a no-op Unfreeze")
+	require.Equal(t, reasonsBefore, st.Reasons, "no reason may be appended by a no-op Unfreeze")
+}
+
+// TestUnfreeze_OnOKIdentityIsNoOp asserts idempotency: unfreezing an
+// identity that was never frozen (fresh OK row) must not re-bump since
+// or append a stray "manual" reason.
+func TestUnfreeze_OnOKIdentityIsNoOp(t *testing.T) {
+	clk := &frozenClock{t: time.Unix(1_700_000_000, 0)}
+	s := openForListenerTest(t, clk)
+
+	id := mkID(0xA8)
+	now := clk.Now()
+	require.NoError(t, s.store.ensureState(context.Background(), id, now))
+	require.NoError(t, s.reloadCache(context.Background()))
+	require.Equal(t, StateOK, s.Status(id).State)
+	sinceBefore := s.Status(id).Since
+
+	clk.Add(time.Minute)
+	require.NoError(t, s.Unfreeze(context.Background(), id, "bob@example.com"))
+
+	st := s.Status(id)
+	require.Equal(t, StateOK, st.State)
+	require.Equal(t, sinceBefore, st.Since, "since must not be bumped by a no-op Unfreeze")
+	require.Empty(t, st.Reasons, "no reason may be appended by a no-op Unfreeze on an OK identity")
+}
+
 func TestFreeze_AlreadyFrozenIsNoOpNoDoubleRevocation(t *testing.T) {
 	listener := &fakeFreezeListener{}
 	clk := &frozenClock{t: time.Unix(1_700_000_000, 0)}
