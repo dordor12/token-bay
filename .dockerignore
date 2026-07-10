@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.superpowers
+docs
+bin
+**/bin
+coverage.out
+**/*.test
+.token-bay-local
+**/.token-bay-local
+go.work.local
+node_modules

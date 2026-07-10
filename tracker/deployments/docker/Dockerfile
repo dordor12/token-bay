@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 COPY . .
 RUN mkdir -p /out \
@@ -11,6 +11,7 @@ RUN mkdir -p /out \
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/token-bay-tracker /usr/local/bin/token-bay-tracker
+RUN mkdir -p /data && chown 1000:1000 /data
 USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/token-bay-tracker"]
 CMD ["--help"]
