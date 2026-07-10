@@ -1,0 +1,127 @@
+name: tokenbay-e2e
+
+networks:
+  tokenbay-e2e: {}
+
+services:
+  tracker-a:
+    image: token-bay-tracker:dev
+    command: ["run", "--config", "/gen/tracker-a.yaml"]
+    environment:
+      TOKEN_BAY_ADMIN_TOKEN: "e2e-admin-token-a"
+    volumes:
+      - ./.gen:/gen:ro
+      - tracker-a-data:/data
+    ports:
+      - "9090:9090"
+      - "9100:9100"
+    networks:
+      - tokenbay-e2e
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- --header \"Authorization: Bearer $$TOKEN_BAY_ADMIN_TOKEN\" http://127.0.0.1:9090/health || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  tracker-b:
+    image: token-bay-tracker:dev
+    command: ["run", "--config", "/gen/tracker-b.yaml"]
+    environment:
+      TOKEN_BAY_ADMIN_TOKEN: "e2e-admin-token-b"
+    volumes:
+      - ./.gen:/gen:ro
+      - tracker-b-data:/data
+    ports:
+      - "9091:9090"
+      - "9101:9100"
+    networks:
+      - tokenbay-e2e
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- --header \"Authorization: Bearer $$TOKEN_BAY_ADMIN_TOKEN\" http://127.0.0.1:9090/health || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  seeder:
+    image: tokenbay-e2e-actors:dev
+    entrypoint: ["/usr/local/bin/tokenbay-e2e-actor"]
+    command:
+      - "--role"
+      - "seeder"
+      - "--tracker-addr"
+      - "tracker-a:7777"
+      - "--tracker-hash-file"
+      - "/gen/tracker-a.spki"
+      - "--data-dir"
+      - "/data"
+      - "--ctrl-addr"
+      - "0.0.0.0:8082"
+      - "--tunnel-addr"
+      - "0.0.0.0:7900"
+    volumes:
+      - ./.gen:/gen:ro
+    ports:
+      - "8082:8082"
+    networks:
+      - tokenbay-e2e
+    depends_on:
+      tracker-a:
+        condition: service_healthy
+
+  consumer:
+    image: tokenbay-e2e-actors:dev
+    entrypoint: ["/usr/local/bin/tokenbay-e2e-actor"]
+    command:
+      - "--role"
+      - "consumer"
+      - "--tracker-addr"
+      - "tracker-a:7777"
+      - "--tracker-hash-file"
+      - "/gen/tracker-a.spki"
+      - "--tracker-b-addr"
+      - "tracker-b:7777"
+      - "--tracker-b-hash-file"
+      - "/gen/tracker-b.spki"
+      - "--source-fedid-file"
+      - "/gen/tracker-a.fedid"
+      - "--dest-fedid-file"
+      - "/gen/tracker-b.fedid"
+      - "--seeder-tunnel-port"
+      - "7900"
+      - "--data-dir"
+      - "/data"
+      - "--ctrl-addr"
+      - "0.0.0.0:8081"
+    volumes:
+      - ./.gen:/gen:ro
+    ports:
+      - "8081:8081"
+    networks:
+      - tokenbay-e2e
+    depends_on:
+      tracker-a:
+        condition: service_healthy
+      seeder:
+        condition: service_started
+
+  fedactor:
+    image: tokenbay-e2e-actors:dev
+    entrypoint: ["/usr/local/bin/fedactor"]
+    command:
+      - "--priv-key-path"
+      - "/gen/identity-fed.key"
+      - "--ctrl-addr"
+      - "0.0.0.0:8083"
+    volumes:
+      - ./.gen:/gen:ro
+    ports:
+      - "8083:8083"
+    networks:
+      - tokenbay-e2e
+    depends_on:
+      tracker-a:
+        condition: service_healthy
+
+volumes:
+  tracker-a-data: {}
+  tracker-b-data: {}
