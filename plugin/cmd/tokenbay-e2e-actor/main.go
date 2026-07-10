@@ -39,13 +39,16 @@ func realMain(args []string, stderr *os.File) error {
 		trackerAddr     = fs.String("tracker-addr", "", "tracker A address host:port (UDP/QUIC)")
 		trackerHashFile = fs.String("tracker-hash-file", "", "path to hex SPKI-hash file for tracker A (from e2egen)")
 		trackerHash     = fs.String("tracker-hash", "", "hex SPKI-hash for tracker A (alternative to --tracker-hash-file)")
-		trackerBAddr    = fs.String("tracker-b-addr", "", "tracker B address (consumer transfer target; used in a later task)")
-		trackerBHashF   = fs.String("tracker-b-hash-file", "", "path to hex SPKI-hash file for tracker B (used in a later task)")
+		trackerBAddr    = fs.String("tracker-b-addr", "", "tracker B address (consumer cross-region transfer target)")
+		trackerBHashF   = fs.String("tracker-b-hash-file", "", "path to hex SPKI-hash file for tracker B (from e2egen)")
 		trackerBHash    = fs.String("tracker-b-hash", "", "hex SPKI-hash for tracker B (alternative to --tracker-b-hash-file)")
+		sourceFedIDFile = fs.String("source-fedid-file", "", "path to hex FEDERATION tracker_id (sha256 raw pubkey) of the SOURCE tracker, for /transfer")
+		destFedIDFile   = fs.String("dest-fedid-file", "", "path to hex FEDERATION tracker_id (sha256 raw pubkey) of the DEST tracker, for /transfer")
 		region          = fs.String("region", "A", "region hint for the tracker A endpoint")
 		dataDir         = fs.String("data-dir", "", "directory for the actor's persistent identity key")
 		ctrlAddr        = fs.String("ctrl-addr", "127.0.0.1:0", "HTTP control-API listen address")
 		tunnelAddr      = fs.String("tunnel-addr", defaultTunnelBind, "seeder tunnel-listener bind address (host:port; port 0 = ephemeral)")
+		seederTunnelPrt = fs.Uint("seeder-tunnel-port", 0, "consumer: fixed port the assigned seeder's tunnel listens on (substituted for the broker SeederAddr port; 0 = use SeederAddr port as-is)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -67,9 +70,9 @@ func realMain(args []string, stderr *os.File) error {
 		return fmt.Errorf("tracker A hash: %w", err)
 	}
 
-	// Tracker B is the consumer's cross-region transfer target, consumed by
-	// a later task. Resolve it opportunistically when provided so bad input
-	// fails fast, but do not require it.
+	// Tracker B is the consumer's cross-region transfer target. Resolve it
+	// opportunistically when provided so bad input fails fast, but do not
+	// require it (transfer scenarios opt in).
 	var hashB [32]byte
 	if *trackerBHash != "" || *trackerBHashF != "" {
 		hashB, err = resolveHash(*trackerBHash, *trackerBHashF)
@@ -78,20 +81,43 @@ func realMain(args []string, stderr *os.File) error {
 		}
 	}
 
+	// Federation tracker_ids (sha256 RAW pubkey — distinct from the SPKI
+	// hashes above) for the /transfer consumer signature. Optional.
+	var sourceFedID, destFedID [32]byte
+	if *sourceFedIDFile != "" {
+		sourceFedID, err = resolveHash("", *sourceFedIDFile)
+		if err != nil {
+			return fmt.Errorf("source fed-id: %w", err)
+		}
+	}
+	if *destFedIDFile != "" {
+		destFedID, err = resolveHash("", *destFedIDFile)
+		if err != nil {
+			return fmt.Errorf("dest fed-id: %w", err)
+		}
+	}
+
+	if *seederTunnelPrt > 65535 {
+		return fmt.Errorf("--seeder-tunnel-port: %d out of range", *seederTunnelPrt)
+	}
+
 	logger := zerolog.New(stderr).With().Timestamp().Str("component", "e2e-actor").Logger()
 
 	actor, err := newActor(options{
-		Role:         role,
-		RoleName:     strings.ToLower(strings.TrimSpace(*roleFlag)),
-		TrackerAddr:  *trackerAddr,
-		TrackerHash:  hashA,
-		Region:       *region,
-		TrackerBAddr: *trackerBAddr,
-		TrackerBHash: hashB,
-		DataDir:      *dataDir,
-		CtrlAddr:     *ctrlAddr,
-		TunnelAddr:   *tunnelAddr,
-		Logger:       logger,
+		Role:             role,
+		RoleName:         strings.ToLower(strings.TrimSpace(*roleFlag)),
+		TrackerAddr:      *trackerAddr,
+		TrackerHash:      hashA,
+		Region:           *region,
+		TrackerBAddr:     *trackerBAddr,
+		TrackerBHash:     hashB,
+		SourceFedID:      sourceFedID,
+		DestFedID:        destFedID,
+		DataDir:          *dataDir,
+		CtrlAddr:         *ctrlAddr,
+		TunnelAddr:       *tunnelAddr,
+		SeederTunnelPort: uint16(*seederTunnelPrt),
+		Logger:           logger,
 	})
 	if err != nil {
 		return err

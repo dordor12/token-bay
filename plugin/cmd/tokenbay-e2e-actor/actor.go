@@ -49,10 +49,16 @@ type options struct {
 	Region      string
 
 	// TrackerBAddr/TrackerBHash describe the consumer's cross-region
-	// transfer target. Accepted now for flag stability; the transfer flow
-	// that consumes them lands in a later task.
+	// transfer target (POST /transfer opens a second trackerclient there).
 	TrackerBAddr string
 	TrackerBHash [32]byte
+
+	// SourceFedID/DestFedID are the FEDERATION tracker_ids (sha256 of the
+	// trackers' RAW Ed25519 pubkeys — from --source-fedid-file /
+	// --dest-fedid-file). They are NOT the SPKI-hash mTLS pins above; the
+	// TransferRequest consumer signature covers these.
+	SourceFedID [32]byte
+	DestFedID   [32]byte
 
 	DataDir  string
 	CtrlAddr string
@@ -62,9 +68,19 @@ type options struct {
 	// seeder role is active.
 	TunnelAddr string
 
+	// SeederTunnelPort is the FIXED port the assigned seeder's tunnel
+	// listens on. The broker's SeederAddr port is the seeder's trackerclient
+	// socket, not its tunnel; when non-zero the consumer substitutes this
+	// port before dialing. Only used when the consumer role is active.
+	SeederTunnelPort uint16
+
 	// Transport is an optional injected transport seam. nil => QUIC (prod).
 	// Tests pass a loopback transport wired to a fakeserver.
 	Transport trackerclient.Transport
+
+	// TransportB is an optional transport seam for the tracker-B client.
+	// nil => fall back to Transport, then QUIC.
+	TransportB trackerclient.Transport
 
 	Logger zerolog.Logger
 }
@@ -80,6 +96,10 @@ type Actor struct {
 	// seeder is non-nil when opts.Role has the seeder bit; it owns the
 	// advertise loop, the OfferHandler, and the tunnel-serve/usage flow.
 	seeder *seeder
+
+	// consumer is non-nil when opts.Role has the consumer bit; it owns the
+	// /request broker flow, the SettlementHandler, and the /transfer flow.
+	consumer *consumer
 
 	ln  net.Listener
 	srv *http.Server
@@ -112,9 +132,14 @@ func newActor(opts options) (*Actor, error) {
 		return nil, err
 	}
 
-	// The seeder must exist BEFORE the trackerclient: Config.OfferHandler
-	// is fixed at New time, and the dispatcher starts handling pushes at
-	// Start. Its back-reference to the Actor is wired below, before run.
+	// The role state machines must exist BEFORE the trackerclient:
+	// Config.OfferHandler/SettlementHandler are fixed at New time, and the
+	// dispatcher starts handling pushes at Start. Their back-references to
+	// the Actor are wired below, before run.
+	var cons *consumer
+	if opts.Role&RoleConsumer != 0 {
+		cons = newConsumer(opts.SeederTunnelPort, opts.Logger)
+	}
 	var sdr *seeder
 	if opts.Role&RoleSeeder != 0 {
 		bindStr := opts.TunnelAddr
@@ -145,6 +170,9 @@ func newActor(opts options) (*Actor, error) {
 	if sdr != nil {
 		cfg.OfferHandler = sdr
 	}
+	if cons != nil {
+		cfg.SettlementHandler = cons
+	}
 	client, err := trackerclient.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("actor: build trackerclient: %w", err)
@@ -156,14 +184,18 @@ func newActor(opts options) (*Actor, error) {
 	}
 
 	a := &Actor{
-		opts:   opts,
-		signer: signer,
-		client: client,
-		seeder: sdr,
-		ln:     ln,
+		opts:     opts,
+		signer:   signer,
+		client:   client,
+		seeder:   sdr,
+		consumer: cons,
+		ln:       ln,
 	}
 	if sdr != nil {
 		sdr.actor = a
+	}
+	if cons != nil {
+		cons.actor = a
 	}
 	a.srv = &http.Server{
 		Handler:           a.mux(),
@@ -194,6 +226,9 @@ func (a *Actor) run(ctx context.Context) error {
 		if a.seeder != nil {
 			a.seeder.stop()
 		}
+		if a.consumer != nil {
+			a.consumer.stop()
+		}
 		a.shutdownControl()
 		_ = a.client.Close()
 		<-serveErr
@@ -208,6 +243,9 @@ func (a *Actor) run(ctx context.Context) error {
 
 	if a.seeder != nil {
 		a.seeder.stop()
+	}
+	if a.consumer != nil {
+		a.consumer.stop()
 	}
 	a.shutdownControl()
 	_ = a.client.Close()
