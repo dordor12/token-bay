@@ -15,7 +15,6 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
-	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
@@ -34,23 +33,30 @@ type Settlement struct {
 	wg      sync.WaitGroup
 
 	// pendingMu guards pending. Each entry tracks per-request settlement
-	// coordination state owned by Settlement (the seeder-pushed body bytes
-	// the consumer must counter-sign, plus the verification verdict the
-	// per-request goroutine reads to decide ConsumerSigMissing on append).
+	// coordination state owned by Settlement (the usage-assertion the
+	// seeder signed and the consumer must counter-sign, plus the
+	// verification verdict the per-request goroutine reads to decide
+	// ConsumerSigMissing on append).
 	pendingMu sync.Mutex
 	pending   map[[16]byte]*pendingSettle
 }
 
 // pendingSettle holds Settlement-internal state for a single in-flight
-// settlement. The body bytes are the DeterministicMarshal output of the
-// USAGE EntryBody the seeder signed and the consumer is asked to
-// counter-sign; verified records whether HandleSettle observed and
-// accepted that sig; refused records a verification failure that must
+// settlement. assertion is the sequencing-independent usage-assertion the
+// seeder signed (shared/signing); preSig is its canonical preimage bytes —
+// exactly what was pushed to the consumer to counter-sign. verified records
+// whether HandleSettle observed and accepted the consumer's counter-sig
+// (consumerSig/consumerPub then carry the verified sig + resolved pubkey
+// for the ledger record); refused records a verification failure that must
 // suppress the timer-fallback append.
 type pendingSettle struct {
-	body     []byte
-	verified bool
-	refused  bool
+	assertion signing.UsageAssertion
+	preSig    []byte
+
+	verified    bool
+	refused     bool
+	consumerSig []byte
+	consumerPub ed25519.PublicKey
 }
 
 // OpenSettlement constructs a ready Settlement. Required deps: Ledger, Pusher.
@@ -106,12 +112,14 @@ func (s *Settlement) Close() error {
 // after validating + queuing the consumer-sig wait; the ledger append happens
 // asynchronously inside a per-request goroutine.
 //
-// Consumer-sig verification is wired via HandleSettle (deps.Identity resolves
-// the consumer pubkey). The body the seeder signs is pushed verbatim to the
-// consumer, so the consumer's counter-sig is verified over the same bytes.
-// Verification verdicts flow through Settlement.pending into appendUsageEntry,
-// which sets ConsumerSigMissing=true when the sig is absent or unverifiable
-// and false when verified.
+// Both participants sign the sequencing-independent usage-assertion
+// (shared/signing.UsageAssertion): the seeder's UsageReport sig is verified
+// over it here (with the per-offer ephemeral key), and its canonical bytes
+// are pushed verbatim to the consumer, whose counter-sig HandleSettle
+// verifies over the same bytes (deps.Identity resolves the consumer's mTLS
+// identity pubkey). Verification verdicts flow through Settlement.pending
+// into awaitSettle, which appends with ConsumerSigMissing=true when the sig
+// is absent or unverifiable and carries the verified sig + pubkey when not.
 func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityID, r *tbproto.UsageReport) (*tbproto.UsageAck, error) {
 	if r == nil || len(r.RequestId) != 16 {
 		return nil, errors.New("settlement: malformed UsageReport")
@@ -163,46 +171,43 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 		// truly wrong, the next step will catch it.
 	}
 
-	// 6. Build entry preimage via ledger/entry.BuildUsageEntry at fresh tip.
-	tipSeq, tipHash, _, terr := s.deps.Ledger.Tip(ctx)
+	// 6. Read the current tip — the eventual ledger append needs fresh
+	// (prev_hash, seq) sequencing, but participant signatures no longer
+	// cover it.
+	tipSeq, tipHash, hasTip, terr := s.deps.Ledger.Tip(ctx)
 	if terr != nil {
 		return nil, terr
 	}
+	prevHash := tipHash
+	nextSeq := tipSeq + 1
+	if !hasTip {
+		prevHash = make([]byte, 32)
+		nextSeq = 1
+	}
 
-	now := s.deps.Now()
-	body, berr := entry.BuildUsageEntry(entry.UsageInput{
-		PrevHash:     tipHash,
-		Seq:          tipSeq + 1,
+	// 7. Build the sequencing-independent usage-assertion and verify the
+	// seeder's sig over it. The seeder signs with its per-offer ephemeral
+	// key (req.SeederPubkey).
+	assertion := signing.UsageAssertion{
+		RequestID:    r.RequestId,
 		ConsumerID:   req.ConsumerID[:],
 		SeederID:     req.AssignedSeeder[:],
 		Model:        r.Model,
 		InputTokens:  r.InputTokens,
 		OutputTokens: r.OutputTokens,
 		CostCredits:  actualCost,
-		Timestamp:    uint64(now.Unix()), //nolint:gosec // G115: always positive
-		RequestID:    r.RequestId,
-		// v1: consumer pubkey resolution is not implemented (T17.5); every
-		// settlement appends with ConsumerSigMissing=true. Pre-set the flag
-		// in the body now so the seeder sig is verified over the exact same
-		// bytes that will be stored in the ledger, ensuring ledger re-
-		// verification passes.
-		ConsumerSigMissing: true, // TODO(broker-followup): T17.5 — clear when consumer sig is verified
-	})
-	if berr != nil {
-		return nil, berr
 	}
-
-	// 7. Verify seeder sig over DeterministicMarshal(body).
-	if !signing.VerifyEntry(ed25519.PublicKey(req.SeederPubkey), body, r.SeederSig) {
+	preSig, perr := signing.CanonicalUsageAssertionPreSig(assertion)
+	if perr != nil {
+		return nil, perr
+	}
+	if !signing.VerifyUsageAssertion(req.SeederPubkey, assertion, r.SeederSig) {
 		return nil, ErrSeederSigInvalid
 	}
 
-	// 8. IndexByHash for HandleSettle dispatch.
-	bodyBytes, merr := signing.DeterministicMarshal(body)
-	if merr != nil {
-		return nil, merr
-	}
-	preimageHash := sha256.Sum256(bodyBytes)
+	// 8. IndexByHash for HandleSettle dispatch. The settlement preimage is
+	// the canonical usage-assertion bytes.
+	preimageHash := sha256.Sum256(preSig)
 
 	// Initialise settlement channel before indexing so HandleSettle can
 	// send into it immediately after LookupByHash returns.
@@ -213,35 +218,53 @@ func (s *Settlement) HandleUsageReport(ctx context.Context, peerID ids.IdentityI
 		return nil, ierr
 	}
 
-	// Record the preimage body so HandleSettle can verify the consumer's
-	// counter-sig over the exact bytes the seeder vouched for and pushed.
-	s.putPending(reqID, bodyBytes)
+	// Record the assertion + preimage bytes so HandleSettle can verify the
+	// consumer's counter-sig over the exact bytes the seeder vouched for
+	// and that were pushed.
+	s.putPending(reqID, assertion, preSig)
 
 	// 9. Push SettlementPush to consumer (best-effort).
 	push := &tbproto.SettlementPush{
 		PreimageHash: preimageHash[:],
-		PreimageBody: bodyBytes,
+		PreimageBody: preSig,
 	}
 	s.deps.Pusher.PushSettlementTo(req.ConsumerID, push)
 
-	// 10. Spawn awaitSettle goroutine — handles consumer-sig arrival or timeout.
+	// 10. Spawn awaitSettle goroutine — handles consumer-sig arrival or
+	// timeout. The UsageRecord is complete except for the consumer-sig
+	// verdict fields, which awaitSettle fills before appending.
+	now := s.deps.Now()
+	rec := ledger.UsageRecord{
+		PrevHash:     prevHash,
+		Seq:          nextSeq,
+		ConsumerID:   req.ConsumerID[:],
+		SeederID:     req.AssignedSeeder[:],
+		Model:        r.Model,
+		InputTokens:  r.InputTokens,
+		OutputTokens: r.OutputTokens,
+		CostCredits:  actualCost,
+		Timestamp:    uint64(now.Unix()), //nolint:gosec // G115: always positive
+		RequestID:    r.RequestId,
+		SeederSig:    r.SeederSig,
+		SeederPub:    req.SeederPubkey,
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.awaitSettle(ctx, req, body, r.SeederSig)
+		s.awaitSettle(ctx, req, rec)
 	}()
 
 	return &tbproto.UsageAck{}, nil
 }
 
-// putPending records the preimage body bytes for an in-flight settlement
-// and initialises a fresh verification verdict. Called by HandleUsageReport
-// after IndexByHash so HandleSettle observes the body before the consumer
-// can possibly counter-sign.
-func (s *Settlement) putPending(reqID [16]byte, body []byte) {
+// putPending records the usage-assertion + its canonical preimage bytes for
+// an in-flight settlement and initialises a fresh verification verdict.
+// Called by HandleUsageReport after IndexByHash so HandleSettle observes
+// the assertion before the consumer can possibly counter-sign.
+func (s *Settlement) putPending(reqID [16]byte, assertion signing.UsageAssertion, preSig []byte) {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
-	s.pending[reqID] = &pendingSettle{body: body}
+	s.pending[reqID] = &pendingSettle{assertion: assertion, preSig: preSig}
 }
 
 // getPending returns the pending settlement entry for reqID, or nil if
@@ -260,21 +283,36 @@ func (s *Settlement) dropPending(reqID [16]byte) {
 	delete(s.pending, reqID)
 }
 
+// pendingVerdict snapshots the verification verdict for reqID under
+// pendingMu. sig/pub are only non-nil when verified — they carry the
+// consumer's counter-sig over the usage-assertion and the resolved
+// consumer pubkey for the ledger record.
+func (s *Settlement) pendingVerdict(reqID [16]byte) (verified, refused bool, sig []byte, pub ed25519.PublicKey) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	p := s.pending[reqID]
+	if p == nil {
+		return false, false, nil, nil
+	}
+	return p.verified, p.refused, p.consumerSig, p.consumerPub
+}
+
 // awaitSettle waits for a consumer counter-sig or the settlement timeout
 // and dispatches the verdict to appendUsageEntry. Three terminating
 // branches:
 //
 //   - sig signal: HandleSettle observed the consumer's counter-sig. The
-//     verdict on Settlement.pending says whether verification succeeded
-//     (ConsumerSigMissing=false), or the pubkey was unknown / verification
-//     was skipped (ConsumerSigMissing=true).
+//     verdict on Settlement.pending says whether verification succeeded —
+//     the record then carries the verified sig + resolved pubkey with
+//     ConsumerSigMissing=false — or the pubkey was unknown / verification
+//     was skipped (ConsumerSigMissing=true, no sig).
 //   - timer expiry: no sig arrived; if HandleSettle did not previously
 //     refuse a tampered sig, append with ConsumerSigMissing=true.
 //   - stop / ctx cancel: tracker shutting down; abandon the request.
 //
 // A refused-sig verdict (verification failure) suppresses the timer path
 // so no entry is written — spec §5.2 "Verify fail: no ledger touch."
-func (s *Settlement) awaitSettle(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte) {
+func (s *Settlement) awaitSettle(ctx context.Context, req *session.Request, rec ledger.UsageRecord) {
 	defer s.dropPending(req.RequestID)
 
 	timeout := time.Duration(s.cfg.SettlementTimeoutS) * time.Second
@@ -282,20 +320,27 @@ func (s *Settlement) awaitSettle(ctx context.Context, req *session.Request, body
 	defer timer.Stop()
 	select {
 	case <-req.SettleSig:
-		p := s.getPending(req.RequestID)
-		if p != nil && p.refused {
+		verified, refused, sig, pub := s.pendingVerdict(req.RequestID)
+		if refused {
 			// HandleSettle observed a tampered sig and rejected it;
 			// no ledger entry should be written.
 			return
 		}
-		consumerSigMissing := p == nil || !p.verified
-		s.appendUsageEntry(ctx, req, body, seederSig, consumerSigMissing)
+		if verified {
+			rec.ConsumerSigMissing = false
+			rec.ConsumerSig = sig
+			rec.ConsumerPub = pub
+		} else {
+			rec.ConsumerSigMissing = true
+		}
+		s.appendUsageEntry(ctx, req, rec)
 	case <-timer.C:
-		p := s.getPending(req.RequestID)
-		if p != nil && p.refused {
+		_, refused, _, _ := s.pendingVerdict(req.RequestID)
+		if refused {
 			return
 		}
-		s.appendUsageEntry(ctx, req, body, seederSig, true)
+		rec.ConsumerSigMissing = true
+		s.appendUsageEntry(ctx, req, rec)
 	case <-s.stop:
 		return
 	case <-ctx.Done():
@@ -304,24 +349,11 @@ func (s *Settlement) awaitSettle(ctx context.Context, req *session.Request, body
 }
 
 // appendUsageEntry writes the usage entry to the ledger, retrying on
-// ErrStaleTip up to cfg.StaleTipRetries times. consumerSigMissing flows
-// from awaitSettle's verdict and is stored on the entry verbatim.
-func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request, body *tbproto.EntryBody, seederSig []byte, consumerSigMissing bool) {
-	rec := ledger.UsageRecord{
-		PrevHash:           body.PrevHash,
-		Seq:                body.Seq,
-		ConsumerID:         req.ConsumerID[:],
-		SeederID:           req.AssignedSeeder[:],
-		Model:              body.Model,
-		InputTokens:        body.InputTokens,
-		OutputTokens:       body.OutputTokens,
-		CostCredits:        body.CostCredits,
-		Timestamp:          body.Timestamp,
-		RequestID:          body.RequestId,
-		ConsumerSigMissing: consumerSigMissing,
-		SeederSig:          seederSig,
-		SeederPub:          req.SeederPubkey,
-	}
+// ErrStaleTip up to cfg.StaleTipRetries times. Because the participant
+// sigs are over the sequencing-independent usage-assertion, a retry only
+// refreshes (prev_hash, seq) — the sigs stay valid. rec arrives fully
+// populated from awaitSettle, consumer-sig verdict included.
+func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request, rec ledger.UsageRecord) {
 	var appendErr error
 	for i := 0; i <= s.cfg.StaleTipRetries; i++ {
 		_, appendErr = s.deps.Ledger.AppendUsage(ctx, rec)
@@ -347,7 +379,7 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted, s.deps.Now())
 	if s.deps.Reputation != nil {
 		var flags uint32
-		if consumerSigMissing {
+		if rec.ConsumerSigMissing {
 			flags = 1 // bit 0 = consumer_sig_missing
 		}
 		s.deps.Reputation.OnLedgerEvent(admission.LedgerEvent{
@@ -365,8 +397,8 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 // entry identified by its preimage hash. See broker-design §5.2 / §5.3.
 //
 // When the consumer pubkey is resolvable via deps.Identity, the sig is
-// verified over the preimage body bytes recorded by HandleUsageReport.
-// Outcomes:
+// verified over the usage-assertion recorded by HandleUsageReport — the
+// same bytes the seeder signed and the tracker pushed. Outcomes:
 //
 //   - verified: dispatch the sig and mark the request's pending entry so
 //     awaitSettle appends with ConsumerSigMissing=false.
@@ -430,23 +462,25 @@ const (
 	sigUnverifiable
 )
 
-// verifyConsumerSig classifies the consumer's counter-sig and, on
-// success, marks the pending entry so awaitSettle can append with
+// verifyConsumerSig classifies the consumer's counter-sig over the
+// usage-assertion and, on success, stores the verified sig + resolved
+// pubkey on the pending entry so awaitSettle can append with
 // ConsumerSigMissing=false. On verification failure it marks the entry
-// refused so awaitSettle's timer fallback also skips the append.
+// refused so awaitSettle's timer fallback also skips the append. The
+// consumer signs with its mTLS identity key (deps.Identity.PeerPubkey).
 func (s *Settlement) verifyConsumerSig(req *session.Request, sig []byte) sigVerdict {
 	if s.deps.Identity == nil {
 		return sigUnverifiable
 	}
 	p := s.getPending(req.RequestID)
-	if p == nil || len(p.body) == 0 {
+	if p == nil || len(p.preSig) == 0 {
 		return sigUnverifiable
 	}
 	pub, ok := s.deps.Identity.PeerPubkey(req.ConsumerID)
 	if !ok || len(pub) != ed25519.PublicKeySize {
 		return sigUnverifiable
 	}
-	if !ed25519.Verify(pub, p.body, sig) {
+	if !signing.VerifyUsageAssertion(pub, p.assertion, sig) {
 		s.pendingMu.Lock()
 		p.refused = true
 		s.pendingMu.Unlock()
@@ -454,6 +488,8 @@ func (s *Settlement) verifyConsumerSig(req *session.Request, sig []byte) sigVerd
 	}
 	s.pendingMu.Lock()
 	p.verified = true
+	p.consumerSig = sig
+	p.consumerPub = pub
 	s.pendingMu.Unlock()
 	return sigVerified
 }

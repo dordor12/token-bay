@@ -32,6 +32,15 @@ type appendInput struct {
 	seederSig   []byte // empty if no seeder signs this kind
 	seederPub   ed25519.PublicKey
 	deltas      []balanceDelta // 0..2 — applied to current balances to compute new credits
+
+	// participantSigsPreVerified marks consumerSig/seederSig as already
+	// verified by the caller over a signing domain OTHER than the EntryBody
+	// (USAGE: the sequencing-independent usage-assertion, verified by
+	// AppendUsage). When true, appendLocked stores the sigs verbatim and
+	// skips its EntryBody-domain signing.VerifyEntry checks; the tracker
+	// sig over the EntryBody is unaffected. Kinds whose participant sigs
+	// are over the EntryBody (TRANSFER_OUT) leave this false.
+	participantSigsPreVerified bool
 }
 
 // balanceDelta is a signed change to one identity's credits.
@@ -47,9 +56,10 @@ type balanceDelta struct {
 //
 // The caller fills body.PrevHash + body.Seq before calling — this method
 // verifies they match the current tip and returns ErrStaleTip if not.
-// Returning the lock and asking the caller to retry is correct because
-// counterparty sigs (consumer/seeder) are over the body bytes which include
-// PrevHash + Seq; a fresh tip means fresh sigs are required.
+// For EntryBody-domain counterparty sigs (TRANSFER_OUT) a fresh tip means
+// fresh sigs are required; USAGE participant sigs are over the
+// sequencing-independent usage-assertion, so the caller retries with the
+// same sigs after refreshing (prev_hash, seq).
 //
 // For tracker-only-signed kinds (STARTER_GRANT) where rebuilding is cheap
 // and there are no counterparty sigs to invalidate, callers should use
@@ -120,14 +130,16 @@ func (l *Ledger) appendLocked(ctx context.Context, in appendInput, verifyPreFill
 		return nil, fmt.Errorf("ledger: validate body: %w", err)
 	}
 
-	if len(in.consumerSig) != 0 {
-		if !signing.VerifyEntry(in.consumerPub, in.body, in.consumerSig) {
-			return nil, errors.New("ledger: consumer_sig invalid")
+	if !in.participantSigsPreVerified {
+		if len(in.consumerSig) != 0 {
+			if !signing.VerifyEntry(in.consumerPub, in.body, in.consumerSig) {
+				return nil, errors.New("ledger: consumer_sig invalid")
+			}
 		}
-	}
-	if len(in.seederSig) != 0 {
-		if !signing.VerifyEntry(in.seederPub, in.body, in.seederSig) {
-			return nil, errors.New("ledger: seeder_sig invalid")
+		if len(in.seederSig) != 0 {
+			if !signing.VerifyEntry(in.seederPub, in.body, in.seederSig) {
+				return nil, errors.New("ledger: seeder_sig invalid")
+			}
 		}
 	}
 

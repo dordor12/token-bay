@@ -65,8 +65,7 @@ func TestSubsystems_OpenClose_Roundtrip(t *testing.T) {
 	// Now HandleUsageReport through Settlement using the shared inflight.
 	report := buildSeederSignedReport(
 		t, seederPriv, requestID, "claude-sonnet-4-6",
-		100, 200, make([]byte, 32), 0,
-		consumerID, seederID, uint64(fixedNow.Unix()), //nolint:gosec
+		100, 200, consumerID, seederID,
 	)
 	_, err = sub.Settlement.HandleUsageReport(context.Background(), seederID, report)
 	require.NoError(t, err)

@@ -202,14 +202,17 @@ func TestSubsystems_Settlement_BumpsLedgerAppendFailure(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	body := &tbproto.EntryBody{
-		PrevHash:  make([]byte, 32),
-		Seq:       1,
-		Model:     "claude-sonnet-4-6",
-		Timestamp: uint64(time.Now().Unix()), //nolint:gosec
-		RequestId: requestID[:],
+	rec := ledger.UsageRecord{
+		PrevHash:           make([]byte, 32),
+		Seq:                1,
+		ConsumerID:         consumer[:],
+		SeederID:           seeder[:],
+		Model:              "claude-sonnet-4-6",
+		Timestamp:          uint64(time.Now().Unix()), //nolint:gosec
+		RequestID:          requestID[:],
+		ConsumerSigMissing: true,
 	}
-	s.appendUsageEntry(context.Background(), req, body, nil, true)
+	s.appendUsageEntry(context.Background(), req, rec)
 
 	require.InDelta(t, 1.0, testutil.ToFloat64(m.LedgerAppendFailure), 0)
 }
