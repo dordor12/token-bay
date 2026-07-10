@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -36,7 +37,17 @@ type seederFixture struct {
 
 // startSeederActor boots a --role seeder actor against an in-process
 // fakeserver and blocks until /healthz reports ready (connected + enrolled).
+// The tunnel listener binds an ephemeral port (--tunnel-addr 127.0.0.1:0).
 func startSeederActor(t *testing.T) *seederFixture {
+	t.Helper()
+	return startSeederActorWithTunnelAddr(t, "127.0.0.1:0")
+}
+
+// startSeederActorWithTunnelAddr is startSeederActor with an explicit
+// --tunnel-addr, so a test can pin the seeder's tunnel bind to a fixed
+// port (the Docker topology's configuration) instead of the default
+// ephemeral one.
+func startSeederActorWithTunnelAddr(t *testing.T, tunnelAddr string) *seederFixture {
 	t.Helper()
 	const addr = "tracker-a:0"
 
@@ -98,7 +109,7 @@ func startSeederActor(t *testing.T) *seederFixture {
 		Region:      "A",
 		DataDir:     t.TempDir(),
 		CtrlAddr:    "127.0.0.1:0",
-		TunnelAddr:  "127.0.0.1:0",
+		TunnelAddr:  tunnelAddr,
 		Transport:   transport,
 	})
 	require.NoError(t, err)
@@ -306,4 +317,81 @@ func TestSeederActor_RejectsOfferWithoutEphemeralPub(t *testing.T) {
 	ctlGetJSON(t, fx.base+"/offers/last", &offerInfo)
 	assert.False(t, offerInfo.Accepted)
 	assert.Equal(t, "no_ephemeral", offerInfo.RejectReason)
+}
+
+// TestSeederActor_ReusesFixedTunnelPortAfterAbandonedOffer guards against a
+// fixed-port re-listen ordering regression: in the Docker topology the
+// seeder's tunnel listener binds a FIXED port (--tunnel-addr), so if an
+// offer is accepted but the consumer never dials, the old listener would
+// hold that port for up to serveWindow (60s) unless HandleOffer closes it
+// BEFORE binding the next offer's tunnel.Listen on the same port.
+//
+// This drives two offers through the SAME fixed tunnel port: the first is
+// accepted and then abandoned (never dialed), the second must still be
+// accepted with a working tunnel.Listen — no "address in use" reject.
+func TestSeederActor_ReusesFixedTunnelPortAfterAbandonedOffer(t *testing.T) {
+	// Discover a free loopback UDP port, then pin the actor's
+	// --tunnel-addr to that exact port so both offers below bind the SAME
+	// fixed port and exercise the close-before-bind ordering fix.
+	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	fixedAddr := probe.LocalAddr().(*net.UDPAddr).String()
+	require.NoError(t, probe.Close())
+
+	fx := startSeederActorWithTunnelAddr(t, fixedAddr)
+
+	const model = "claude-sonnet-4-6"
+	cfgBody := []byte(`{"available":true,"headroom":0.5,"models":["` + model + `"],"max_context":200000,"tiers":1,"sse_body":"data: canned\n\n"}`)
+	resp, err := http.Post(fx.base+"/config", "application/json", bytes.NewReader(cfgBody)) //nolint:noctx // test request
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Less(t, resp.StatusCode, 300, "POST /config must succeed")
+
+	select {
+	case <-fx.adverts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Advertise RPC after POST /config")
+	}
+
+	pushOffer := func(idByte byte) *tbproto.OfferDecision {
+		t.Helper()
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		dec, err := fx.fake.PushOffer(context.Background(), &tbproto.OfferPush{
+			ConsumerId:           bytes.Repeat([]byte{idByte}, 32),
+			EnvelopeHash:         make([]byte, 32),
+			Model:                model,
+			MaxInputTokens:       4096,
+			MaxOutputTokens:      1024,
+			ConsumerEphemeralPub: pub,
+			RequestId:            bytes.Repeat([]byte{idByte}, 16),
+		})
+		require.NoError(t, err)
+		return dec
+	}
+
+	// First offer: accepted, tunnel bound on the fixed port — then
+	// abandoned (the consumer never dials it), which is exactly the
+	// scenario that used to strand the fixed port for serveWindow.
+	dec1 := pushOffer(0xA1)
+	require.True(t, dec1.Accept, "first offer must be accepted (reason=%q)", dec1.RejectReason)
+
+	var info1 offerInfo
+	ctlGetJSON(t, fx.base+"/offers/last", &info1)
+	require.Equal(t, fixedAddr, info1.TunnelAddr, "first tunnel must bind the fixed --tunnel-addr port")
+
+	// Second offer arrives on the SAME fixed port well within the first
+	// offer's serveWindow. Without closing the abandoned listener before
+	// rebinding, tunnel.Listen here fails with "tunnel_listen: ... address
+	// in use" and the offer is rejected.
+	dec2 := pushOffer(0xB2)
+	require.True(t, dec2.Accept, "second offer must be accepted despite the fixed tunnel port (reason=%q)", dec2.RejectReason)
+	require.Len(t, dec2.EphemeralPubkey, 32, "decision must carry a 32-byte seeder ephemeral pub")
+
+	var info2 offerInfo
+	ctlGetJSON(t, fx.base+"/offers/last", &info2)
+	assert.Empty(t, info2.RejectReason)
+	assert.True(t, info2.Accepted)
+	assert.Equal(t, fixedAddr, info2.TunnelAddr, "second tunnel must reuse the same fixed port")
 }

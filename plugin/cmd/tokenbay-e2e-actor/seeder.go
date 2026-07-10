@@ -163,13 +163,7 @@ func newSeeder(bind netip.AddrPort, log zerolog.Logger) *seeder {
 // stop cancels background work and closes any live tunnel listener.
 func (s *seeder) stop() {
 	s.cancel()
-	s.mu.Lock()
-	ln := s.activeLn
-	s.activeLn = nil
-	s.mu.Unlock()
-	if ln != nil {
-		_ = ln.Close()
-	}
+	s.closeActiveListener()
 }
 
 // setConfig stores the advertised config + canned SSE body and kicks the
@@ -257,6 +251,17 @@ func (s *seeder) HandleOffer(_ trackerclient.Ctx, o *trackerclient.Offer) (track
 
 	// Copy the pin out of the push buffer before it leaves scope.
 	peerPin := append(ed25519.PublicKey(nil), o.ConsumerEphemeralPub...)
+
+	// Close any previously-active listener BEFORE binding the new one. The
+	// Docker topology's --tunnel-addr is a FIXED port, so if the prior
+	// offer's listener is still open — abandoned (consumer never dialed)
+	// or superseded mid-serve — the tunnel.Listen below fails with
+	// "address in use" until that listener's serveWindow (60s) elapses.
+	// tunnel.Listener.Close is idempotent (tracks its own closed state),
+	// so this is harmless even if serveOffer's own deferred Close on the
+	// same listener already ran.
+	s.closeActiveListener()
+
 	ln, err := tunnel.Listen(s.tunnelBind, tunnel.Config{
 		EphemeralPriv: ephPriv,
 		PeerPin:       peerPin,
@@ -264,7 +269,7 @@ func (s *seeder) HandleOffer(_ trackerclient.Ctx, o *trackerclient.Offer) (track
 	if err != nil {
 		return reject("tunnel_listen: " + err.Error())
 	}
-	s.swapActiveListener(ln)
+	s.setActiveListener(ln)
 
 	off := servedOffer{
 		consumerID: o.ConsumerID,
@@ -315,13 +320,19 @@ func (s *seeder) serveOffer(ln *tunnel.Listener, off servedOffer, ephPriv ed2551
 		s.log.Warn().Err(err).Msg("tunnel close write failed")
 		return
 	}
-	s.reportUsage(ctx, off, ephPriv)
+	s.reportUsage(off, ephPriv)
 }
 
 // reportUsage signs the usage-assertion with the PER-OFFER EPHEMERAL key —
 // the tracker verifies the sig against the ephemeral pub the seeder returned
 // in OfferDecision (NOT the identity key) — and sends the UsageReport RPC.
-func (s *seeder) reportUsage(ctx context.Context, off servedOffer, ephPriv ed25519.PrivateKey) {
+//
+// Deliberately NOT derived from serveOffer's serveWindow ctx: that context
+// can be within usageReportTimeout of its own deadline (a slow consumer
+// dial near the 60s edge), which would silently truncate this RPC. A fresh
+// background context with its own bound keeps the report window full-length
+// regardless of where in the serve window it fires.
+func (s *seeder) reportUsage(off servedOffer, ephPriv ed25519.PrivateKey) {
 	cost, err := costCredits(off.model, cannedInputTokens, cannedOutputTokens)
 	if err != nil {
 		s.log.Error().Err(err).Msg("cost lookup failed (should have been rejected at offer time)")
@@ -342,7 +353,7 @@ func (s *seeder) reportUsage(ctx context.Context, off servedOffer, ephPriv ed255
 		return
 	}
 
-	rctx, cancel := context.WithTimeout(ctx, usageReportTimeout)
+	rctx, cancel := context.WithTimeout(context.Background(), usageReportTimeout)
 	defer cancel()
 	err = s.actor.client.UsageReport(rctx, &trackerclient.UsageReport{
 		RequestID:    uuid.UUID(off.requestID),
@@ -365,17 +376,26 @@ func (s *seeder) reportUsage(ctx context.Context, off servedOffer, ephPriv ed255
 	s.log.Info().Str("model", off.model).Uint64("cost_credits", cost).Msg("usage reported")
 }
 
-// swapActiveListener installs ln as the live listener, closing any previous
-// one — a superseded offer's listener would otherwise pin a stale key (and,
-// under a fixed --tunnel-addr port, block the next bind).
-func (s *seeder) swapActiveListener(ln *tunnel.Listener) {
+// closeActiveListener closes and clears the currently-active tunnel
+// listener, if any. Called before HandleOffer binds a new one, and by
+// stop(). tunnel.Listener.Close is idempotent, so this is safe to call
+// even if the listener was already closed elsewhere (e.g. serveOffer's own
+// deferred Close after a served or timed-out offer).
+func (s *seeder) closeActiveListener() {
 	s.mu.Lock()
 	old := s.activeLn
-	s.activeLn = ln
+	s.activeLn = nil
 	s.mu.Unlock()
 	if old != nil {
 		_ = old.Close()
 	}
+}
+
+// setActiveListener installs ln as the live listener.
+func (s *seeder) setActiveListener(ln *tunnel.Listener) {
+	s.mu.Lock()
+	s.activeLn = ln
+	s.mu.Unlock()
 }
 
 func (s *seeder) currentSSEBody() string {
