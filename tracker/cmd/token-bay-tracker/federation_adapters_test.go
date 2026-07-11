@@ -17,6 +17,7 @@ import (
 	fed "github.com/token-bay/token-bay/shared/federation"
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
@@ -215,4 +216,45 @@ func TestTransfer_RealLedgerAdapter_EndToEnd(t *testing.T) {
 	snapB2, err := ledB.SignedBalance(ctx, identity[:])
 	require.NoError(t, err)
 	assert.Equal(t, int64(1500), snapB2.Body.Credits, "NO double-credit at dest")
+}
+
+// spyLedgerEventSink records the admission events the transfer adapter emits.
+type spyLedgerEventSink struct{ events []admission.LedgerEvent }
+
+func (s *spyLedgerEventSink) OnLedgerEvent(ev admission.LedgerEvent) {
+	s.events = append(s.events, ev)
+}
+
+// TestLedgerHooksAdapter_EmitsTransferInEvent pins the transfer wiring: a
+// successful cross-region credit-in hands admission a LedgerEventTransferIn
+// for the recipient, so admission's per-consumer balance tracking follows
+// federated credit movement. Uses AppendTransferIn (no consumer signature
+// required) over a real ledger.
+func TestLedgerHooksAdapter_EmitsTransferInEvent(t *testing.T) {
+	ctx := context.Background()
+	_, priv := e2eKeypair("dest-tracker")
+	led, _ := openE2ELedger(t, "dest", priv)
+
+	spy := &spyLedgerEventSink{}
+	adapter := ledgerHooksAdapter{led: led, adm: spy}
+
+	var id [32]byte
+	for i := range id {
+		id[i] = 0xAB
+	}
+	var ref [32]byte
+	ref[0] = 0x01
+
+	require.NoError(t, adapter.AppendTransferIn(ctx, federation.TransferInHookIn{
+		IdentityID:  id,
+		Amount:      500,
+		Timestamp:   1700000000,
+		TransferRef: ref,
+	}))
+
+	require.Len(t, spy.events, 1, "one transfer-in event should be emitted")
+	ev := spy.events[0]
+	assert.Equal(t, admission.LedgerEventTransferIn, ev.Kind)
+	assert.Equal(t, uint64(500), ev.CostCredits)
+	assert.Equal(t, ids.IdentityID(id), ev.ConsumerID)
 }

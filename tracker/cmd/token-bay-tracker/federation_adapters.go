@@ -10,6 +10,7 @@ import (
 
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
@@ -149,6 +150,29 @@ const staleTipRetries = 8
 // isLedgerTransferRefExists can classify it.
 type ledgerHooksAdapter struct {
 	led *ledger.Ledger
+	// adm optionally receives cross-region transfer events so admission's
+	// per-consumer balance tracking follows federated credit movement.
+	// *admission.Subsystem satisfies it; nil disables the hook.
+	adm ledgerEventSink
+}
+
+// ledgerEventSink is the admission observer the transfer adapter notifies.
+type ledgerEventSink interface {
+	OnLedgerEvent(ev admission.LedgerEvent)
+}
+
+// emitTransfer dispatches a transfer ledger event to admission (best-effort;
+// a nil sink is a no-op). Called only after the on-chain append succeeds.
+func (a ledgerHooksAdapter) emitTransfer(kind admission.LedgerEventKind, id [32]byte, amount, ts uint64) {
+	if a.adm == nil {
+		return
+	}
+	a.adm.OnLedgerEvent(admission.LedgerEvent{
+		Kind:        kind,
+		ConsumerID:  ids.IdentityID(id),
+		CostCredits: amount,
+		Timestamp:   time.Unix(int64(ts), 0), //nolint:gosec // G115: unix seconds, always positive
+	})
 }
 
 func (a ledgerHooksAdapter) nextTip(ctx context.Context) (prev []byte, seq uint64, err error) {
@@ -196,6 +220,7 @@ func (a ledgerHooksAdapter) AppendTransferOut(ctx context.Context, in federation
 		if err != nil {
 			return federation.TransferOutHookOut{}, err
 		}
+		a.emitTransfer(admission.LedgerEventTransferOut, in.IdentityID, in.Amount, in.Timestamp)
 		return federation.TransferOutHookOut{ChainTipHash: h, Seq: e.Body.Seq}, nil
 	}
 	return federation.TransferOutHookOut{}, ledger.ErrStaleTip
@@ -217,6 +242,9 @@ func (a ledgerHooksAdapter) AppendTransferIn(ctx context.Context, in federation.
 		})
 		if errors.Is(err, ledger.ErrStaleTip) {
 			continue
+		}
+		if err == nil {
+			a.emitTransfer(admission.LedgerEventTransferIn, in.IdentityID, in.Amount, in.Timestamp)
 		}
 		return err
 	}
