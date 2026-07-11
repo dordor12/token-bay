@@ -61,6 +61,7 @@ func TestScenario36_StunTurnDataPlane(t *testing.T) {
 	require.NoError(t, peerA.SetReadDeadline(time.Now().Add(3*time.Second)))
 	n, err := peerA.Read(buf)
 	require.NoError(t, err, "peer A must receive peer B's relayed datagram")
+	require.GreaterOrEqual(t, n, 16, "relayed frame must carry the 16-byte token + payload")
 	assert.Equal(t, token, driver.RelayToken(buf[:n]), "relayed frame keeps the session token")
 	assert.Equal(t, []byte("ping-B"), buf[16:n], "relayed payload delivered verbatim")
 

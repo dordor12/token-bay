@@ -153,6 +153,12 @@ A NAT'd consumer serves a request through a NAT'd seeder with real tunnel bytes 
 | Plugin `Rendezvous` + relay transport | plugin unit tests (STUN client parse, token frame/deframe) |
 | Phase-2 end-to-end | NAT-router e2e scenario (relay fallback carries real bytes; direct fails first) |
 
+## Known limitations (Phase 1)
+
+- The STUN reflector on `:3478` is an unauthenticated, spoofable ~1.6x amplifier with no per-source rate limit (inherent to any STUN server; well below the ~10x that makes reflectors attractive). Accepted for v1.
+- Every inbound relay datagram on `:3479` calls `Allocator.ResolveAndCharge`, which takes the same mutex as the control-plane `Allocate` (`TURN_RELAY_OPEN`). There is no per-source rate limit before the allocator lookup, so a flood of garbage-token datagrams can contend legitimate `TURN_RELAY_OPEN` RPCs (DoS degradation, not deadlock — the critical section is an O(1) map lookup). Accepted for v1; a per-source ingress filter is future work.
+- The relay reaper now ticks at `SessionTTL` (default 30s) instead of the previous 1s sweep, so idle bindings/sessions GC up to ~2xTTL late. Correctness is preserved by lazy expiry in `ResolveAndCharge`; only the `active_bindings` gauge and idle memory lag.
+
 ## Decomposition into implementation plans
 
 Two plans, in order:
