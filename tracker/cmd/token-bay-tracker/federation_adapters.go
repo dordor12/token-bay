@@ -114,6 +114,13 @@ func (a transferFederationAdapter) StartTransfer(ctx context.Context, req *tbpro
 
 	out, err := a.fed.StartTransfer(ctx, in)
 	if err != nil {
+		// A source-side rejection (e.g. insufficient balance) carries a
+		// human-readable reason (validator-capped to 64 bytes). Surface it
+		// as an INVALID RPC error so the consumer sees WHY, instead of the
+		// router redacting a generic error to "internal error".
+		if errors.Is(err, federation.ErrTransferRejected) {
+			return nil, api.ErrInvalid(err.Error())
+		}
 		return nil, err
 	}
 	return &tbproto.TransferProof{
