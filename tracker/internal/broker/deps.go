@@ -36,6 +36,11 @@ type AdmissionService interface {
 	PopReadyForBroker(now time.Time, minServePriority float64) (admission.QueueEntry, bool)
 	PressureGauge() float64
 	Decide(consumerID ids.IdentityID, att *sharedadmission.SignedCreditAttestation, now time.Time) admission.Result
+	// OnLedgerEvent feeds finalized ledger events (settlements today) into
+	// admission's rolling supply-demand buckets. *admission.Subsystem
+	// implements it; it does not affect Decide (which reads aggregate
+	// pressure), only the per-actor views and local scoring.
+	OnLedgerEvent(ev admission.LedgerEvent)
 }
 
 // ReputationService is advisory: nil falls back to fallbackReputation.

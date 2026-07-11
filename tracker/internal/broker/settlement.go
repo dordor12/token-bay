@@ -400,19 +400,28 @@ func (s *Settlement) appendUsageEntry(ctx context.Context, req *session.Request,
 	_, _, _ = s.mgr.Reservations.Release(req.RequestID)
 	_, _ = s.deps.Registry.DecLoad(req.AssignedSeeder)
 	_ = s.mgr.Inflight.Transition(req.RequestID, session.StateServing, session.StateCompleted, s.deps.Now())
+	// Dispatch the finalized settlement to every in-process ledger-event
+	// observer. Reputation uses it for the seeder's fairness signal; admission
+	// uses it for the consumer's/seeder's rolling supply-demand buckets that
+	// back the per-actor operator views and local scoring. Building the event
+	// once keeps the two observers exactly in agreement.
+	var flags uint32
+	if rec.ConsumerSigMissing {
+		flags = 1 // bit 0 = consumer_sig_missing
+	}
+	ev := admission.LedgerEvent{
+		Kind:        admission.LedgerEventSettlement,
+		ConsumerID:  req.ConsumerID,
+		SeederID:    req.AssignedSeeder,
+		CostCredits: rec.CostCredits,
+		Flags:       flags,
+		Timestamp:   time.Unix(int64(rec.Timestamp), 0), //nolint:gosec // G115: always positive
+	}
 	if s.deps.Reputation != nil {
-		var flags uint32
-		if rec.ConsumerSigMissing {
-			flags = 1 // bit 0 = consumer_sig_missing
-		}
-		s.deps.Reputation.OnLedgerEvent(admission.LedgerEvent{
-			Kind:        admission.LedgerEventSettlement,
-			ConsumerID:  req.ConsumerID,
-			SeederID:    req.AssignedSeeder,
-			CostCredits: rec.CostCredits,
-			Flags:       flags,
-			Timestamp:   time.Unix(int64(rec.Timestamp), 0), //nolint:gosec // G115: always positive
-		})
+		s.deps.Reputation.OnLedgerEvent(ev)
+	}
+	if s.deps.Admission != nil {
+		s.deps.Admission.OnLedgerEvent(ev)
 	}
 }
 

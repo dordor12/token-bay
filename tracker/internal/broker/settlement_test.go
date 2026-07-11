@@ -391,6 +391,70 @@ func TestHandleUsageReport_DispatchesReputationLedgerEvent(t *testing.T) {
 	require.Equal(t, uint32(1), ev.Flags, "timeout path sets the ConsumerSigMissing flag bit")
 }
 
+// TestHandleUsageReport_DispatchesAdmissionLedgerEvent pins that a finalized
+// settlement is also fed to admission's ledger-event consumer — the wiring
+// that populates admission's per-actor supply-demand buckets (backing the
+// operator per-actor views and local scoring). It carries the identical event
+// dispatched to reputation.
+func TestHandleUsageReport_DispatchesAdmissionLedgerEvent(t *testing.T) {
+	deps := testDeps(t)
+
+	cap := &fakeLedgerCapturing{}
+	deps.Ledger = cap
+
+	adm := &fakeAdmission{}
+	deps.Admission = adm
+
+	fr := newFakeRegistry()
+	seederRec := seederRecord(t, ids.IdentityID{0xDD}, 0.9, "claude-sonnet-4-6")
+	fr.Add(seederRec)
+	_, _ = fr.IncLoad(seederRec.IdentityID)
+	deps.Registry = fr
+
+	mgr := session.New()
+
+	requestID := [16]byte{0x07}
+	consumerID := ids.IdentityID{0xCC}
+	seederID := ids.IdentityID{0xDD}
+	model := "claude-sonnet-4-6"
+
+	seederPub, seederPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	req := makeAssignedRequest(t, requestID, model, consumerID, seederID, seederPub, 100, 200)
+	mgr.Inflight.Insert(req)
+	_ = mgr.Reservations.Reserve(requestID, consumerID, 1000, 1_000_000, time.Now().Add(time.Hour))
+
+	cfg := testSettlementCfg()
+	cfg.SettlementTimeoutS = 0
+
+	const fixedTS uint64 = 1700000000
+	deps.Now = func() time.Time { return time.Unix(int64(fixedTS), 0) } //nolint:gosec
+
+	s, err := OpenSettlement(cfg, deps, mgr)
+	require.NoError(t, err)
+	defer s.Close()
+
+	report := buildSeederSignedReport(t, seederPriv, requestID, model, 100, 200, consumerID, seederID)
+	_, err = s.HandleUsageReport(context.Background(), seederID, report)
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(adm.ledgerEvents()) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	events := adm.ledgerEvents()
+	require.Len(t, events, 1, "expected one settlement event dispatched to admission")
+	ev := events[0]
+	require.Equal(t, admission.LedgerEventSettlement, ev.Kind)
+	require.Equal(t, consumerID, ev.ConsumerID)
+	require.Equal(t, seederID, ev.SeederID)
+}
+
 // ---------------------------------------------------------------------------
 // T18: HandleSettle tests
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +114,9 @@ func (fakeLedger) AppendUsage(_ context.Context, _ ledger.UsageRecord) (*tbproto
 
 type fakeAdmission struct {
 	pressure float64
+
+	mu         sync.Mutex
+	ledgerEvts []admission.LedgerEvent
 }
 
 func (a *fakeAdmission) PopReadyForBroker(_ time.Time, _ float64) (admission.QueueEntry, bool) {
@@ -123,6 +127,21 @@ func (a *fakeAdmission) PressureGauge() float64 { return a.pressure }
 
 func (a *fakeAdmission) Decide(_ ids.IdentityID, _ *sharedadmission.SignedCreditAttestation, _ time.Time) admission.Result {
 	return admission.Result{Outcome: admission.OutcomeAdmit}
+}
+
+func (a *fakeAdmission) OnLedgerEvent(ev admission.LedgerEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ledgerEvts = append(a.ledgerEvts, ev)
+}
+
+// ledgerEvents returns a copy of the events dispatched to this stub.
+func (a *fakeAdmission) ledgerEvents() []admission.LedgerEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]admission.LedgerEvent, len(a.ledgerEvts))
+	copy(out, a.ledgerEvts)
+	return out
 }
 
 // ---------------------------------------------------------------------------

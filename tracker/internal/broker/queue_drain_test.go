@@ -26,7 +26,8 @@ func (a *fakeAdmissionWithEntries) PopReadyForBroker(now time.Time, minServePrio
 	a.entries = a.entries[1:]
 	return e, true
 }
-func (a *fakeAdmissionWithEntries) PressureGauge() float64 { return a.pressure }
+func (a *fakeAdmissionWithEntries) PressureGauge() float64                { return a.pressure }
+func (a *fakeAdmissionWithEntries) OnLedgerEvent(_ admission.LedgerEvent) {}
 func (a *fakeAdmissionWithEntries) Decide(_ ids.IdentityID, _ *sharedadmission.SignedCreditAttestation, _ time.Time) admission.Result {
 	return admission.Result{Outcome: admission.OutcomeAdmit}
 }
