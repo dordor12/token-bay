@@ -105,6 +105,15 @@ func TestRender_ProducesValidConfig(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(wantFedIDHashA[:]), string(gotFedIDHashA))
 	require.NotEqual(t, string(gotFedIDHashA), string(gotSPKIHashA), "fedid and spki must be distinct encodings")
 
+	// tracker-a.pub is the hex-encoded RAW Ed25519 pubkey — distinct
+	// from both the fedid (sha256 of this) and the spki hash (sha256 of
+	// the DER SPKI encoding of this).
+	gotPubA, err := os.ReadFile(filepath.Join(dir, "tracker-a.pub"))
+	require.NoError(t, err)
+	require.Equal(t, hex.EncodeToString(pubA), string(gotPubA))
+	require.NotEqual(t, string(gotPubA), string(gotFedIDHashA), "pub and fedid must be distinct encodings")
+	require.NotEqual(t, string(gotPubA), string(gotSPKIHashA), "pub and spki must be distinct encodings")
+
 	// tracker-b's config has only A as a peer.
 	rawB, err := os.ReadFile(filepath.Join(dir, "tracker-b.yaml"))
 	require.NoError(t, err)
@@ -114,6 +123,11 @@ func TestRender_ProducesValidConfig(t *testing.T) {
 	require.Len(t, cfgB.Federation.Peers, 1)
 	require.Equal(t, "A", cfgB.Federation.Peers[0].Region)
 	require.Equal(t, "tracker-a:7443", cfgB.Federation.Peers[0].Addr)
+
+	// tracker-b.pub mirrors tracker-a.pub for the B identity.
+	gotPubB, err := os.ReadFile(filepath.Join(dir, "tracker-b.pub"))
+	require.NoError(t, err)
+	require.Equal(t, hex.EncodeToString(pubB), string(gotPubB))
 }
 
 func TestRender_Deterministic(t *testing.T) {
@@ -123,7 +137,7 @@ func TestRender_Deterministic(t *testing.T) {
 	require.NoError(t, generate(testOpts(dir1)))
 	require.NoError(t, generate(testOpts(dir2)))
 
-	for _, name := range []string{"tracker-a.yaml", "tracker-b.yaml", "identity-a.key", "identity-b.key", "identity-fed.key", "tracker-a.spki", "tracker-b.spki"} {
+	for _, name := range []string{"tracker-a.yaml", "tracker-b.yaml", "identity-a.key", "identity-b.key", "identity-fed.key", "tracker-a.spki", "tracker-b.spki", "tracker-a.pub", "tracker-b.pub"} {
 		b1, err := os.ReadFile(filepath.Join(dir1, name))
 		require.NoError(t, err)
 		b2, err := os.ReadFile(filepath.Join(dir2, name))

@@ -12,17 +12,26 @@ import (
 	"time"
 )
 
-// The actor/fedactor control-API JSON shapes below are NOT sourced from
-// existing code — plugin/cmd/tokenbay-e2e-actor and
-// tracker/test/e2e/cmd/fedactor are built in parallel by other tracks
-// (plan Tasks 16-19) and do not exist on disk in this worktree. Each
-// shape follows the plan's endpoint list and field names literally where
-// the plan states them (e.g. "/identity" -> {identity_id_hex,
-// pubkey_hex}" in Task 16 step 4); everywhere else a clean, obvious JSON
-// shape was chosen and is documented per type/field. The orchestrator
-// reconciles any field-name mismatch against the real actor at
-// integration time — these are driver-side contracts, not verified wire
-// truth.
+// The ConsumerCtl/SeederCtl JSON shapes below were written against the
+// plan's endpoint list before plugin/cmd/tokenbay-e2e-actor existed in
+// this worktree; scenarios 1-10 (bringup/settlement/ledger_test.go)
+// exercise them live against the real actor binary and pass, so they
+// are reconciled in practice even though the shapes were originally
+// guessed.
+//
+// The FedactorCtl shapes were reconciled against the REAL
+// tracker/test/e2e/cmd/fedactor/control.go handlers (plan Task 27
+// Step 0): HandshakeSpec's field names now match handshakeReq's
+// {addr, pubkey_hex} exactly (the original guess used
+// target_addr/target_pub_hex, which the real fedactor's
+// json.NewDecoder would have silently ignored, leaving both fields
+// empty), and ReceivedEnvelope now matches recvRecord's
+// {kind, sender_id, at} (the original guess used
+// sender_hex/received_at). RootAttestationSpec, EquivocationEvidenceSpec,
+// and RevocationSpec already matched control.go's request structs
+// field-for-field. FedactorCtl.Healthz was removed: control.go's mux
+// never registers a /healthz route (see main_test.go's waitReady,
+// which uses GET /received as the fedactor readiness probe instead).
 
 // ctlClient is the shared bearer-less HTTP plumbing for the actor and
 // fedactor control APIs (they run inside the trusted compose network, no
@@ -324,18 +333,18 @@ type FedactorCtl struct{ c ctlClient }
 // --ctrl-addr (e.g. "http://localhost:8083").
 func NewFedactorCtl(baseURL string) *FedactorCtl { return &FedactorCtl{c: newCtlClient(baseURL)} }
 
-// Healthz calls GET /healthz.
-func (f *FedactorCtl) Healthz(ctx context.Context) error {
-	return f.c.do(ctx, http.MethodGet, "/healthz", nil, nil)
-}
-
 // HandshakeSpec is the POST /handshake body: dial + run the federation
 // handshake against a victim tracker (plan Task 19: "handshake(targetAddr,
 // targetPubHex) dials + runs the dialer handshake, stores the live
-// PeerConn").
+// PeerConn"). Field names/JSON tags match control.go's handshakeReq
+// {addr, pubkey_hex} exactly — PubKeyHex must be the target's RAW
+// Ed25519 public key hex (not a tracker_id/fedid hash): actor.go's
+// handshake decodes it straight into an ed25519.PublicKey and derives
+// the expected tracker_id itself via sha256. e2egen writes this raw
+// pubkey to <trackerName>.pub (render.go's writePubKey).
 type HandshakeSpec struct {
-	TargetAddr   string `json:"target_addr"`
-	TargetPubHex string `json:"target_pub_hex"`
+	Addr      string `json:"addr"`
+	PubKeyHex string `json:"pubkey_hex"`
 }
 
 // Handshake calls POST /handshake.
@@ -387,11 +396,12 @@ func (f *FedactorCtl) SendRevocation(ctx context.Context, spec RevocationSpec) e
 
 // ReceivedEnvelope is one entry of the GET /received response: an
 // envelope the fedactor's background Recv-drain goroutine collected on
-// its live PeerConn.
+// its live PeerConn. Field names/JSON tags match actor.go's recvRecord
+// {kind, sender_id, at} exactly.
 type ReceivedEnvelope struct {
 	Kind       string `json:"kind"`
-	SenderHex  string `json:"sender_hex"`
-	ReceivedAt string `json:"received_at"`
+	SenderID   string `json:"sender_id"`
+	ReceivedAt string `json:"at"`
 }
 
 // Received calls GET /received.

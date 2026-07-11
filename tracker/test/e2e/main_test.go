@@ -47,6 +47,7 @@ const (
 	consumerBaseURL  = "http://localhost:8081"
 	seederBaseURL    = "http://localhost:8082"
 	fedactorBaseURL  = "http://localhost:8083"
+	metricsABaseURL  = "http://localhost:9100"
 	composeProjectID = "tokenbay-e2e"
 )
 

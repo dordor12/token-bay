@@ -122,6 +122,13 @@ func generate(opts genOpts) error {
 		return err
 	}
 
+	if err := writePubKey(opts.OutDir, "tracker-a", idA); err != nil {
+		return err
+	}
+	if err := writePubKey(opts.OutDir, "tracker-b", idB); err != nil {
+		return err
+	}
+
 	cfgA := buildTrackerConfig("/gen/identity-a.key", []config.FederationPeer{
 		{
 			TrackerID: hex.EncodeToString(idB.trackerID[:]),
@@ -258,6 +265,24 @@ func writeFedID(outDir, trackerName string, id identity) error {
 	path := filepath.Join(outDir, trackerName+".fedid")
 	hexID := hex.EncodeToString(id.trackerID[:])
 	if err := os.WriteFile(path, []byte(hexID), 0o644); err != nil { //nolint:gosec // world-readable like identity keys: bind-mounted into containers running as a non-owner uid
+		return fmt.Errorf("generate: write %s: %w", path, err)
+	}
+	return nil
+}
+
+// writePubKey writes the hex-encoded RAW Ed25519 public key for
+// trackerName to <trackerName>.pub — the pubkey a federation dialer
+// that isn't itself an allowlisted config entry (e.g. the fedactor
+// Byzantine test double, plan Task 19/27) needs in order to pin and
+// dial the tracker directly via FedactorCtl.Handshake. This is
+// deliberately a THIRD distinct encoding alongside writeSPKIHash's
+// mTLS pin and writeFedID's federation tracker_id (itself
+// sha256(this same raw pubkey)): the raw, unhashed key bytes. No
+// trailing newline: the file is exactly the hex-encoded key.
+func writePubKey(outDir, trackerName string, id identity) error {
+	path := filepath.Join(outDir, trackerName+".pub")
+	hexPubStr := hexPub(id.pub)
+	if err := os.WriteFile(path, []byte(hexPubStr), 0o644); err != nil { //nolint:gosec // world-readable like identity keys: bind-mounted into containers running as a non-owner uid
 		return fmt.Errorf("generate: write %s: %w", path, err)
 	}
 	return nil

@@ -434,8 +434,10 @@ func TestFedactorCtl_Received_DecodesFixture(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/received", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
+		// Field names match the real fedactor's recvRecord
+		// (cmd/fedactor/actor.go): {kind, sender_id, at}.
 		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"kind": "KIND_EQUIVOCATION_EVIDENCE", "sender_hex": "aa", "received_at": "2026-07-11T00:00:00Z"},
+			{"kind": "KIND_EQUIVOCATION_EVIDENCE", "sender_id": "aa", "at": "2026-07-11T00:00:00Z"},
 		})
 	}))
 	defer srv.Close()
@@ -445,6 +447,31 @@ func TestFedactorCtl_Received_DecodesFixture(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "KIND_EQUIVOCATION_EVIDENCE", got[0].Kind)
+	assert.Equal(t, "aa", got[0].SenderID)
+	assert.Equal(t, "2026-07-11T00:00:00Z", got[0].ReceivedAt)
+}
+
+// TestFedactorCtl_Handshake_PostsBody locks in the field names/JSON tags
+// against the real fedactor's handshakeReq (cmd/fedactor/control.go):
+// {addr, pubkey_hex} — NOT the originally-guessed
+// target_addr/target_pub_hex, which the real handler would have
+// silently decoded as zero-valued (json.Decoder ignores unknown
+// fields by default).
+func TestFedactorCtl_Handshake_PostsBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/handshake", r.URL.Path)
+		var got map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		assert.Equal(t, "tracker-a:7443", got["addr"])
+		assert.Equal(t, "deadbeef", got["pubkey_hex"])
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := NewFedactorCtl(srv.URL)
+	err := f.Handshake(context.Background(), HandshakeSpec{Addr: "tracker-a:7443", PubKeyHex: "deadbeef"})
+	require.NoError(t, err)
 }
 
 func TestFedactorCtl_SendRevocation_PostsBody(t *testing.T) {
