@@ -401,6 +401,7 @@ func newRunCmd() *cobra.Command {
 				graceCtx, cancel := context.WithTimeout(context.Background(),
 					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
 				defer cancel()
+				_ = srv.Shutdown(graceCtx)
 				_ = adminSrv.Shutdown(graceCtx)
 				_ = metricsSrv.Shutdown(graceCtx)
 				return err
