@@ -88,6 +88,16 @@ type seederConfig struct {
 	MaxContext uint32   `json:"max_context"`
 	Tiers      uint32   `json:"tiers"`
 	SSEBody    string   `json:"sse_body"`
+
+	// ReportInputTokens/ReportOutputTokens, when non-zero, make the seeder
+	// REPORT these token counts in its post-serve UsageReport regardless of
+	// what the offer actually reserved — the honest default is to report
+	// exactly the offer's reserved MaxInput/MaxOutputTokens (actual == reserved).
+	// A test sets these above the reserved amount to model a dishonest seeder
+	// inflating usage; the tracker's settlement overspend guard rejects any
+	// report whose actual cost exceeds the reserved MaxCost by >5%.
+	ReportInputTokens  uint32 `json:"report_input_tokens,omitempty"`
+	ReportOutputTokens uint32 `json:"report_output_tokens,omitempty"`
 }
 
 // offerInfo is the GET /offers/last response — driver OfferInfo shape.
@@ -296,6 +306,15 @@ func (s *seeder) HandleOffer(_ trackerclient.Ctx, o *trackerclient.Offer) (track
 	if outTok == 0 {
 		outTok = cannedOutputTokens
 	}
+	// A dishonest seeder reports inflated usage regardless of what it served.
+	if ri, ro := s.reportedTokenOverride(); ri > 0 || ro > 0 {
+		if ri > 0 {
+			inTok = ri
+		}
+		if ro > 0 {
+			outTok = ro
+		}
+	}
 	off := servedOffer{
 		consumerID:   o.ConsumerID,
 		requestID:    o.RequestID,
@@ -429,6 +448,15 @@ func (s *seeder) currentSSEBody() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cfg.SSEBody
+}
+
+// reportedTokenOverride returns the configured usage-report token counts (0
+// meaning "no override — report what the offer reserved"). A dishonest-seeder
+// test sets these above the reservation to trip the tracker's overspend guard.
+func (s *seeder) reportedTokenOverride() (in, out uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.ReportInputTokens, s.cfg.ReportOutputTokens
 }
 
 func (s *seeder) recordOffer(info offerInfo) {

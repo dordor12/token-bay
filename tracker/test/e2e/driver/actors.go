@@ -275,6 +275,13 @@ type SeederConfig struct {
 	MaxContext uint32   `json:"max_context,omitempty"`
 	Tiers      uint32   `json:"tiers"`
 	SSEBody    string   `json:"sse_body,omitempty"`
+
+	// ReportInputTokens/ReportOutputTokens, when non-zero, make the seeder
+	// report these usage counts instead of what the offer reserved — used to
+	// model a dishonest seeder inflating usage past the tracker's overspend
+	// guard. Zero (the default) reports honestly (actual == reserved).
+	ReportInputTokens  uint32 `json:"report_input_tokens,omitempty"`
+	ReportOutputTokens uint32 `json:"report_output_tokens,omitempty"`
 }
 
 // SetConfig calls POST /config.
