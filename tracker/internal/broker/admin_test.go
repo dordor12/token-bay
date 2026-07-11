@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/token-bay/token-bay/shared/ids"
+	"github.com/token-bay/token-bay/tracker/internal/registry"
 	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
@@ -212,6 +213,58 @@ func TestAdmin_ForceFailInflight(t *testing.T) {
 	req, ok := sub.Broker.mgr.Inflight.Get(reqID)
 	require.True(t, ok)
 	require.Equal(t, session.StateFailed, req.State)
+}
+
+// TestAdmin_ForceFailInflight_ReclaimsSeederLoad pins the operator-recovery
+// invariant: force-failing an ASSIGNED request must return the seeder's
+// registry load slot — exactly what settlement completion and the TTL reaper
+// do when a request leaves the Assigned state. Without this, every operator
+// intervention on a stuck request silently and permanently shrinks that
+// seeder's effective capacity (the selector filters it at LoadThreshold) until
+// it re-advertises or the process restarts. The credit reservation is a
+// separate primitive (POST /broker/reservations/release) and is intentionally
+// left untouched here.
+func TestAdmin_ForceFailInflight_ReclaimsSeederLoad(t *testing.T) {
+	sub := openTestSubsystems(t)
+
+	fr := sub.Broker.deps.Registry.(*fakeRegistry)
+	consumer := ids.IdentityID{0xC0}
+	seeder := ids.IdentityID{0x5E}
+	reqID := [16]byte{0x41}
+
+	// A seeder carrying one in-flight assignment: load=1, plus the request's
+	// held credit reservation and its Assigned in-flight record.
+	fr.Add(registry.SeederRecord{IdentityID: seeder, Available: true})
+	_, err := fr.IncLoad(seeder)
+	require.NoError(t, err)
+	insertReservation(sub, reqID, consumer, 1000)
+	insertInflight(sub, &session.Request{
+		RequestID:      reqID,
+		ConsumerID:     consumer,
+		AssignedSeeder: seeder,
+		State:          session.StateAssigned,
+		StartedAt:      time.Now(),
+	})
+	require.Equal(t, 1, mustGet(t, fr, seeder).Load, "precondition: load held")
+	require.Equal(t, uint64(1000), sub.Broker.mgr.Reservations.Reserved(consumer))
+
+	rec := doRequest(t, sub, http.MethodPost,
+		"/broker/inflight/fail/"+hex.EncodeToString(reqID[:]))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	req, ok := sub.Broker.mgr.Inflight.Get(reqID)
+	require.True(t, ok)
+	require.Equal(t, session.StateFailed, req.State)
+	require.Equal(t, 0, mustGet(t, fr, seeder).Load, "seeder load slot reclaimed on operator force-fail")
+	require.Equal(t, uint64(1000), sub.Broker.mgr.Reservations.Reserved(consumer),
+		"credit reservation is left for the separate reservations/release operator step")
+}
+
+func mustGet(t *testing.T, fr *fakeRegistry, id ids.IdentityID) registry.SeederRecord {
+	t.Helper()
+	rec, ok := fr.Get(id)
+	require.True(t, ok)
+	return rec
 }
 
 func TestAdmin_ForceFailInflight_NotFound(t *testing.T) {
