@@ -121,6 +121,11 @@ func fedactorCtl() *driver.FedactorCtl { return fedactorCli }
 // (testcontainers) by default, or driver.Compose under E2E_REUSE_STACK.
 func compose() stackDriver { return composeHandle }
 
+// stack returns the testcontainers Stack handle (nil under E2E_REUSE_STACK),
+// for scenarios that dynamically add containers (the concurrent multi-seeder
+// matrix). Scenarios that need it must skip when it is nil.
+func stack() *driver.Stack { return stackHandle }
+
 // TestMain owns the whole-stack lifecycle for every e2e scenario in this
 // package: generate the deterministic key/config artifacts, bring the
 // compose topology up, poll every service until it reports healthy, run
@@ -187,7 +192,7 @@ func runTestMain(m *testing.M) (exitCode int) {
 		}
 
 		fmt.Fprintln(os.Stderr, "e2e: bringing up the testcontainers stack (assumes token-bay-tracker:dev and tokenbay-e2e-actors:dev images already built — see make -C tracker test-e2e)...")
-		st, err := driver.NewStack([]string{composeFile}, composeProjectID, nil)
+		st, err := driver.NewStack([]string{composeFile}, composeProjectID, genDir, nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "e2e: new stack:", err)
 			return 1

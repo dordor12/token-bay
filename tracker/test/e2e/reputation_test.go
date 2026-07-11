@@ -90,10 +90,11 @@ func TestScenario29_DishonestSeederOverReportRejected(t *testing.T) {
 		"consumer must not be debited for a rejected over-report")
 
 	// Cleanup: the rejected report leaves the request ASSIGNED with the
-	// seeder's load slot held (same as an abandoned assignment), so force-fail
-	// it to reclaim capacity, then restore an honest seeder for the scenarios
-	// that share this stack after us.
+	// seeder's load slot AND the consumer's credit reservation held, so reclaim
+	// both (force-fail frees the load; release frees the reservation) and
+	// restore an honest seeder for the scenarios that share this stack after us.
 	_, _ = adminA().ForceFailInflight(ctx, reqID)
+	_, _ = adminA().ForceReleaseReservation(ctx, reqID)
 	require.NoError(t, seederCtl().SetConfig(ctx, driver.SeederConfig{
 		Available: true, Headroom: 0.9, Models: []string{sonnetModel}, Tiers: 1, SSEBody: cannedSSEBody,
 	}), "restore honest seeder config")

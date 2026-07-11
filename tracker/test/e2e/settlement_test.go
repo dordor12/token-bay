@@ -168,7 +168,11 @@ func requestServedBody(ctx context.Context, t *testing.T, spec driver.RequestSpe
 			return true
 		}
 		if r.ReservationTokenHex != "" {
+			// Reclaim BOTH the seeder load (force-fail) and the held credit
+			// reservation (release) so retries don't drain the shared
+			// consumer's non-renewable starter grant.
 			_, _ = adminA().ForceFailInflight(ctx, r.ReservationTokenHex)
+			_, _ = adminA().ForceReleaseReservation(ctx, r.ReservationTokenHex)
 		}
 		t.Logf("e2e: requestServedBody: retrying (outcome=%q body_len=%d err=%q)", r.Outcome, len(r.ResponseBody), r.Error)
 		return false

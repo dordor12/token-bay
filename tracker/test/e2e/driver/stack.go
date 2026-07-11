@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tccompose "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -34,11 +35,15 @@ type Stack struct {
 	files   []string
 	project string
 	env     map[string]string
+	genDir  string // host path of the generated .gen artifacts, bind-mounted into dynamic actors
+
+	extra []testcontainers.Container // dynamically-added containers (extra seeders), terminated on Down
 }
 
 // NewStack builds a Stack over the given compose files. project is the
-// compose project identifier; env is layered onto every service.
-func NewStack(files []string, project string, env map[string]string) (*Stack, error) {
+// compose project identifier; env is layered onto every service; genDir is the
+// host path of the e2egen artifacts (mounted into any dynamically-added actor).
+func NewStack(files []string, project, genDir string, env map[string]string) (*Stack, error) {
 	cs, err := tccompose.NewDockerComposeWith(
 		tccompose.WithStackFiles(files...),
 		tccompose.StackIdentifier(project),
@@ -46,7 +51,80 @@ func NewStack(files []string, project string, env map[string]string) (*Stack, er
 	if err != nil {
 		return nil, fmt.Errorf("driver: new compose stack: %w", err)
 	}
-	return &Stack{stack: cs, files: files, project: project, env: env}, nil
+	return &Stack{stack: cs, files: files, project: project, genDir: genDir, env: env}, nil
+}
+
+// networkName returns the docker network the compose services share, by
+// inspecting tracker-a. Dynamically-added actors join it so their container IP
+// (the reflexive address the tracker records as SeederAddr) is reachable from
+// the consumer.
+func (s *Stack) networkName(ctx context.Context) (string, error) {
+	c, err := s.container(ctx, "tracker-a")
+	if err != nil {
+		return "", err
+	}
+	info, err := c.Inspect(ctx)
+	if err != nil {
+		return "", fmt.Errorf("driver: inspect tracker-a: %w", err)
+	}
+	for name := range info.NetworkSettings.Networks {
+		return name, nil
+	}
+	return "", fmt.Errorf("driver: tracker-a has no network")
+}
+
+// StartSeeder launches an ADDITIONAL seeder actor container on the compose
+// network — the dynamic-container capability the testcontainers migration
+// unlocks for the concurrent multi-seeder matrix. The seeder self-enrolls with
+// tracker-a and serves its tunnel on port 7900 (its own container IP), matching
+// the consumer's fixed --seeder-tunnel-port. Returns a control client bound to
+// the mapped host port and a stop func; the container is also tracked for Down.
+func (s *Stack) StartSeeder(ctx context.Context, alias string) (*SeederCtl, func(), error) {
+	net, err := s.networkName(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	req := testcontainers.ContainerRequest{
+		Image:      "tokenbay-e2e-actors:dev",
+		Entrypoint: []string{"/usr/local/bin/tokenbay-e2e-actor"},
+		Cmd: []string{
+			"--role", "seeder",
+			"--tracker-addr", "tracker-a:7777",
+			"--tracker-hash-file", "/gen/tracker-a.spki",
+			"--data-dir", "/data",
+			"--ctrl-addr", "0.0.0.0:8082",
+			"--tunnel-addr", "0.0.0.0:7900",
+		},
+		ExposedPorts: []string{"8082/tcp"},
+		Networks:     []string{net},
+		NetworkAliases: map[string][]string{
+			net: {alias},
+		},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.Binds = append(hc.Binds, s.genDir+":/gen:ro")
+		},
+		WaitingFor: wait.ForListeningPort("8082/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("driver: start extra seeder %q: %w", alias, err)
+	}
+	s.extra = append(s.extra, c)
+
+	host, err := c.Host(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("driver: extra seeder %q host: %w", alias, err)
+	}
+	mapped, err := c.MappedPort(ctx, "8082/tcp")
+	if err != nil {
+		return nil, nil, fmt.Errorf("driver: extra seeder %q ctrl port: %w", alias, err)
+	}
+	ctl := NewSeederCtl(fmt.Sprintf("http://%s:%s", host, mapped.Port()))
+	stop := func() { _ = c.Terminate(context.Background()) }
+	return ctl, stop, nil
 }
 
 // Up brings the topology up and blocks until the trackers pass their compose
@@ -61,8 +139,13 @@ func (s *Stack) Up(ctx context.Context) error {
 	return nil
 }
 
-// Down tears the stack down, removing containers, networks and volumes.
+// Down terminates any dynamically-added actors, then tears the compose stack
+// down, removing containers, networks and volumes.
 func (s *Stack) Down(ctx context.Context) error {
+	for _, c := range s.extra {
+		_ = c.Terminate(ctx)
+	}
+	s.extra = nil
 	return s.stack.Down(ctx,
 		tccompose.RemoveOrphans(true),
 		tccompose.RemoveVolumes(true),
