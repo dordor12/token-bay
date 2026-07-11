@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,19 @@ func testOpts(outDir string) genOpts {
 	}
 }
 
+// e2egen generates configs for Linux containers (data_dir=/data etc.).
+// config.Validate uses filepath.IsAbs, which is host-OS-specific — "/data"
+// is not absolute under Windows semantics — so these tests are meaningful
+// only on a Unix host. Skip elsewhere (the Docker e2e always runs on Linux).
+func skipUnlessUnixHost(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("e2egen targets Linux containers; config path validation is not meaningful on Windows")
+	}
+}
+
 func TestRender_ProducesValidConfig(t *testing.T) {
+	skipUnlessUnixHost(t)
 	dir := t.TempDir()
 	require.NoError(t, generate(testOpts(dir)))
 
@@ -131,6 +144,7 @@ func TestRender_ProducesValidConfig(t *testing.T) {
 }
 
 func TestRender_Deterministic(t *testing.T) {
+	skipUnlessUnixHost(t)
 	dir1 := filepath.Join(t.TempDir(), "run1")
 	dir2 := filepath.Join(t.TempDir(), "run2")
 
