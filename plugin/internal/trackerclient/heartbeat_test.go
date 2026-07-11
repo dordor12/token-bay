@@ -48,7 +48,9 @@ func TestHeartbeatPingPong(t *testing.T) {
 
 	teardown := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	go runHeartbeat(ctx, cli, 30*time.Millisecond, 5, 1<<10, func(err error) {
+	hbStream, err := openHeartbeatStream(ctx, cli)
+	require.NoError(t, err)
+	go runHeartbeatLoop(ctx, cli, hbStream, 30*time.Millisecond, 5, 1<<10, func(err error) {
 		select {
 		case teardown <- err:
 		default:
@@ -86,7 +88,9 @@ func TestHeartbeatMissTearsDown(t *testing.T) {
 	}()
 
 	teardown := make(chan error, 1)
-	go runHeartbeat(context.Background(), cli, 20*time.Millisecond, 3, 1<<10, func(err error) {
+	hbStream, err := openHeartbeatStream(context.Background(), cli)
+	require.NoError(t, err)
+	go runHeartbeatLoop(context.Background(), cli, hbStream, 20*time.Millisecond, 3, 1<<10, func(err error) {
 		select {
 		case teardown <- err:
 		default:

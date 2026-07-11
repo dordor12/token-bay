@@ -134,6 +134,108 @@ func TestQuicHandshakeAndOneRPC(t *testing.T) {
 	}
 }
 
+// TestQuicHeartbeatStreamIsFirst asserts the client's "heartbeat stream
+// first" contract over a real QUIC connection. The server mirrors the
+// production tracker's positional dispatch: the FIRST accepted
+// client-initiated bidi stream is served as the heartbeat stream
+// (ping -> pong) and every subsequent stream as an RPC stream. The
+// client fires an RPC immediately after WaitConnected returns.
+//
+// Regression: before the supervisor opened the heartbeat stream
+// synchronously ahead of PhaseConnected, an application RPC issued
+// right after WaitConnected could open the first stream and be
+// swallowed by the tracker's heartbeat handler (never dispatched,
+// empty response), while the real heartbeat stream got dispatched as
+// an RPC (no pongs -> heartbeat-lost -> reconnect flapping).
+func TestQuicHeartbeatStreamIsFirst(t *testing.T) {
+	server := newKP(t)
+	client := newKP(t)
+
+	cert, err := idtls.CertFromIdentity(server.priv)
+	require.NoError(t, err)
+	serverTLS := idtls.MakeServerTLSConfig(cert, nil)
+
+	listener, err := quicgo.ListenAddr("127.0.0.1:0", serverTLS, &quicgo.Config{Allow0RTT: false})
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+	addr := listener.Addr().String()
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		conn, err := listener.Accept(context.Background())
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseWithError(0, "") }()
+
+		// Positional contract, exactly like the tracker's serveConn:
+		// stream #1 accepted = heartbeat. Reply to every ping.
+		hbStream, err := conn.AcceptStream(context.Background())
+		if err != nil {
+			return
+		}
+		go func() {
+			for {
+				var ping tbproto.HeartbeatPing
+				if err := wire.Read(hbStream, &ping, 1<<20); err != nil {
+					return
+				}
+				if err := wire.Write(hbStream, &tbproto.HeartbeatPong{Seq: ping.Seq}, 1<<20); err != nil {
+					return
+				}
+			}
+		}()
+
+		// Subsequent streams = RPC. Only these get RpcResponse frames;
+		// if the client's RPC stream had arrived first it would be stuck
+		// in the heartbeat handler above and Settle would never return.
+		for {
+			stream, err := conn.AcceptStream(context.Background())
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = stream.Close() }()
+				var req tbproto.RpcRequest
+				if err := wire.Read(stream, &req, 1<<20); err != nil {
+					return
+				}
+				resp := &tbproto.RpcResponse{Status: tbproto.RpcStatus_RPC_STATUS_OK}
+				_ = wire.Write(stream, resp, 1<<20)
+			}()
+		}
+	}()
+
+	cfg := trackerclient.Config{
+		Endpoints: []trackerclient.TrackerEndpoint{{
+			Addr:         addr,
+			IdentityHash: server.hash,
+		}},
+		Identity:  fakeSigner{priv: client.priv},
+		Transport: quicdriver.New(),
+	}
+	c, err := trackerclient.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, c.Start(context.Background()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, c.WaitConnected(ctx))
+
+	// Fire the RPC immediately after WaitConnected — this is the racing
+	// call the fix protects. It must be dispatched as an RPC stream.
+	require.NoError(t, c.Settle(ctx, make([]byte, 32), make([]byte, 64)))
+
+	require.NoError(t, c.Close())
+	require.NoError(t, listener.Close())
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not shut down")
+	}
+}
+
 // TestQuicMismatchedSPKIFails asserts the client refuses to consider the
 // connection ready when the server's SPKI does not match the configured
 // pin, which manifests as WaitConnected hitting the context deadline
