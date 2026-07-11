@@ -17,14 +17,16 @@ var errUnreachable = errors.New("broker: seeder unreachable")
 //   - (false, nil, nil)    on reject or timeout
 //   - (false, nil, err)    on push setup failure or context cancellation
 func runOffer(ctx context.Context, pusher PushService, seederID ids.IdentityID,
-	body *tbproto.EnvelopeBody, envHash [32]byte, timeout time.Duration,
+	body *tbproto.EnvelopeBody, envHash [32]byte, reqID [16]byte, timeout time.Duration,
 ) (accept bool, ephemeralPub []byte, err error) {
 	push := &tbproto.OfferPush{
-		ConsumerId:      body.ConsumerId,
-		EnvelopeHash:    envHash[:],
-		Model:           body.Model,
-		MaxInputTokens:  uint32(body.MaxInputTokens),  //nolint:gosec // G115: truncation acceptable for offer push; seeder ignores the value
-		MaxOutputTokens: uint32(body.MaxOutputTokens), //nolint:gosec // G115: same
+		ConsumerId:           body.ConsumerId,
+		EnvelopeHash:         envHash[:],
+		Model:                body.Model,
+		MaxInputTokens:       uint32(body.MaxInputTokens),  //nolint:gosec // G115: truncation acceptable for offer push; seeder ignores the value
+		MaxOutputTokens:      uint32(body.MaxOutputTokens), //nolint:gosec // G115: same
+		ConsumerEphemeralPub: body.ConsumerEphemeralPub,
+		RequestId:            reqID[:],
 	}
 	ch, ok := pusher.PushOfferTo(seederID, push)
 	if !ok {

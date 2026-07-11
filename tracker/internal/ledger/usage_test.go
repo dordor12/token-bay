@@ -11,12 +11,26 @@ import (
 
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/shared/signing"
-	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 )
 
+// usageAssertionFor derives the sequencing-independent usage-assertion
+// from a UsageRecord's fields — the preimage both participants sign.
+func usageAssertionFor(r UsageRecord) signing.UsageAssertion {
+	return signing.UsageAssertion{
+		RequestID:    r.RequestID,
+		ConsumerID:   r.ConsumerID,
+		SeederID:     r.SeederID,
+		Model:        r.Model,
+		InputTokens:  r.InputTokens,
+		OutputTokens: r.OutputTokens,
+		CostCredits:  r.CostCredits,
+	}
+}
+
 // signedUsageRecord builds a UsageRecord matching the current tip on l,
-// signing the body with the consumer + seeder keypairs. Returns both the
-// record and the body so tests can inspect either.
+// with consumer + seeder signatures over the usage-assertion (the
+// sequencing-independent preimage — NOT the EntryBody). Returns both the
+// record and its assertion so tests can inspect either.
 func signedUsageRecord(
 	t *testing.T,
 	l *Ledger,
@@ -24,11 +38,11 @@ func signedUsageRecord(
 	cPub ed25519.PublicKey, cPriv ed25519.PrivateKey,
 	sPub ed25519.PublicKey, sPriv ed25519.PrivateKey,
 	cost uint64,
-) (UsageRecord, *tbproto.EntryBody) {
+) (UsageRecord, signing.UsageAssertion) {
 	t.Helper()
 	prev, seq := nextTipForTest(t, l)
 
-	body, err := entry.BuildUsageEntry(entry.UsageInput{
+	rec := UsageRecord{
 		PrevHash:     prev,
 		Seq:          seq,
 		ConsumerID:   consumerID,
@@ -39,30 +53,18 @@ func signedUsageRecord(
 		CostCredits:  cost,
 		Timestamp:    1714000000 + seq,
 		RequestID:    bytes.Repeat([]byte{byte(seq)}, 16),
-	})
-	require.NoError(t, err)
-
-	cSig, err := signing.SignEntry(cPriv, body)
-	require.NoError(t, err)
-	sSig, err := signing.SignEntry(sPriv, body)
-	require.NoError(t, err)
-
-	return UsageRecord{
-		PrevHash:     prev,
-		Seq:          seq,
-		ConsumerID:   consumerID,
-		SeederID:     seederID,
-		Model:        "claude-sonnet-4-6",
-		InputTokens:  100,
-		OutputTokens: 50,
-		CostCredits:  cost,
-		Timestamp:    1714000000 + seq,
-		RequestID:    bytes.Repeat([]byte{byte(seq)}, 16),
-		ConsumerSig:  cSig,
 		ConsumerPub:  cPub,
-		SeederSig:    sSig,
 		SeederPub:    sPub,
-	}, body
+	}
+	assertion := usageAssertionFor(rec)
+
+	cSig, err := signing.SignUsageAssertion(cPriv, assertion)
+	require.NoError(t, err)
+	sSig, err := signing.SignUsageAssertion(sPriv, assertion)
+	require.NoError(t, err)
+	rec.ConsumerSig = cSig
+	rec.SeederSig = sSig
+	return rec, assertion
 }
 
 func TestAppendUsage_HappyPath(t *testing.T) {
@@ -84,9 +86,10 @@ func TestAppendUsage_HappyPath(t *testing.T) {
 
 	assert.Equal(t, tbproto.EntryKind_ENTRY_KIND_USAGE, e.Body.Kind)
 	assert.Equal(t, uint64(2), e.Body.Seq)
+	assert.Zero(t, e.Body.Flags&1, "consumer_sig_missing flag must be clear on the happy path")
 	assert.NotEmpty(t, e.TrackerSig)
-	assert.NotEmpty(t, e.ConsumerSig)
-	assert.NotEmpty(t, e.SeederSig)
+	assert.Equal(t, rec.ConsumerSig, e.ConsumerSig, "assertion-domain consumer sig stored verbatim")
+	assert.Equal(t, rec.SeederSig, e.SeederSig, "assertion-domain seeder sig stored verbatim")
 
 	// Balances reflect the transfer.
 	cBal, ok, err := l.store.Balance(ctx, consumerID)
@@ -137,32 +140,23 @@ func TestAppendUsage_RejectsBadConsumerSig(t *testing.T) {
 	require.NoError(t, err)
 
 	prev, seq := nextTipForTest(t, l)
-	body, err := entry.BuildUsageEntry(entry.UsageInput{
-		PrevHash:    prev,
-		Seq:         seq,
-		ConsumerID:  consumerID,
-		SeederID:    seederID,
-		Model:       "claude-sonnet-4-6",
-		CostCredits: 1000,
-		Timestamp:   1714000000,
-		RequestID:   bytes.Repeat([]byte{0x33}, 16),
-	})
-	require.NoError(t, err)
-
-	// Sign with a key that's not the consumer's.
-	badConsumerSig, err := signing.SignEntry(otherPriv, body)
-	require.NoError(t, err)
-	seederSig, err := signing.SignEntry(sPriv, body)
-	require.NoError(t, err)
-
 	rec := UsageRecord{
 		PrevHash: prev, Seq: seq,
 		ConsumerID: consumerID, SeederID: seederID,
 		Model: "claude-sonnet-4-6", CostCredits: 1000,
 		Timestamp: 1714000000, RequestID: bytes.Repeat([]byte{0x33}, 16),
-		ConsumerSig: badConsumerSig, ConsumerPub: cPub,
-		SeederSig: seederSig, SeederPub: sPub,
+		ConsumerPub: cPub, SeederPub: sPub,
 	}
+	assertion := usageAssertionFor(rec)
+
+	// Sign the assertion with a key that's not the consumer's.
+	badConsumerSig, err := signing.SignUsageAssertion(otherPriv, assertion)
+	require.NoError(t, err)
+	seederSig, err := signing.SignUsageAssertion(sPriv, assertion)
+	require.NoError(t, err)
+	rec.ConsumerSig = badConsumerSig
+	rec.SeederSig = seederSig
+
 	_, err = l.AppendUsage(ctx, rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "consumer_sig invalid")
@@ -181,32 +175,32 @@ func TestAppendUsage_RejectsBadSeederSig(t *testing.T) {
 	require.NoError(t, err)
 
 	prev, seq := nextTipForTest(t, l)
-	body, err := entry.BuildUsageEntry(entry.UsageInput{
-		PrevHash: prev, Seq: seq,
-		ConsumerID: consumerID, SeederID: seederID,
-		Model: "claude-sonnet-4-6", CostCredits: 1000,
-		Timestamp: 1714000000, RequestID: bytes.Repeat([]byte{0x33}, 16),
-	})
-	require.NoError(t, err)
-
-	consumerSig, err := signing.SignEntry(cPriv, body)
-	require.NoError(t, err)
-	badSeederSig, err := signing.SignEntry(otherPriv, body)
-	require.NoError(t, err)
-
 	rec := UsageRecord{
 		PrevHash: prev, Seq: seq,
 		ConsumerID: consumerID, SeederID: seederID,
 		Model: "claude-sonnet-4-6", CostCredits: 1000,
 		Timestamp: 1714000000, RequestID: bytes.Repeat([]byte{0x33}, 16),
-		ConsumerSig: consumerSig, ConsumerPub: cPub,
-		SeederSig: badSeederSig, SeederPub: sPub,
+		ConsumerPub: cPub, SeederPub: sPub,
 	}
+	assertion := usageAssertionFor(rec)
+
+	consumerSig, err := signing.SignUsageAssertion(cPriv, assertion)
+	require.NoError(t, err)
+	// "Seeder sig" actually produced by the attacker's key — invalid.
+	badSeederSig, err := signing.SignUsageAssertion(otherPriv, assertion)
+	require.NoError(t, err)
+	rec.ConsumerSig = consumerSig
+	rec.SeederSig = badSeederSig
+
 	_, err = l.AppendUsage(ctx, rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "seeder_sig invalid")
 }
 
+// TestAppendUsage_ConsumerSigMissingFlag is the dispute/timeout path: the
+// consumer never counter-signed, so the entry carries only the seeder's
+// assertion-domain sig plus the consumer_sig_missing flag — and balances
+// still move.
 func TestAppendUsage_ConsumerSigMissingFlag(t *testing.T) {
 	l := openTempLedger(t)
 	ctx := context.Background()
@@ -218,29 +212,120 @@ func TestAppendUsage_ConsumerSigMissingFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	prev, seq := nextTipForTest(t, l)
-	body, err := entry.BuildUsageEntry(entry.UsageInput{
-		PrevHash: prev, Seq: seq,
-		ConsumerID: consumerID, SeederID: seederID,
-		Model: "claude-sonnet-4-6", CostCredits: 1000,
-		Timestamp: 1714000000, RequestID: bytes.Repeat([]byte{0x33}, 16),
-		ConsumerSigMissing: true,
-	})
-	require.NoError(t, err)
-	seederSig, err := signing.SignEntry(sPriv, body)
-	require.NoError(t, err)
-
 	rec := UsageRecord{
 		PrevHash: prev, Seq: seq,
 		ConsumerID: consumerID, SeederID: seederID,
 		Model: "claude-sonnet-4-6", CostCredits: 1000,
 		Timestamp: 1714000000, RequestID: bytes.Repeat([]byte{0x33}, 16),
 		ConsumerSigMissing: true,
-		SeederSig:          seederSig, SeederPub: sPub,
+		SeederPub:          sPub,
 	}
+	seederSig, err := signing.SignUsageAssertion(sPriv, usageAssertionFor(rec))
+	require.NoError(t, err)
+	rec.SeederSig = seederSig
+
 	e, err := l.AppendUsage(ctx, rec)
 	require.NoError(t, err)
 	assert.Empty(t, e.ConsumerSig)
 	assert.NotEmpty(t, e.SeederSig)
+	assert.NotZero(t, e.Body.Flags&1, "consumer_sig_missing flag must be set")
+
+	cBal, ok, err := l.store.Balance(ctx, consumerID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(4000), cBal.Credits, "consumer debited on the dispute path too")
+
+	sBal, ok, err := l.store.Balance(ctx, seederID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(1000), sBal.Credits, "seeder credited on the dispute path too")
+}
+
+// TestAppendUsage_DuplicateRequestIDRejected — USAGE request_ids are
+// single-use. After a usage entry commits, a replay of the same record
+// against a fresh tip (same assertion-domain sigs — they don't bind
+// sequencing) must be rejected with ErrUsageRequestExists: one entry on
+// chain, balances moved exactly once. This is the ledger-level defense
+// against settlement replay (duplicate usage_report → double debit).
+func TestAppendUsage_DuplicateRequestIDRejected(t *testing.T) {
+	l := openTempLedger(t)
+	ctx := context.Background()
+	consumerID := bytes.Repeat([]byte{0x11}, 32)
+	seederID := bytes.Repeat([]byte{0x22}, 32)
+	cPub, cPriv := labeledKeypair("consumer")
+	sPub, sPriv := labeledKeypair("seeder")
+
+	_, err := l.IssueStarterGrant(ctx, consumerID, 5000)
+	require.NoError(t, err)
+
+	rec, _ := signedUsageRecord(t, l, consumerID, seederID, cPub, cPriv, sPub, sPriv, 1000)
+	_, err = l.AppendUsage(ctx, rec)
+	require.NoError(t, err)
+
+	// Replay: same request_id + sigs, sequencing refreshed to the new tip.
+	rec.PrevHash, rec.Seq = nextTipForTest(t, l)
+	_, err = l.AppendUsage(ctx, rec)
+	require.ErrorIs(t, err, ErrUsageRequestExists)
+
+	// Exactly one usage entry on chain: tip is grant (1) + usage (2).
+	tipSeq, _, hasTip, err := l.Tip(ctx)
+	require.NoError(t, err)
+	require.True(t, hasTip)
+	assert.Equal(t, uint64(2), tipSeq, "replay must not append a second entry")
+
+	// Balances moved exactly once.
+	cBal, ok, err := l.store.Balance(ctx, consumerID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(4000), cBal.Credits, "consumer debited once, not twice")
+
+	sBal, ok, err := l.store.Balance(ctx, seederID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(1000), sBal.Credits, "seeder credited once, not twice")
+}
+
+// TestAppendUsage_StaleTipRetrySameSigs proves the point of the
+// sequencing-independent assertion: when the tip moves, the broker only
+// refreshes (prev_hash, seq) and retries with the SAME participant sigs —
+// no re-collection round-trip. The retry is ONE logical append: the first
+// attempt failed with ErrStaleTip and committed nothing, so the request_id
+// is still unused. Once the retry commits, the request_id is spent — any
+// further same-sig re-append is a replay, rejected with
+// ErrUsageRequestExists, never a double debit.
+func TestAppendUsage_StaleTipRetrySameSigs(t *testing.T) {
+	l := openTempLedger(t)
+	ctx := context.Background()
+	consumerID := bytes.Repeat([]byte{0x11}, 32)
+	seederID := bytes.Repeat([]byte{0x22}, 32)
+	cPub, cPriv := labeledKeypair("consumer")
+	sPub, sPriv := labeledKeypair("seeder")
+
+	_, err := l.IssueStarterGrant(ctx, consumerID, 5000)
+	require.NoError(t, err)
+
+	rec, _ := signedUsageRecord(t, l, consumerID, seederID, cPub, cPriv, sPub, sPriv, 1000)
+
+	// Advance the tip so rec is stale.
+	otherID := bytes.Repeat([]byte{0x33}, 32)
+	_, err = l.IssueStarterGrant(ctx, otherID, 100)
+	require.NoError(t, err)
+
+	_, err = l.AppendUsage(ctx, rec)
+	require.ErrorIs(t, err, ErrStaleTip)
+
+	// Refresh sequencing only; signatures are untouched.
+	rec.PrevHash, rec.Seq = nextTipForTest(t, l)
+	e, err := l.AppendUsage(ctx, rec)
+	require.NoError(t, err)
+	assert.Equal(t, rec.ConsumerSig, e.ConsumerSig)
+	assert.Equal(t, rec.SeederSig, e.SeederSig)
+
+	// The retry committed — the request_id is now spent. Re-appending the
+	// same record against a fresh tip is a replay, not a retry.
+	rec.PrevHash, rec.Seq = nextTipForTest(t, l)
+	_, err = l.AppendUsage(ctx, rec)
+	require.ErrorIs(t, err, ErrUsageRequestExists)
 }
 
 func TestAppendUsage_InsufficientBalance(t *testing.T) {

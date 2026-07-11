@@ -7,8 +7,10 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/shared/signing"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 )
 
 // enrollStarterGrantCredits matches admission spec default. Hardcoded
@@ -27,6 +29,14 @@ type enrollAdmission interface {
 	Admit(ctx context.Context, identity []byte, accountFingerprint []byte) error
 }
 
+// ledgerEventSink optionally receives the starter-grant ledger event so
+// admission can begin tracking a newly-enrolled consumer from its very first
+// credit (rather than only once it settles). *admission.Subsystem implements
+// it; the emission is best-effort and never blocks enrollment.
+type ledgerEventSink interface {
+	OnLedgerEvent(ev admission.LedgerEvent)
+}
+
 // errAdmissionFrozen is the sentinel an admission impl may return to
 // signal a frozen identity. The handler maps it to ErrFrozen.
 var errAdmissionFrozen = errors.New("frozen")
@@ -43,8 +53,10 @@ func (r *Router) installEnroll() handlerFunc {
 		return notImpl("enroll")
 	}
 	var adm enrollAdmission
+	var sink ledgerEventSink
 	if r.deps.Admission != nil {
-		adm, _ = r.deps.Admission.(enrollAdmission) // optional; nil if not satisfied
+		adm, _ = r.deps.Admission.(enrollAdmission)  // optional; nil if not satisfied
+		sink, _ = r.deps.Admission.(ledgerEventSink) // optional; nil if not satisfied
 	}
 
 	return func(ctx context.Context, rc *RequestCtx, payloadBytes []byte) (*tbproto.RpcResponse, error) {
@@ -77,6 +89,19 @@ func (r *Router) installEnroll() handlerFunc {
 		entry, err := led.IssueStarterGrant(ctx, rc.PeerID[:], enrollStarterGrantCredits)
 		if err != nil {
 			return nil, fmt.Errorf("enroll: starter_grant: %w", err)
+		}
+		// Best-effort: tell admission a consumer just received its starter
+		// grant so its per-actor state exists from enrollment onward. Purely
+		// additive to admission's rolling buckets; never gates enrollment.
+		if sink != nil {
+			var cid ids.IdentityID
+			copy(cid[:], rc.PeerID[:])
+			sink.OnLedgerEvent(admission.LedgerEvent{
+				Kind:        admission.LedgerEventStarterGrant,
+				ConsumerID:  cid,
+				CostCredits: enrollStarterGrantCredits,
+				Timestamp:   rc.Now,
+			})
 		}
 		entryBytes, err := signing.DeterministicMarshal(entry)
 		if err != nil {

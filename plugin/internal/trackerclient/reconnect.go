@@ -97,6 +97,23 @@ func (s *supervisor) run() {
 		}, signerAsIdentity{Signer: s.cfg.Identity})
 		dialCancel()
 
+		// The tracker treats the FIRST client-initiated bidi stream as
+		// the heartbeat stream. Open it synchronously here, BEFORE
+		// setStatus(PhaseConnected) unblocks WaitConnected — otherwise
+		// an application RPC can win the race and open stream #0,
+		// getting swallowed by the tracker's heartbeat handler. A
+		// failure to open the heartbeat stream is treated exactly like
+		// a dial failure (backoff + reconnect).
+		var hbStream transport.Stream
+		if err == nil {
+			openCtx, openCancel := context.WithTimeout(s.ctx, s.cfg.DialTimeout)
+			hbStream, err = openHeartbeatStream(openCtx, conn)
+			openCancel()
+			if err != nil {
+				_ = conn.Close()
+			}
+		}
+
 		if err != nil {
 			delay := backoffDelay(attempt, s.cfg.BackoffBase, s.cfg.BackoffMax, s.rng)
 			attemptAt := s.cfg.Clock().Add(delay)
@@ -127,7 +144,7 @@ func (s *supervisor) run() {
 
 		hbErrCh := make(chan error, 1)
 		hbCtx, hbCancel := context.WithCancel(s.ctx)
-		go runHeartbeat(hbCtx, conn, s.cfg.HeartbeatPeriod, s.cfg.HeartbeatMisses, s.cfg.MaxFrameSize, func(err error) {
+		go runHeartbeatLoop(hbCtx, conn, hbStream, s.cfg.HeartbeatPeriod, s.cfg.HeartbeatMisses, s.cfg.MaxFrameSize, func(err error) {
 			select {
 			case hbErrCh <- err:
 			default:

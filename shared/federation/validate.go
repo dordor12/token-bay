@@ -26,7 +26,7 @@ func ValidateEnvelope(e *Envelope) error {
 	if len(e.SenderId) != TrackerIDLen {
 		return fmt.Errorf("federation: sender_id len %d != %d", len(e.SenderId), TrackerIDLen)
 	}
-	if e.Kind <= Kind_KIND_UNSPECIFIED || e.Kind > Kind_KIND_PEER_EXCHANGE {
+	if e.Kind <= Kind_KIND_UNSPECIFIED || e.Kind > Kind_KIND_TRANSFER_REVERSAL {
 		return fmt.Errorf("federation: kind %d out of range", int32(e.Kind))
 	}
 	if len(e.Payload) == 0 {

@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/token-bay/token-bay/shared/ids"
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/tracker/internal/admission"
 	"github.com/token-bay/token-bay/tracker/internal/api"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/ledger"
+	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/storage"
 )
 
@@ -112,6 +115,13 @@ func (a transferFederationAdapter) StartTransfer(ctx context.Context, req *tbpro
 
 	out, err := a.fed.StartTransfer(ctx, in)
 	if err != nil {
+		// A source-side rejection (e.g. insufficient balance) carries a
+		// human-readable reason (validator-capped to 64 bytes). Surface it
+		// as an INVALID RPC error so the consumer sees WHY, instead of the
+		// router redacting a generic error to "internal error".
+		if errors.Is(err, federation.ErrTransferRejected) {
+			return nil, api.ErrInvalid(err.Error())
+		}
 		return nil, err
 	}
 	return &tbproto.TransferProof{
@@ -121,10 +131,131 @@ func (a transferFederationAdapter) StartTransfer(ctx context.Context, req *tbpro
 	}, nil
 }
 
+// staleTipRetries bounds the ledgerHooksAdapter's ErrStaleTip refresh
+// loop. The transfer intent sig is sequencing-independent, so each retry
+// re-reads the tip and reuses the SAME consumer sig; the bound only
+// guards against a pathologically hot chain starving the transfer.
+const staleTipRetries = 8
+
+// ledgerHooksAdapter implements federation.LedgerHooks against the real
+// *ledger.Ledger — the production binding for cross-region transfers.
+// Each Append* reads the current tip, fills (prev_hash, seq), and retries
+// on ErrStaleTip. The transfer_out commits durably BEFORE the federation
+// layer signs and returns the TransferProof (ordering invariant: no proof
+// without an on-chain debit). The ledger's on-chain single-use
+// per-kind transfer ref checks (ledger.ErrTransferRefExists) are the
+// durable backstops — TRANSFER_OUT against double-debit at the source,
+// TRANSFER_IN against double-credit at the destination (dest-restart
+// replay); the adapter propagates the sentinel verbatim so federation's
+// isLedgerTransferRefExists can classify it.
+type ledgerHooksAdapter struct {
+	led *ledger.Ledger
+	// adm optionally receives cross-region transfer events so admission's
+	// per-consumer balance tracking follows federated credit movement.
+	// *admission.Subsystem satisfies it; nil disables the hook.
+	adm ledgerEventSink
+}
+
+// ledgerEventSink is the admission observer the transfer adapter notifies.
+type ledgerEventSink interface {
+	OnLedgerEvent(ev admission.LedgerEvent)
+}
+
+// emitTransfer dispatches a transfer ledger event to admission (best-effort;
+// a nil sink is a no-op). Called only after the on-chain append succeeds.
+func (a ledgerHooksAdapter) emitTransfer(kind admission.LedgerEventKind, id [32]byte, amount, ts uint64) {
+	if a.adm == nil {
+		return
+	}
+	a.adm.OnLedgerEvent(admission.LedgerEvent{
+		Kind:        kind,
+		ConsumerID:  ids.IdentityID(id),
+		CostCredits: amount,
+		Timestamp:   time.Unix(int64(ts), 0), //nolint:gosec // G115: unix seconds, always positive
+	})
+}
+
+func (a ledgerHooksAdapter) nextTip(ctx context.Context) (prev []byte, seq uint64, err error) {
+	tipSeq, tipHash, hasTip, err := a.led.Tip(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !hasTip {
+		return make([]byte, 32), 1, nil
+	}
+	return tipHash, tipSeq + 1, nil
+}
+
+// AppendTransferOut maps the federation hook input onto a
+// ledger.TransferOutRecord. Every field flows through — including
+// SourceTrackerID/DestTrackerID, which the ledger needs to reconstruct
+// the exact canonical transfer-proof-request preimage the consumer
+// signed; the Timestamp doubles as the EntryBody timestamp and the
+// signed request timestamp.
+func (a ledgerHooksAdapter) AppendTransferOut(ctx context.Context, in federation.TransferOutHookIn) (federation.TransferOutHookOut, error) {
+	for i := 0; i < staleTipRetries; i++ {
+		prev, seq, err := a.nextTip(ctx)
+		if err != nil {
+			return federation.TransferOutHookOut{}, err
+		}
+		e, err := a.led.AppendTransferOut(ctx, ledger.TransferOutRecord{
+			PrevHash:        prev,
+			Seq:             seq,
+			ConsumerID:      in.IdentityID[:],
+			Amount:          in.Amount,
+			Timestamp:       in.Timestamp,
+			TransferRef:     in.TransferRef[:],
+			SourceTrackerID: in.SourceTrackerID[:],
+			DestTrackerID:   in.DestTrackerID[:],
+			ConsumerSig:     in.ConsumerSig,
+			ConsumerPub:     in.ConsumerPub,
+		})
+		if errors.Is(err, ledger.ErrStaleTip) {
+			continue
+		}
+		if err != nil {
+			return federation.TransferOutHookOut{}, err
+		}
+		h, err := entry.Hash(e.Body)
+		if err != nil {
+			return federation.TransferOutHookOut{}, err
+		}
+		a.emitTransfer(admission.LedgerEventTransferOut, in.IdentityID, in.Amount, in.Timestamp)
+		return federation.TransferOutHookOut{ChainTipHash: h, Seq: e.Body.Seq}, nil
+	}
+	return federation.TransferOutHookOut{}, ledger.ErrStaleTip
+}
+
+func (a ledgerHooksAdapter) AppendTransferIn(ctx context.Context, in federation.TransferInHookIn) error {
+	for i := 0; i < staleTipRetries; i++ {
+		prev, seq, err := a.nextTip(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = a.led.AppendTransferIn(ctx, ledger.TransferInRecord{
+			PrevHash:    prev,
+			Seq:         seq,
+			IdentityID:  in.IdentityID[:],
+			Amount:      in.Amount,
+			Timestamp:   in.Timestamp,
+			TransferRef: in.TransferRef[:],
+		})
+		if errors.Is(err, ledger.ErrStaleTip) {
+			continue
+		}
+		if err == nil {
+			a.emitTransfer(admission.LedgerEventTransferIn, in.IdentityID, in.Amount, in.Timestamp)
+		}
+		return err
+	}
+	return ledger.ErrStaleTip
+}
+
 // silence unused warnings if any helper goes briefly unused.
 var (
 	_ federation.RootSource      = ledgerRootSourceAdapter{}
 	_ federation.PeerRootArchive = storeAsArchive{}
 	_ api.BootstrapPeersService  = bootstrapPeersAdapter{}
 	_ api.FederationService      = transferFederationAdapter{}
+	_ federation.LedgerHooks     = ledgerHooksAdapter{}
 )

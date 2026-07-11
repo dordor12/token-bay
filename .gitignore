@@ -27,3 +27,9 @@ Thumbs.db
 # Local runtime data
 ~/.token-bay/
 .token-bay-local/
+
+# Generated e2e artifacts (keys, configs, SPKI/fed-id hashes)
+tracker/test/e2e/.gen/
+
+# e2e integration-coverage counter files (make -C tracker test-e2e-cover)
+tracker/test/e2e/.covdata/

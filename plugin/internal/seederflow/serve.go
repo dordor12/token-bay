@@ -3,7 +3,8 @@ package seederflow
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/binary"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/ssetranslate"
 	"github.com/token-bay/token-bay/plugin/internal/trackerclient"
+	"github.com/token-bay/token-bay/shared/signing"
 )
 
 // Serve consumes the reservation registered for envHash, reads the
@@ -71,7 +73,9 @@ func (c *Coordinator) Serve(ctx context.Context, conn TunnelConn, envHash [32]by
 		return fmt.Errorf("seederflow: close sse writer: %w", closeErr)
 	}
 
-	requestID := uuid.New()
+	// The request_id is the tracker's reservation token from the offer —
+	// the tracker binds the usage report to its in-flight request by it.
+	requestID := uuid.UUID(res.requestID)
 	if err := c.reportUsage(ctx, requestID, res, usage); err != nil {
 		return fmt.Errorf("seederflow: report usage: %w", err)
 	}
@@ -103,43 +107,58 @@ func (c *Coordinator) consumeReservation(envHash [32]byte) (*reservation, bool) 
 	return res, true
 }
 
-// reportUsage builds a UsageReport, signs it with the seeder's identity
-// signer, and dispatches it via the trackerclient surface.
+// reportUsage builds a UsageReport whose SeederSig is a shared/signing
+// usage-assertion signature made with the PER-OFFER EPHEMERAL private key
+// — the same keypair whose pubkey was returned in
+// OfferDecision.EphemeralPubkey and that binds the tunnel. The tracker
+// verifies the sig with that ephemeral pubkey (broker settlement §5.2),
+// so signing with the identity key here would get the report rejected.
 func (c *Coordinator) reportUsage(ctx context.Context, reqID uuid.UUID, res *reservation, usage ccbridge.Usage) error {
-	sig, err := c.cfg.Signer.Sign(usageReportPreimage(reqID, res.model, usage))
+	in := uint32(usage.InputTokens)   //nolint:gosec // bounded; bridge usage is a small uint64
+	out := uint32(usage.OutputTokens) //nolint:gosec // bounded; bridge usage is a small uint64
+
+	cost, err := actualCostCredits(res.model, in, out)
+	if err != nil {
+		return fmt.Errorf("price usage report: %w", err)
+	}
+	seederID, err := seederIdentityID(c.cfg.Signer.PublicKey())
+	if err != nil {
+		return fmt.Errorf("derive seeder identity id: %w", err)
+	}
+	sig, err := signing.SignUsageAssertion(res.ephemeralPriv, signing.UsageAssertion{
+		RequestID:    reqID[:],
+		ConsumerID:   res.consumerID[:],
+		SeederID:     seederID[:],
+		Model:        res.model,
+		InputTokens:  in,
+		OutputTokens: out,
+		CostCredits:  cost,
+	})
 	if err != nil {
 		return fmt.Errorf("sign usage report: %w", err)
 	}
 	return c.usageReporter().UsageReport(ctx, &trackerclient.UsageReport{
 		RequestID:    reqID,
-		InputTokens:  uint32(usage.InputTokens),  //nolint:gosec // bounded; bridge usage is a small uint64
-		OutputTokens: uint32(usage.OutputTokens), //nolint:gosec // bounded; bridge usage is a small uint64
+		InputTokens:  in,
+		OutputTokens: out,
 		Model:        res.model,
 		SeederSig:    sig,
 	})
 }
 
-// usageReportPreimage assembles the bytes the seeder signs over to
-// vouch for a usage report. The preimage shape is intentionally simple
-// and deterministic: a domain tag plus the request_id, model, and
-// token counts. The tracker recomputes the same bytes on its side to
-// verify the signature.
-func usageReportPreimage(reqID uuid.UUID, model string, usage ccbridge.Usage) []byte {
-	const tag = "token-bay/seeder-usage:v1"
-	idBytes, _ := reqID.MarshalBinary()
-	out := make([]byte, 0, len(tag)+1+len(idBytes)+1+len(model)+16)
-	out = append(out, tag...)
-	out = append(out, 0x00)
-	out = append(out, idBytes...)
-	out = append(out, 0x00)
-	out = append(out, model...)
-	out = append(out, 0x00)
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], usage.InputTokens)
-	out = append(out, buf[:]...)
-	binary.BigEndian.PutUint64(buf[:], usage.OutputTokens)
-	out = append(out, buf[:]...)
-	return out
+// seederIdentityID derives the tracker-visible identity of this seeder:
+// SHA-256 of the identity pubkey's PKIX SubjectPublicKeyInfo encoding.
+// The tracker registers peers under sha256(mTLS cert SPKI) and builds the
+// usage-assertion with that ID; the plugin's mTLS client cert wraps the
+// identity key, and for Ed25519 the cert's SPKI bytes are exactly
+// x509.MarshalPKIXPublicKey(pub), so hashing the marshaled pubkey yields
+// the same 32 bytes without reaching into the TLS layer.
+func seederIdentityID(pub ed25519.PublicKey) ([32]byte, error) {
+	spki, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("marshal identity pubkey: %w", err)
+	}
+	return sha256.Sum256(spki), nil
 }
 
 // anthropicMessage is the on-wire shape of one entry in the consumer's

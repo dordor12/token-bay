@@ -201,3 +201,125 @@ func TestServer_PeerPubkey(t *testing.T) {
 
 	runCancel()
 }
+
+// newTestServerWithRegistry builds a server wired to reg, using the shared
+// testdata server key, and returns the server plus a freshly generated
+// client identity keypair (private key) for the caller to dial with.
+func newTestServerWithRegistry(t *testing.T, reg *registry.Registry) (*server.Server, ed25519.PrivateKey) {
+	t.Helper()
+	srvPriv := loadKey(t, "server")
+	keyPath := writeKey(t, srvPriv)
+
+	_, cliPriv, err := ed25519.GenerateKey(crand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := server.New(server.Deps{
+		Config: &config.Config{
+			Server: config.ServerConfig{
+				ListenAddr:         "127.0.0.1:0",
+				IdentityKeyPath:    keyPath,
+				MaxFrameSize:       1 << 20,
+				IdleTimeoutS:       60,
+				MaxIncomingStreams: 1024,
+				ShutdownGraceS:     5,
+			},
+		},
+		Logger:   zerolog.Nop(),
+		Now:      time.Now,
+		Registry: reg,
+		API:      &stubDispatcher{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, cliPriv
+}
+
+// identityIDFromKey derives the IdentityID the server computes for a client
+// identified by priv: sha256 of the parsed cert's RawSubjectPublicKeyInfo.
+func identityIDFromKey(t *testing.T, priv ed25519.PrivateKey) ids.IdentityID {
+	t.Helper()
+	cert, err := server.CertFromIdentity(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	spki := sha256.Sum256(parsed.RawSubjectPublicKeyInfo)
+	var id ids.IdentityID
+	copy(id[:], spki[:])
+	return id
+}
+
+// serverPin returns the sha256 SPKI pin the client TLS config uses to verify
+// the server's certificate, derived from the same "server" testdata key
+// newTestServerWithRegistry uses.
+func serverPin(t *testing.T) [32]byte {
+	t.Helper()
+	srvPriv := loadKey(t, "server")
+	srvCert, err := server.CertFromIdentity(srvPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvParsed, err := x509.ParseCertificate(srvCert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(srvParsed.RawSubjectPublicKeyInfo)
+}
+
+// TestServer_RegistersPeerOnConnect verifies that every mTLS-connecting peer
+// is upserted into the registry as an unavailable SeederRecord (identity +
+// observed reflexive addr), and removed again on disconnect. This is the
+// register-on-connect behavior from spec §3 P2: Register makes a peer
+// addressable; ADVERTISE (not exercised here) makes it selectable.
+func TestServer_RegistersPeerOnConnect(t *testing.T) {
+	reg, err := registry.New(8)
+	if err != nil {
+		t.Fatalf("registry.New: %v", err)
+	}
+	srv, clientKey := newTestServerWithRegistry(t, reg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = srv.Run(ctx) }()
+	addr := waitForListen(srv, 2*time.Second)
+	if addr == "" {
+		t.Fatal("listener never bound")
+	}
+
+	cliCert, err := server.CertFromIdentity(clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialClientWithCert(t, addr, serverPin(t), cliCert)
+	defer func() { _ = conn.CloseWithError(0, "done") }()
+	if !waitForPeers(srv, 1, 2*time.Second) {
+		t.Fatalf("PeerCount = %d, want 1", srv.PeerCount())
+	}
+
+	peerID := identityIDFromKey(t, clientKey)
+	rec, ok := reg.Get(peerID)
+	if !ok {
+		t.Fatal("expected seeder record after connect")
+	}
+	if rec.Available {
+		t.Error("record must be Available=false until ADVERTISE")
+	}
+	if !rec.NetCoords.ExternalAddr.IsValid() {
+		t.Error("record must carry the observed reflexive addr")
+	}
+
+	// Disconnect → deregister.
+	_ = conn.CloseWithError(0, "bye")
+	if !waitForPeers(srv, 0, 2*time.Second) {
+		t.Fatalf("PeerCount = %d, want 0 after disconnect", srv.PeerCount())
+	}
+	if _, ok := reg.Get(peerID); ok {
+		t.Error("expected deregister on disconnect")
+	}
+}

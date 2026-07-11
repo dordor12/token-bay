@@ -68,10 +68,12 @@ func TestIntegration_MixedAppendsPassAudit(t *testing.T) {
 	l := openTempLedger(t)
 	ctx := context.Background()
 
-	consumerID := bytes.Repeat([]byte{0x11}, 32)
-	seederID := bytes.Repeat([]byte{0x22}, 32)
 	cPub, cPriv := labeledKeypair("consumer")
 	sPub, sPriv := labeledKeypair("seeder")
+	// Transfer-out binds the debited identity to sha256(SPKI(ConsumerPub)),
+	// so the consumer identity must be SPKI-derived here.
+	consumerID := spkiIdentityID(t, cPub)
+	seederID := bytes.Repeat([]byte{0x22}, 32)
 
 	// 5 starter grants pre-fund consumer + seeder.
 	for range 5 {
@@ -88,7 +90,7 @@ func TestIntegration_MixedAppendsPassAudit(t *testing.T) {
 
 	// 3 transfer-outs from consumer.
 	for range 3 {
-		rec, _ := signedTransferOutRecord(t, l, consumerID, 100)
+		rec := signedTransferOutRecord(t, l, 100)
 		_, err := l.AppendTransferOut(ctx, rec)
 		require.NoError(t, err)
 	}
@@ -197,6 +199,102 @@ func TestAssertChainIntegrity_DetectsTamperedPrevHash(t *testing.T) {
 	err = l2.AssertChainIntegrity(ctx, 0, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chain break at seq=2")
+}
+
+// corruptEntryBody rewrites the canonical blob of the entry at seq via a
+// raw SQL connection, bumping CostCredits so the body content (and thus
+// its hash) changes while remaining a valid, parseable proto encoding.
+// The row's stored hash and prev_hash columns are left untouched —
+// simulating post-append content corruption of the blob itself.
+func corruptEntryBody(t *testing.T, ctx context.Context, dbPath string, seq uint64) {
+	t.Helper()
+
+	rawDB, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=journal_mode(WAL)")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rawDB.Close()) }()
+
+	var origCanonical []byte
+	require.NoError(t, rawDB.QueryRowContext(ctx,
+		"SELECT canonical FROM entries WHERE seq = ?", seq).Scan(&origCanonical))
+
+	body := &tbproto.EntryBody{}
+	require.NoError(t, proto.Unmarshal(origCanonical, body))
+	body.CostCredits += 9000
+	tamperedCanonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(body)
+	require.NoError(t, err)
+
+	_, err = rawDB.ExecContext(ctx,
+		"UPDATE entries SET canonical = ? WHERE seq = ?", tamperedCanonical, seq)
+	require.NoError(t, err)
+}
+
+// TestAssertChainIntegrity_DetectsCorruptedTip is the tip blind-spot
+// regression: the tip has no successor, so linkage checking alone can
+// never see its corruption. The audit must compare every entry's
+// recomputed body hash against the hash committed at append time.
+func TestAssertChainIntegrity_DetectsCorruptedTip(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ledger.db")
+	ctx := context.Background()
+	_, priv := trackerKeypair()
+	identity := bytes.Repeat([]byte{0x11}, 32)
+
+	store1, err := storage.Open(ctx, dbPath)
+	require.NoError(t, err)
+	l1, err := Open(store1, priv)
+	require.NoError(t, err)
+	for range 3 {
+		_, err := l1.IssueStarterGrant(ctx, identity, 100)
+		require.NoError(t, err)
+	}
+	// Clean chain passes before corruption.
+	require.NoError(t, l1.AssertChainIntegrity(ctx, 0, 0))
+	require.NoError(t, l1.Close())
+	require.NoError(t, store1.Close())
+
+	corruptEntryBody(t, ctx, dbPath, 3) // seq=3 is the tip
+
+	store2, err := storage.Open(ctx, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store2.Close() })
+	l2, err := Open(store2, priv)
+	require.NoError(t, err)
+
+	err = l2.AssertChainIntegrity(ctx, 0, 0)
+	require.Error(t, err, "tip content corruption must fail the integrity gate")
+	assert.Contains(t, err.Error(), "content corruption at seq=3")
+}
+
+// TestAssertChainIntegrity_DetectsCorruptedMidChainBody confirms non-tip
+// content corruption is still caught — and now directly at the corrupted
+// entry, not one entry late via the successor's prev_hash.
+func TestAssertChainIntegrity_DetectsCorruptedMidChainBody(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ledger.db")
+	ctx := context.Background()
+	_, priv := trackerKeypair()
+	identity := bytes.Repeat([]byte{0x11}, 32)
+
+	store1, err := storage.Open(ctx, dbPath)
+	require.NoError(t, err)
+	l1, err := Open(store1, priv)
+	require.NoError(t, err)
+	for range 3 {
+		_, err := l1.IssueStarterGrant(ctx, identity, 100)
+		require.NoError(t, err)
+	}
+	require.NoError(t, l1.Close())
+	require.NoError(t, store1.Close())
+
+	corruptEntryBody(t, ctx, dbPath, 2)
+
+	store2, err := storage.Open(ctx, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store2.Close() })
+	l2, err := Open(store2, priv)
+	require.NoError(t, err)
+
+	err = l2.AssertChainIntegrity(ctx, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "content corruption at seq=2")
 }
 
 func TestAssertChainIntegrity_EmptyChain(t *testing.T) {

@@ -28,6 +28,28 @@ func TestValidateEnvelope_Valid(t *testing.T) {
 	}
 }
 
+// TestValidateEnvelope_AllDeclaredKinds guards against the validator's
+// kind upper bound drifting behind newly declared Kind enum values: every
+// declared Kind (except UNSPECIFIED) must pass ValidateEnvelope. This
+// caught KIND_TRANSFER_REJECT (14) and KIND_TRANSFER_REVERSAL (15) being
+// rejected on the wire while the bound was stuck at KIND_PEER_EXCHANGE (13).
+func TestValidateEnvelope_AllDeclaredKinds(t *testing.T) {
+	t.Parallel()
+	for k, name := range fed.Kind_name {
+		if fed.Kind(k) == fed.Kind_KIND_UNSPECIFIED {
+			continue
+		}
+		if err := fed.ValidateEnvelope(&fed.Envelope{
+			SenderId:  b(32, 1),
+			Kind:      fed.Kind(k),
+			Payload:   []byte{0x01},
+			SenderSig: b(64, 2),
+		}); err != nil {
+			t.Fatalf("declared kind %s (%d) must validate, got %v", name, k, err)
+		}
+	}
+}
+
 func TestValidateEnvelope_Errors(t *testing.T) {
 	t.Parallel()
 	cases := map[string]*fed.Envelope{

@@ -7,15 +7,32 @@ import (
 	"fmt"
 
 	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/shared/signing"
 	"github.com/token-bay/token-bay/tracker/internal/ledger/entry"
 )
 
+// ErrUsageRequestExists means a USAGE entry with this request_id is already
+// on-chain. USAGE request_ids are single-use: participant sigs cover the
+// sequencing-independent usage-assertion (not prev_hash/seq), so without
+// this invariant a replayed usage_report could re-append the same
+// settlement with the same sigs and double-debit the consumer. The check is
+// scoped to kind=USAGE — transfer and starter-grant entries carry all-zero
+// request_ids by design and never collide.
+//
+// A genuine stale-tip retry is unaffected: it re-appends an entry whose
+// first attempt failed with ErrStaleTip and committed nothing, so the
+// request_id is still unused when the retry lands.
+var ErrUsageRequestExists = errors.New("ledger: usage entry with this request_id already exists")
+
 // UsageRecord is the typed input to AppendUsage. The caller (broker) has
-// already collected ConsumerSig + SeederSig over the EntryBody bytes
-// derived from these fields plus PrevHash + Seq.
+// already collected ConsumerSig + SeederSig over the sequencing-independent
+// usage-assertion (signing.UsageAssertion) derived from these fields —
+// NOT over the EntryBody. AppendUsage re-verifies both against the
+// assertion before appending.
 //
 // PrevHash + Seq must match the current chain tip; mismatch returns
-// ErrStaleTip so the broker re-collects sigs against the fresh tip.
+// ErrStaleTip. Because the participant sigs omit sequencing, the broker
+// retries with the same sigs after refreshing (prev_hash, seq).
 type UsageRecord struct {
 	PrevHash     []byte // 32 bytes
 	Seq          uint64
@@ -39,11 +56,15 @@ type UsageRecord struct {
 	SeederPub ed25519.PublicKey
 }
 
-// AppendUsage records a settled USAGE entry. The body the caller
-// constructed must match the current tip exactly — orchestrator returns
-// ErrStaleTip on mismatch and the caller (broker) re-collects sigs.
+// AppendUsage records a settled USAGE entry. The record's (PrevHash, Seq)
+// must match the current tip exactly — orchestrator returns ErrStaleTip on
+// mismatch and the caller (broker) refreshes sequencing and retries with
+// the same participant sigs.
 //
-// Sig verification, balance arithmetic, and tracker signing happen here
+// Participant sigs are verified over the usage-assertion here (they
+// authorize the settlement economics, not the chain position); the ledger
+// then owns the EntryBody — flags bit0 = ConsumerSigMissing — and only the
+// tracker sig covers it. Balance arithmetic and tracker signing happen
 // under Ledger.mu. The caller's CostCredits is debited from the consumer
 // and credited to the seeder atomically with the entry write.
 func (l *Ledger) AppendUsage(ctx context.Context, r UsageRecord) (*tbproto.Entry, error) {
@@ -53,6 +74,24 @@ func (l *Ledger) AppendUsage(ctx context.Context, r UsageRecord) (*tbproto.Entry
 	if !r.ConsumerSigMissing {
 		if len(r.ConsumerSig) == 0 || len(r.ConsumerPub) != ed25519.PublicKeySize {
 			return nil, errors.New("ledger: AppendUsage requires consumer sig + pubkey (or set ConsumerSigMissing)")
+		}
+	}
+
+	assertion := signing.UsageAssertion{
+		RequestID:    r.RequestID,
+		ConsumerID:   r.ConsumerID,
+		SeederID:     r.SeederID,
+		Model:        r.Model,
+		InputTokens:  r.InputTokens,
+		OutputTokens: r.OutputTokens,
+		CostCredits:  r.CostCredits,
+	}
+	if !signing.VerifyUsageAssertion(r.SeederPub, assertion, r.SeederSig) {
+		return nil, errors.New("ledger: seeder_sig invalid over usage-assertion")
+	}
+	if !r.ConsumerSigMissing {
+		if !signing.VerifyUsageAssertion(r.ConsumerPub, assertion, r.ConsumerSig) {
+			return nil, errors.New("ledger: consumer_sig invalid over usage-assertion")
 		}
 	}
 
@@ -86,6 +125,9 @@ func (l *Ledger) AppendUsage(ctx context.Context, r UsageRecord) (*tbproto.Entry
 			{identityID: r.ConsumerID, delta: -cost},
 			{identityID: r.SeederID, delta: cost},
 		},
+		// Verified above over the usage-assertion; appendLocked must store
+		// them verbatim without re-verifying against the EntryBody.
+		participantSigsPreVerified: true,
 	}
 	if !r.ConsumerSigMissing {
 		in.consumerSig = r.ConsumerSig

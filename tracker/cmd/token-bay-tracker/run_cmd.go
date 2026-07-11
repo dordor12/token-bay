@@ -6,6 +6,7 @@ import (
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
@@ -204,6 +206,7 @@ func newRunCmd() *cobra.Command {
 				Transport:         fedTransport,
 				RootSrc:           ledgerRootSourceAdapter{led: led},
 				Archive:           storeAsArchive{store: store},
+				Ledger:            ledgerHooksAdapter{led: led, adm: adm},
 				RevocationArchive: store, // *storage.Store satisfies PeerRevocationArchive
 				KnownPeers:        store, // *storage.Store satisfies KnownPeersArchive
 				Metrics:           federation.NewMetrics(prometheus.DefaultRegisterer),
@@ -339,10 +342,15 @@ func newRunCmd() *cobra.Command {
 			// stop() cancels ctx, which drains both the QUIC server and
 			// the admin server. /maintenance reuses the same path so an
 			// HTTP shutdown trigger is identical to SIGTERM.
-			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, fed, stop)
+			adminSrv, err := buildAdminServer(cfg, logger, srv, reg, led, brokerSubs, adm, fed, rep, stop)
 			if err != nil {
 				return fmt.Errorf("admin: %w", err)
 			}
+
+			// metricsSrv exposes /metrics, deliberately outside the admin
+			// bearer guard — Prometheus scrapers (and the e2e assertion
+			// surface) don't send the admin token.
+			metricsSrv := buildMetricsServer(cfg)
 
 			startMaintenanceLoops(ctx, logger, fed, reg, alloc, cfg)
 
@@ -352,18 +360,36 @@ func newRunCmd() *cobra.Command {
 			adminErrCh := make(chan error, 1)
 			go func() { adminErrCh <- adminSrv.Run(ctx) }()
 
+			metricsErrCh := make(chan error, 1)
+			go func() {
+				err := metricsSrv.ListenAndServe()
+				if errors.Is(err, http.ErrServerClosed) {
+					err = nil
+				}
+				metricsErrCh <- err
+			}()
+
 			select {
 			case err := <-errCh:
 				graceCtx, cancel := context.WithTimeout(context.Background(),
 					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
 				defer cancel()
 				_ = adminSrv.Shutdown(graceCtx)
+				_ = metricsSrv.Shutdown(graceCtx)
 				return err
 			case err := <-adminErrCh:
 				graceCtx, cancel := context.WithTimeout(context.Background(),
 					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
 				defer cancel()
 				_ = srv.Shutdown(graceCtx)
+				_ = metricsSrv.Shutdown(graceCtx)
+				return err
+			case err := <-metricsErrCh:
+				graceCtx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
+				defer cancel()
+				_ = srv.Shutdown(graceCtx)
+				_ = adminSrv.Shutdown(graceCtx)
 				return err
 			case <-ctx.Done():
 				graceCtx, cancel := context.WithTimeout(context.Background(),
@@ -371,6 +397,7 @@ func newRunCmd() *cobra.Command {
 				defer cancel()
 				shutdownErr := srv.Shutdown(graceCtx)
 				_ = adminSrv.Shutdown(graceCtx)
+				_ = metricsSrv.Shutdown(graceCtx)
 				return shutdownErr
 			}
 		},
@@ -470,6 +497,24 @@ func (p *pushProxy) PushSettlementTo(id ids.IdentityID, push *tbproto.Settlement
 	return s.PushSettlementTo(id, push)
 }
 
+// buildMetricsServer assembles the unauthenticated Prometheus /metrics
+// HTTP server. It exposes every collector registered on
+// prometheus.DefaultRegisterer (broker, federation, reputation,
+// admission, ledger-integrity, bootstrap — see the Register calls
+// earlier in this function) via promhttp against the paired
+// DefaultGatherer. Unlike buildAdminServer, this listener carries no
+// bearer-token guard: metrics scrapers don't send the admin token, and
+// nothing served here is sensitive (counts and gauges, not secrets).
+func buildMetricsServer(cfg *config.Config) *http.Server {
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}))
+	return &http.Server{
+		Addr:              cfg.Metrics.ListenAddr,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
 // buildAdminServer assembles the admin HTTP server from the live
 // subsystems. The bearer token comes from TOKEN_BAY_ADMIN_TOKEN; an unset
 // or empty value rejects every admin request, which is intentional —
@@ -512,6 +557,7 @@ func buildAdminServer(
 	brokerSubs *broker.Subsystems,
 	adm *admission.Subsystem,
 	fed *federation.Federation,
+	rep *reputation.Subsystem,
 	stop func(),
 ) (*admin.Server, error) {
 	token := os.Getenv(adminTokenEnvVar)
@@ -544,5 +590,6 @@ func buildAdminServer(
 		AdmissionMount:     admissionMount,
 		TriggerMaintenance: stop,
 		FederationActions:  federationAdminActions{fed: fed},
+		Reputation:         reputationAdminActions{rep: rep},
 	})
 }

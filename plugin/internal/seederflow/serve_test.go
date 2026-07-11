@@ -3,6 +3,9 @@ package seederflow_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"sync"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/token-bay/token-bay/plugin/internal/ccbridge"
 	"github.com/token-bay/token-bay/plugin/internal/seederflow"
+	"github.com/token-bay/token-bay/shared/signing"
 )
 
 // stubTunnel implements seederflow.TunnelConn for tests.
@@ -137,6 +141,60 @@ func TestServe_SendsUsageReport(t *testing.T) {
 	require.EqualValues(t, 10, ur.InputTokens)
 	require.EqualValues(t, 20, ur.OutputTokens)
 	require.NotEmpty(t, ur.SeederSig)
+}
+
+// TestServe_SignsUsageAssertionWithEphemeralKey pins the P4 settlement
+// contract: the seeder's UsageReport.SeederSig must be a valid
+// shared/signing usage-assertion signature, made with the PER-OFFER
+// EPHEMERAL key (the same keypair whose pubkey was returned in
+// OfferDecision.EphemeralPubkey), over the assertion the tracker
+// reconstructs in HandleUsageReport.
+func TestServe_SignsUsageAssertionWithEphemeralKey(t *testing.T) {
+	cfg := validConfig(t)
+	tracker := &stubTracker{}
+	cfg.Tracker = tracker
+	c, err := seederflow.New(cfg)
+	require.NoError(t, err)
+
+	o := makeOffer("claude-sonnet-4-6")
+	dec, err := c.HandleOffer(context.Background(), o)
+	require.NoError(t, err)
+	require.True(t, dec.Accept)
+
+	tn := &stubTunnel{body: makeAnthropicBody(t, "claude-sonnet-4-6", "hi")}
+	require.NoError(t, c.Serve(context.Background(), tn, o.EnvelopeHash))
+
+	require.Len(t, tracker.UsageReports(), 1)
+	ur := tracker.UsageReports()[0]
+
+	// The report must echo the tracker's reservation token from the offer —
+	// not a locally invented request_id.
+	require.Equal(t, o.RequestID[:], ur.RequestID[:],
+		"UsageReport.request_id must be the offer's request_id (tracker reservation token)")
+
+	// SeederID as the tracker sees it: sha256 of the identity pubkey's PKIX
+	// SubjectPublicKeyInfo (the mTLS cert SPKI hash the tracker registers
+	// the seeder under).
+	spki, err := x509.MarshalPKIXPublicKey(cfg.Signer.PublicKey())
+	require.NoError(t, err)
+	seederID := sha256.Sum256(spki)
+	consumerID := o.ConsumerID.Bytes()
+
+	assertion := signing.UsageAssertion{
+		RequestID:    o.RequestID[:],
+		ConsumerID:   consumerID[:],
+		SeederID:     seederID[:],
+		Model:        "claude-sonnet-4-6",
+		InputTokens:  10,
+		OutputTokens: 20,
+		// Mirrored tracker pricing for claude-sonnet-4-6 (in=3, out=15
+		// credits/token): 3*10 + 15*20 = 330. Computed inline so this test
+		// is independent of the plugin's price-table helper.
+		CostCredits: 330,
+	}
+	require.True(t,
+		signing.VerifyUsageAssertion(ed25519.PublicKey(dec.EphemeralPubkey), assertion, ur.SeederSig),
+		"SeederSig must verify as a usage-assertion under the per-offer EPHEMERAL pubkey")
 }
 
 func TestServe_AuditEntryWritten(t *testing.T) {

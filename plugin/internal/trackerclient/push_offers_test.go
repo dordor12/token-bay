@@ -144,11 +144,16 @@ func TestOfferHandler_PlumbsConsumerEphemeralPub(t *testing.T) {
 	for i := range consumerPub {
 		consumerPub[i] = byte(0xa0 + i)
 	}
+	reqID := make([]byte, 16)
+	for i := range reqID {
+		reqID[i] = byte(0x10 + i)
+	}
 	push := &tbproto.OfferPush{
 		ConsumerId:           make([]byte, 32),
 		EnvelopeHash:         make([]byte, 32),
 		Model:                "claude-sonnet-4-6",
 		ConsumerEphemeralPub: consumerPub,
+		RequestId:            reqID,
 	}
 	dec, err := fake.PushOffer(context.Background(), push)
 	require.NoError(t, err)
@@ -156,6 +161,7 @@ func TestOfferHandler_PlumbsConsumerEphemeralPub(t *testing.T) {
 	got := rec.Last()
 	require.NotNil(t, got)
 	assert.Equal(t, consumerPub, got.ConsumerEphemeralPub, "trackerclient must plumb ConsumerEphemeralPub from the push into Offer")
+	assert.Equal(t, reqID, got.RequestID[:], "trackerclient must plumb the tracker's request_id (reservation token) from the push into Offer")
 }
 
 func TestOfferHandlerInvalidPushRejects(t *testing.T) {

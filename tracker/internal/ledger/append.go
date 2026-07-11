@@ -32,6 +32,15 @@ type appendInput struct {
 	seederSig   []byte // empty if no seeder signs this kind
 	seederPub   ed25519.PublicKey
 	deltas      []balanceDelta // 0..2 — applied to current balances to compute new credits
+
+	// participantSigsPreVerified marks consumerSig/seederSig as already
+	// verified by the caller over a signing domain OTHER than the EntryBody
+	// (USAGE: the sequencing-independent usage-assertion, verified by
+	// AppendUsage; TRANSFER_OUT: the transfer-proof-request intent,
+	// verified by AppendTransferOut). When true, appendLocked stores the
+	// sigs verbatim and skips its EntryBody-domain signing.VerifyEntry
+	// checks; the tracker sig over the EntryBody is unaffected.
+	participantSigsPreVerified bool
 }
 
 // balanceDelta is a signed change to one identity's credits.
@@ -47,9 +56,9 @@ type balanceDelta struct {
 //
 // The caller fills body.PrevHash + body.Seq before calling — this method
 // verifies they match the current tip and returns ErrStaleTip if not.
-// Returning the lock and asking the caller to retry is correct because
-// counterparty sigs (consumer/seeder) are over the body bytes which include
-// PrevHash + Seq; a fresh tip means fresh sigs are required.
+// USAGE and TRANSFER_OUT participant sigs are over sequencing-independent
+// canonical intents (usage-assertion / transfer-proof-request), so the
+// caller retries with the same sigs after refreshing (prev_hash, seq).
 //
 // For tracker-only-signed kinds (STARTER_GRANT) where rebuilding is cheap
 // and there are no counterparty sigs to invalidate, callers should use
@@ -120,14 +129,61 @@ func (l *Ledger) appendLocked(ctx context.Context, in appendInput, verifyPreFill
 		return nil, fmt.Errorf("ledger: validate body: %w", err)
 	}
 
-	if len(in.consumerSig) != 0 {
-		if !signing.VerifyEntry(in.consumerPub, in.body, in.consumerSig) {
-			return nil, errors.New("ledger: consumer_sig invalid")
+	// USAGE request_ids are single-use (settlement replay defense). The
+	// check runs under Ledger.mu — atomically with the tip check and the
+	// storage commit — so two racing appends for the same request_id
+	// serialize and exactly one wins. Scoped to kind=USAGE: other kinds
+	// carry all-zero request_ids by design. See ErrUsageRequestExists.
+	if in.body.Kind == tbproto.EntryKind_ENTRY_KIND_USAGE {
+		exists, err := l.store.HasUsageRequestID(ctx, in.body.RequestId)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: usage request_id lookup: %w", err)
+		}
+		if exists {
+			return nil, ErrUsageRequestExists
 		}
 	}
-	if len(in.seederSig) != 0 {
-		if !signing.VerifyEntry(in.seederPub, in.body, in.seederSig) {
-			return nil, errors.New("ledger: seeder_sig invalid")
+
+	// Transfer refs are single-use PER KIND (cross-region conservation
+	// defense — one source debit implies at most one dest credit):
+	//
+	//   - TRANSFER_OUT (source side): the transfer intent sig is
+	//     sequencing-independent, so a replayed intent with a refreshed
+	//     (prev, seq) would otherwise land a second debit.
+	//   - TRANSFER_IN (dest side): the source replays its cached proof on
+	//     the warm path WITHOUT re-entering AppendTransferOut, so the
+	//     source-side check does not bound dest replays; after a dest
+	//     restart wipes the federation completed cache, this on-chain
+	//     check is the only thing standing between a re-driven transfer
+	//     and a second credit.
+	//
+	// The federation in-memory caches are NOT a defense (lost on restart,
+	// check-then-act race). Mirrors the USAGE request_id pattern: runs
+	// under Ledger.mu, atomic with the tip check and the storage commit.
+	// Scoped to the entry's own kind only — TRANSFER_OUT and TRANSFER_IN
+	// share the same ref by design (the destination reuses the source's
+	// nonce) and must not collide with each other.
+	if in.body.Kind == tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT ||
+		in.body.Kind == tbproto.EntryKind_ENTRY_KIND_TRANSFER_IN {
+		exists, err := l.store.HasTransferRef(ctx, in.body.Kind, in.body.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: transfer ref lookup: %w", err)
+		}
+		if exists {
+			return nil, ErrTransferRefExists
+		}
+	}
+
+	if !in.participantSigsPreVerified {
+		if len(in.consumerSig) != 0 {
+			if !signing.VerifyEntry(in.consumerPub, in.body, in.consumerSig) {
+				return nil, errors.New("ledger: consumer_sig invalid")
+			}
+		}
+		if len(in.seederSig) != 0 {
+			if !signing.VerifyEntry(in.seederPub, in.body, in.seederSig) {
+				return nil, errors.New("ledger: seeder_sig invalid")
+			}
 		}
 	}
 

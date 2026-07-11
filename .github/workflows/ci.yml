@@ -64,3 +64,23 @@ jobs:
         run: go work sync
       - name: Plugin integration tests (real QUIC)
         run: make -C plugin test-integration
+
+  # Docker-based end-to-end suite: builds the tracker + actor images, brings up
+  # the full compose topology (2 trackers + consumer + seeder + fedactor), and
+  # runs all 20 scenarios against the live stack. ubuntu-latest only — macOS
+  # runners have no Docker engine and Windows runners only run Windows
+  # containers, so this must NOT join the 3-OS test matrix. The `e2e` build tag
+  # keeps these tests out of `go test ./...`.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Raise UDP buffers for quic-go
+        run: sudo sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000
+      - name: Sync workspace
+        run: go work sync
+      - name: Tracker Docker e2e suite (20 scenarios)
+        run: make -C tracker test-e2e

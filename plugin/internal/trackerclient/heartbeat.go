@@ -13,23 +13,34 @@ import (
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
 
-// runHeartbeat opens the dedicated heartbeat stream as the first
-// client-initiated bidi stream after handshake. Sends a ping every
-// period, expects a pong within the same period; tearDown is invoked
-// (concurrency-safe) after misses consecutive missing pongs.
-func runHeartbeat(
+// openHeartbeatStream opens the dedicated heartbeat stream. The tracker
+// treats the FIRST client-initiated bidi stream it accepts as the
+// heartbeat stream, so the supervisor MUST call this synchronously
+// before signaling PhaseConnected — otherwise an application RPC
+// unblocked by WaitConnected can open its stream first and be consumed
+// by the tracker's heartbeat handler (and the real heartbeat stream be
+// dispatched as an RPC).
+func openHeartbeatStream(ctx context.Context, conn transport.Conn) (transport.Stream, error) {
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("trackerclient: open heartbeat stream: %w", err)
+	}
+	return stream, nil
+}
+
+// runHeartbeatLoop drives ping/pong on an already-open heartbeat
+// stream. Sends a ping every period, expects a pong within the same
+// period; tearDown is invoked (concurrency-safe) after misses
+// consecutive missing pongs. Closes the stream on return.
+func runHeartbeatLoop(
 	ctx context.Context,
 	conn transport.Conn,
+	stream transport.Stream,
 	period time.Duration,
 	misses int,
 	maxFrameSize int,
 	tearDown func(error),
 ) {
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		tearDown(fmt.Errorf("trackerclient: open heartbeat stream: %w", err))
-		return
-	}
 	defer stream.Close()
 
 	var lastPong int64 // atomic; unix-nano of last pong received

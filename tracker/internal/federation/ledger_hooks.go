@@ -30,13 +30,22 @@ type LedgerHooks interface {
 }
 
 // TransferOutHookIn is what the federation layer hands to AppendTransferOut.
+//
+// SourceTrackerID / DestTrackerID are copied verbatim from the received
+// TransferProofRequest. The ledger needs them to reconstruct the exact
+// canonical intent the consumer signed (the preimage covers every request
+// field except consumer_sig) — omit them and the reconstructed preimage
+// cannot byte-match, so every transfer fails "consumer_sig invalid"
+// (fail-closed).
 type TransferOutHookIn struct {
-	IdentityID  [32]byte
-	Amount      uint64
-	Timestamp   uint64
-	TransferRef [32]byte
-	ConsumerSig []byte
-	ConsumerPub ed25519.PublicKey
+	IdentityID      [32]byte
+	Amount          uint64
+	Timestamp       uint64
+	TransferRef     [32]byte
+	SourceTrackerID [32]byte
+	DestTrackerID   [32]byte
+	ConsumerSig     []byte
+	ConsumerPub     ed25519.PublicKey
 }
 
 // TransferOutHookOut is what AppendTransferOut returns to the federation

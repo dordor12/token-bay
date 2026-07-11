@@ -243,7 +243,8 @@ type stubAdmission struct{}
 func (stubAdmission) PopReadyForBroker(_ time.Time, _ float64) (admission.QueueEntry, bool) {
 	return admission.QueueEntry{}, false
 }
-func (stubAdmission) PressureGauge() float64 { return 0 }
+func (stubAdmission) PressureGauge() float64                { return 0 }
+func (stubAdmission) OnLedgerEvent(_ admission.LedgerEvent) {}
 func (stubAdmission) Decide(_ ids.IdentityID, _ *sharedadmission.SignedCreditAttestation, _ time.Time) admission.Result {
 	return admission.Result{Outcome: admission.OutcomeAdmit}
 }

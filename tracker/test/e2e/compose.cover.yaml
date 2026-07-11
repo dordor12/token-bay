@@ -1,0 +1,29 @@
+# compose.cover.yaml — integration-coverage override for the e2e
+# topology. Layered over the base file:
+#
+#   docker compose -f compose.e2e.yaml -f compose.cover.yaml -p tokenbay-e2e ...
+#
+# Swaps both trackers to the coverage-instrumented image (built by
+# test/e2e/run-cover.sh with `go build -cover -covermode=atomic
+# -coverpkg=github.com/token-bay/token-bay/tracker/...`) and bind-mounts
+# a per-tracker host dir over /covdata (= GOCOVERDIR baked into the
+# image), so the counter files each tracker flushes on clean exit land
+# on the host without colliding. Compose merges `volumes` by container
+# target path, so these mounts are appended to the base file's /gen and
+# /data mounts.
+#
+# Coverage only flushes on normal process exit: stop the trackers with
+# SIGTERM (`docker compose stop`) and let them drain before harvesting
+# .covdata/ — SIGKILL loses the run's counters.
+name: tokenbay-e2e
+
+services:
+  tracker-a:
+    image: token-bay-tracker:cover
+    volumes:
+      - ./.covdata/tracker-a:/covdata
+
+  tracker-b:
+    image: token-bay-tracker:cover
+    volumes:
+      - ./.covdata/tracker-b:/covdata

@@ -156,6 +156,55 @@ func (s *storage) appendReason(ctx context.Context, id ids.IdentityID,
 	return nil
 }
 
+// clearFrozen moves id from FROZEN back to OK, appending reason to the
+// (never rewritten) reasons array. Unlike transition, clearFrozen does
+// NOT consult canTransition: FROZEN is intentionally terminal on every
+// other path (the evaluator's freeze_repeat rule, RecordCategoricalBreach),
+// and clearFrozen is the one sanctioned bypass, reserved for the operator
+// Unfreeze API (Subsystem.Unfreeze). The audit trail invariant still
+// holds — this appends, it never edits or truncates rep_state.reasons.
+//
+// clearFrozen only acts on an identity that is currently FROZEN. If the
+// identity is in AUDIT or OK (or has no row at all), it is a no-op:
+// no state change, no since bump, no reason appended, err=nil. This
+// mirrors Freeze swallowing errInvalidTransition on an already-FROZEN
+// identity — the two operators stay symmetric, and Unfreeze can never
+// be used as a side door to force an AUDIT identity to OK (bypassing
+// the evaluator's 48h audit_cleared cooldown) or to re-bump an
+// already-OK identity's since/reasons.
+func (s *storage) clearFrozen(ctx context.Context, id ids.IdentityID,
+	reason ReasonRecord, now time.Time,
+) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cur, ok, err := s.readStateLocked(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("reputation: clearFrozen: identity not found")
+	}
+	if cur.State != StateFrozen {
+		// Not frozen — nothing to clear. No-op, same as Freeze's
+		// swallowed errInvalidTransition on an already-FROZEN identity.
+		return nil
+	}
+	cur.Reasons = append(cur.Reasons, reason)
+	payload, err := json.Marshal(cur.Reasons)
+	if err != nil {
+		return fmt.Errorf("reputation: clearFrozen: encode reasons: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+        UPDATE rep_state
+           SET state = ?, since = ?, reasons = ?, updated_at = ?
+         WHERE identity_id = ?`,
+		int(StateOK), now.Unix(), string(payload), now.Unix(), id[:]); err != nil {
+		return fmt.Errorf("reputation: clearFrozen: update: %w", err)
+	}
+	return nil
+}
+
 // readStateLocked is the internal variant of readState used inside
 // transition while holding writeMu. Same semantics; separate name so
 // callers don't reach for the public-style readState which itself

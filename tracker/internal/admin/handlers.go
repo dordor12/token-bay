@@ -231,6 +231,66 @@ func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleFreeze is the P7 admin path: mark an identity FROZEN, triggering
+// revocation gossip via the reputation subsystem. POST
+// /identity/{id}/freeze. Returns 501 when the reputation subsystem is
+// not wired (Deps.Reputation nil), mirroring the Federation-disabled
+// convention used by /peers/add and /peers/remove.
+func (s *Server) handleFreeze(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Reputation == nil {
+		writeError(w, http.StatusNotImplemented, "reputation subsystem not configured")
+		return
+	}
+	idHex := r.PathValue("id")
+	if idHex == "" {
+		writeError(w, http.StatusBadRequest, "missing identity id")
+		return
+	}
+	const operator = "admin"
+	if err := s.deps.Reputation.Freeze(idHex, operator); err != nil {
+		writeError(w, http.StatusBadRequest, "freeze: "+err.Error())
+		return
+	}
+	s.deps.Logger.Info().
+		Str("event", "admin_freeze").
+		Str("identity_id", idHex).
+		Str("operator", operator).
+		Msg("operator froze identity")
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"identity_id": idHex,
+		"frozen":      true,
+	})
+}
+
+// handleUnfreeze is the P7 admin path: clear the FROZEN state for an
+// identity, returning it to OK. POST /identity/{id}/unfreeze. Returns
+// 501 when the reputation subsystem is not wired (Deps.Reputation nil).
+func (s *Server) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Reputation == nil {
+		writeError(w, http.StatusNotImplemented, "reputation subsystem not configured")
+		return
+	}
+	idHex := r.PathValue("id")
+	if idHex == "" {
+		writeError(w, http.StatusBadRequest, "missing identity id")
+		return
+	}
+	const operator = "admin"
+	if err := s.deps.Reputation.Unfreeze(idHex, operator); err != nil {
+		writeError(w, http.StatusBadRequest, "unfreeze: "+err.Error())
+		return
+	}
+	s.deps.Logger.Info().
+		Str("event", "admin_unfreeze").
+		Str("identity_id", idHex).
+		Str("operator", operator).
+		Msg("operator unfroze identity")
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"identity_id": idHex,
+		"frozen":      false,
+	})
+}
+
 // handleMaintenance triggers a graceful shutdown via the cmd-supplied
 // callback. The handler returns 202 immediately; the actual drain runs
 // asynchronously in cmd/run_cmd.

@@ -1,12 +1,15 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+
+	tbproto "github.com/token-bay/token-bay/shared/proto"
 )
 
 func TestEntryBySeq_HappyPath(t *testing.T) {
@@ -116,4 +119,85 @@ func TestBalance_Miss(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Empty(t, got.IdentityID)
+}
+
+func TestHasUsageRequestID(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtUsageInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasUsageRequestID(ctx, in.Entry.Body.RequestId)
+	require.NoError(t, err)
+	assert.True(t, got, "committed USAGE request_id must be found")
+
+	got, err = s.HasUsageRequestID(ctx, bytes.Repeat([]byte{0x7F}, 16))
+	require.NoError(t, err)
+	assert.False(t, got, "unused request_id must not match")
+}
+
+func TestHasUsageRequestID_ScopedToUsageKind(t *testing.T) {
+	// Transfer / starter-grant entries carry all-zero request_ids by
+	// design; they must never trip the USAGE single-use check.
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtStarterGrantInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasUsageRequestID(ctx, in.Entry.Body.RequestId)
+	require.NoError(t, err)
+	assert.False(t, got, "non-USAGE kinds are out of scope")
+}
+
+func TestHasTransferRef(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	in := builtTransferOutInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, in)
+	require.NoError(t, err)
+
+	got, err := s.HasTransferRef(ctx, tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT, in.Entry.Body.Ref)
+	require.NoError(t, err)
+	assert.True(t, got, "committed TRANSFER_OUT ref must be found")
+
+	got, err = s.HasTransferRef(ctx, tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT, bytes.Repeat([]byte{0x7F}, 32))
+	require.NoError(t, err)
+	assert.False(t, got, "unused ref must not match")
+}
+
+func TestHasTransferRef_ScopedToKind(t *testing.T) {
+	// The two halves of one transfer legitimately share the same ref (the
+	// destination's transfer_in reuses the source's nonce). The probe must
+	// only match SAME-KIND rows: a transfer_in row must never trip the
+	// TRANSFER_OUT probe (double-debit check) and a transfer_out row must
+	// never trip the TRANSFER_IN probe (double-credit check).
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	tin := builtTransferInInput(t, 1, make([]byte, 32))
+	_, err := s.AppendEntry(ctx, tin)
+	require.NoError(t, err)
+
+	got, err := s.HasTransferRef(ctx, tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT, tin.Entry.Body.Ref)
+	require.NoError(t, err)
+	assert.False(t, got, "TRANSFER_IN shares the ref by design and must not match the TRANSFER_OUT probe")
+
+	got, err = s.HasTransferRef(ctx, tbproto.EntryKind_ENTRY_KIND_TRANSFER_IN, tin.Entry.Body.Ref)
+	require.NoError(t, err)
+	assert.True(t, got, "committed TRANSFER_IN ref must be found by the TRANSFER_IN probe")
+
+	// Same ref, other kind, same store: builtTransferOutInput reuses the
+	// identical 32-byte ref by design.
+	tout := builtTransferOutInput(t, 2, tin.Hash[:])
+	_, err = s.AppendEntry(ctx, tout)
+	require.NoError(t, err)
+
+	got, err = s.HasTransferRef(ctx, tbproto.EntryKind_ENTRY_KIND_TRANSFER_OUT, tout.Entry.Body.Ref)
+	require.NoError(t, err)
+	assert.True(t, got, "committed TRANSFER_OUT ref must be found by the TRANSFER_OUT probe")
 }

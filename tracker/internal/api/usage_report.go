@@ -69,6 +69,8 @@ func mapSettlementError(err error) error {
 		return ErrNotFound("unknown preimage_hash")
 	case errors.Is(err, broker.ErrDuplicateSettle):
 		return ErrInvalid("DUPLICATE_SETTLE")
+	case errors.Is(err, broker.ErrDuplicateUsageReport):
+		return ErrInvalid("DUPLICATE_USAGE_REPORT")
 	default:
 		return err // generic INTERNAL
 	}

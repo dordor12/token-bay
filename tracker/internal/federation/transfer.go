@@ -5,8 +5,14 @@
 //   - the source-side issued-proof replay cache keyed by Nonce
 //   - the destination-side completed-transfer cache keyed by Nonce
 //
-// All three are in-memory only in v1. A persistent ledger-indexed
-// duplicate check is the §14 follow-up.
+// All three are in-memory; the durable double-spend backstops are the
+// ledger's on-chain per-kind single-use transfer ref checks
+// (ledger.ErrTransferRefExists), which hold across restarts: the
+// TRANSFER_OUT check at the source (double-debit) and the TRANSFER_IN
+// check at the destination (double-credit). Both are needed — a source
+// answers a replayed request from its warm issued cache without
+// re-entering the ledger, so only the destination's own on-chain check
+// bounds a dest-restart replay.
 package federation
 
 import (
@@ -38,6 +44,14 @@ type issuedProof struct {
 	at      time.Time
 }
 
+// completedTransfer is one destination-side finished transfer, cached so
+// a replayed StartTransfer with the same nonce returns the original
+// result without a second proof round-trip or a second AppendTransferIn.
+type completedTransfer struct {
+	out StartTransferOutput
+	at  time.Time
+}
+
 type pendingResp struct {
 	ch    chan *fed.TransferProof
 	rejCh chan *fed.TransferReject // slice 13: signed negative-ack from source
@@ -48,9 +62,10 @@ type pendingResp struct {
 type transferCoordinator struct {
 	cfg transferCoordinatorCfg
 
-	mu      sync.Mutex
-	issued  map[[32]byte]issuedProof // source-side replay cache
-	pending map[[32]byte]pendingResp // dest-side in-flight
+	mu        sync.Mutex
+	issued    map[[32]byte]issuedProof       // source-side replay cache
+	pending   map[[32]byte]pendingResp       // dest-side in-flight
+	completed map[[32]byte]completedTransfer // dest-side finished transfers
 }
 
 func newTransferCoordinator(cfg transferCoordinatorCfg) *transferCoordinator {
@@ -64,9 +79,10 @@ func newTransferCoordinator(cfg transferCoordinatorCfg) *transferCoordinator {
 		cfg.Now = time.Now
 	}
 	return &transferCoordinator{
-		cfg:     cfg,
-		issued:  make(map[[32]byte]issuedProof),
-		pending: make(map[[32]byte]pendingResp),
+		cfg:       cfg,
+		issued:    make(map[[32]byte]issuedProof),
+		pending:   make(map[[32]byte]pendingResp),
+		completed: make(map[[32]byte]completedTransfer),
 	}
 }
 
@@ -142,13 +158,21 @@ func (tc *transferCoordinator) OnRequest(ctx context.Context, env *fed.Envelope,
 
 	var identityArr [32]byte
 	copy(identityArr[:], req.IdentityId)
+	// The tracker ids ride along so the ledger can rebuild the exact
+	// canonical intent the consumer signed; without them the preimage
+	// cannot byte-match and the append fails "consumer_sig invalid".
+	var srcArr, dstArr [32]byte
+	copy(srcArr[:], req.SourceTrackerId)
+	copy(dstArr[:], req.DestTrackerId)
 	out, err := tc.cfg.Ledger.AppendTransferOut(ctx, TransferOutHookIn{
-		IdentityID:  identityArr,
-		Amount:      req.Amount,
-		Timestamp:   req.Timestamp,
-		TransferRef: nonceArr,
-		ConsumerSig: req.ConsumerSig,
-		ConsumerPub: req.ConsumerPub,
+		IdentityID:      identityArr,
+		Amount:          req.Amount,
+		Timestamp:       req.Timestamp,
+		TransferRef:     nonceArr,
+		SourceTrackerID: srcArr,
+		DestTrackerID:   dstArr,
+		ConsumerSig:     req.ConsumerSig,
+		ConsumerPub:     req.ConsumerPub,
 	})
 	if err != nil {
 		// Slice 13: emit a signed TransferReject so the destination's
@@ -392,6 +416,18 @@ func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransf
 	if tc.cfg.Ledger == nil {
 		return StartTransferOutput{}, ErrTransferDisabled
 	}
+
+	// Destination-side idempotency: a replayed StartTransfer for an
+	// already-completed nonce returns the cached result — no second proof
+	// round-trip, no second AppendTransferIn (no double-credit).
+	tc.mu.Lock()
+	if c, ok := tc.completed[in.Nonce]; ok {
+		tc.mu.Unlock()
+		tc.cfg.MetricsCounter("transfer_start_replayed_completed")
+		return c.out, nil
+	}
+	tc.mu.Unlock()
+
 	myID := tc.cfg.MyTrackerID.Bytes()
 	srcID := in.SourceTrackerID.Bytes()
 	idArr := [32]byte(in.IdentityID)
@@ -463,11 +499,18 @@ func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransf
 		Timestamp:   proof.Timestamp,
 		TransferRef: in.Nonce,
 	}); err != nil {
-		// ErrTransferRefExists is treated as success: the credit is already
-		// booked. v1 ledger never returns it, but the contract is in place.
+		// ErrTransferRefExists is treated as IDEMPOTENT SUCCESS: a
+		// TRANSFER_IN with this ref is already on the local chain, i.e.
+		// the credit was booked by an earlier run. This is the
+		// dest-restart replay path — the completed cache above was wiped,
+		// the source replayed its cached proof (verified against the
+		// source pubkey just above), and the ledger's durable on-chain
+		// check refused the second credit. Fall through and return the
+		// proof-derived result to the caller as if freshly completed.
 		if !isLedgerTransferRefExists(err) {
 			return StartTransferOutput{}, fmt.Errorf("federation: append transfer_in: %w", err)
 		}
+		tc.cfg.MetricsCounter("transfer_in_ref_exists_idempotent")
 	}
 
 	// Send TransferApplied back to source. Best-effort; failures here are
@@ -488,12 +531,40 @@ func (tc *transferCoordinator) StartTransfer(ctx context.Context, in StartTransf
 
 	var hashArr [32]byte
 	copy(hashArr[:], proof.SourceChainTipHash)
-	tc.cfg.MetricsCounter("transfer_completed")
-	return StartTransferOutput{
+	out := StartTransferOutput{
 		SourceChainTipHash: hashArr,
 		SourceSeq:          proof.SourceSeq,
 		SourceTrackerSig:   proof.SourceTrackerSig,
-	}, nil
+	}
+
+	// The credit is booked — record the completion so replays of this
+	// nonce short-circuit at the top of StartTransfer.
+	tc.mu.Lock()
+	tc.cacheCompletedLocked(in.Nonce, out)
+	tc.mu.Unlock()
+
+	tc.cfg.MetricsCounter("transfer_completed")
+	return out, nil
+}
+
+// cacheCompletedLocked stores out keyed by nonce, evicting the oldest
+// entry if the cap is exceeded. Caller must hold tc.mu. Shares the
+// IssuedCap bound with the source-side issued cache.
+func (tc *transferCoordinator) cacheCompletedLocked(nonce [32]byte, out StartTransferOutput) {
+	if len(tc.completed) >= tc.cfg.IssuedCap {
+		var oldestKey [32]byte
+		var oldestAt time.Time
+		first := true
+		for k, v := range tc.completed {
+			if first || v.at.Before(oldestAt) {
+				oldestKey = k
+				oldestAt = v.at
+				first = false
+			}
+		}
+		delete(tc.completed, oldestKey)
+	}
+	tc.completed[nonce] = completedTransfer{out: out, at: tc.cfg.Now()}
 }
 
 // OnProof is the dispatcher hook for KIND_TRANSFER_PROOF.
@@ -572,11 +643,15 @@ func (tc *transferCoordinator) OnApplied(_ context.Context, env *fed.Envelope, f
 }
 
 // isLedgerTransferRefExists is the federation-internal indirection
-// for the ledger's ErrTransferRefExists sentinel. The ledger package
-// is not imported here to keep federation's dependency surface
-// independent of ledger-package identifier renames; the api wiring
-// site can plug a typed predicate if needed. v1 ledger never returns
-// the sentinel, so this returns false in production.
+// for the ledger's ErrTransferRefExists sentinel. The ledger orchestrator
+// package is not imported here to keep federation's dependency surface
+// independent of ledger-package identifier renames. The ledger returns
+// the sentinel unwrapped (appendLocked's per-kind single-use transfer
+// ref check — TRANSFER_OUT at the source, TRANSFER_IN at the
+// destination), and the production ledgerHooksAdapter propagates it
+// verbatim, so the exact-message match is stable. StartTransfer relies
+// on it to turn a dest-restart replay (AppendTransferIn refusing a
+// duplicate on-chain TRANSFER_IN ref) into idempotent success.
 func isLedgerTransferRefExists(err error) bool {
 	if err == nil {
 		return false

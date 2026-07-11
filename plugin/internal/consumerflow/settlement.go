@@ -1,16 +1,17 @@
 package consumerflow
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/token-bay/token-bay/plugin/internal/auditlog"
-	tbproto "github.com/token-bay/token-bay/shared/proto"
+	"github.com/token-bay/token-bay/shared/signing"
 )
 
 // Settlement decision outcomes — kept in lock-step with the contract
@@ -49,23 +50,21 @@ func (c *Coordinator) HandleSettlement(ctx context.Context, req *SettlementReque
 	}
 
 	// (2) Decode the body so we can verify the request_id + token counts.
-	var body tbproto.EntryBody
-	if err := proto.Unmarshal(req.PreimageBody, &body); err != nil {
+	// Since P4 the preimage is the canonical usage-assertion (the same
+	// sequencing-independent bytes the seeder signed — see shared/signing),
+	// not a marshaled EntryBody.
+	body, err := parseUsageAssertionPreimage(req.PreimageBody)
+	if err != nil {
 		c.recordSettleDecision(settleOutcomeDecodeError)
 		c.auditSettleRefusal("", settleOutcomeDecodeError)
-		return fmt.Errorf("consumerflow: decode entry body: %w", err)
+		return fmt.Errorf("consumerflow: decode usage-assertion preimage: %w", err)
 	}
 
 	// (3) The request_id must match a pending reservation for an active
 	// fallback session. Settlement after exit, for an unknown request, or
 	// a duplicate (entry already consumed) all land here.
-	if len(body.RequestId) != 16 {
-		c.recordSettleDecision(settleOutcomeUnknownRequest)
-		c.auditSettleRefusal("", settleOutcomeUnknownRequest)
-		return fmt.Errorf("consumerflow: settlement request_id length %d, want 16", len(body.RequestId))
-	}
 	var reqKey [16]byte
-	copy(reqKey[:], body.RequestId)
+	copy(reqKey[:], body.RequestID)
 	c.mu.Lock()
 	pending, ok := c.pendingSettlements[reqKey]
 	c.mu.Unlock()
@@ -89,9 +88,11 @@ func (c *Coordinator) HandleSettlement(ctx context.Context, req *SettlementReque
 		return fmt.Errorf("consumerflow: settlement output_tokens=%d exceeds ceiling=%d", body.OutputTokens, pending.maxOutputTokens)
 	}
 
-	// (5) Sign the body bytes (not the hash). Verifiers reconstruct the
-	// preimage from the body via DeterministicMarshal and verify against
-	// our consumer pubkey — see ledger spec §3.1.
+	// (5) Counter-sign the raw preimage_body bytes (not the hash) with the
+	// consumer's IDENTITY key. The bytes are the canonical usage-assertion
+	// preimage, so this is exactly the signature the tracker verifies via
+	// signing.VerifyUsageAssertion under the consumer pubkey it resolves
+	// from the mTLS connection (broker settlement §5.2/§5.3).
 	sig, err := c.deps.Identity.Sign(req.PreimageBody)
 	if err != nil {
 		c.recordSettleDecision(settleOutcomeSignError)
@@ -122,9 +123,66 @@ func (c *Coordinator) HandleSettlement(ctx context.Context, req *SettlementReque
 	})
 }
 
+// usageAssertionDomain mirrors shared/signing's usage-assertion domain tag.
+// parseUsageAssertionPreimage checks it before trusting the layout; the
+// round-trip test in settlement_test.go pins this parser to the canonical
+// encoder so the two cannot drift silently.
+const usageAssertionDomain = "token-bay/usage-assertion:v1"
+
+// parseUsageAssertionPreimage decodes the canonical usage-assertion
+// preimage produced by signing.CanonicalUsageAssertionPreSig:
+//
+//	domain \0 request_id(16) \0 consumer_id(32) \0 seeder_id(32) \0 model \0 in(8) out(8) cost(8)
+//
+// The consumer needs request_id (pending-settlement lookup), output_tokens
+// (§11 budget ceiling), and cost_credits (audit) before counter-signing;
+// the signature itself is over the raw preimage bytes, never over this
+// parsed form.
+func parseUsageAssertionPreimage(body []byte) (signing.UsageAssertion, error) {
+	var a signing.UsageAssertion
+	prefix := []byte(usageAssertionDomain)
+	const fixed = 1 + 16 + 1 + 32 + 1 + 32 + 1 // separators + ids up to model
+	const trailer = 1 + 8 + 8 + 8              // model NUL + three uint64s
+	if len(body) < len(prefix)+fixed+1+trailer {
+		return a, fmt.Errorf("preimage too short: %d bytes", len(body))
+	}
+	if !bytes.HasPrefix(body, prefix) {
+		return a, errors.New("domain tag mismatch")
+	}
+	rest := body[len(prefix):]
+	if rest[0] != 0 || rest[17] != 0 || rest[50] != 0 || rest[83] != 0 {
+		return a, errors.New("malformed field separators")
+	}
+	a.RequestID = rest[1:17]
+	a.ConsumerID = rest[18:50]
+	a.SeederID = rest[51:83]
+
+	tail := rest[84:] // model \0 in(8) out(8) cost(8)
+	numStart := len(tail) - (trailer - 1)
+	if numStart < 1 || tail[numStart-1] != 0 {
+		return a, errors.New("model terminator missing")
+	}
+	model := tail[:numStart-1]
+	if len(model) == 0 || bytes.IndexByte(model, 0) >= 0 {
+		return a, errors.New("malformed model")
+	}
+	a.Model = string(model)
+
+	num := tail[numStart:]
+	in := binary.BigEndian.Uint64(num[0:8])
+	out := binary.BigEndian.Uint64(num[8:16])
+	if in > math.MaxUint32 || out > math.MaxUint32 {
+		return a, errors.New("token count overflows uint32")
+	}
+	a.InputTokens = uint32(in)
+	a.OutputTokens = uint32(out)
+	a.CostCredits = binary.BigEndian.Uint64(num[16:24])
+	return a, nil
+}
+
 // clampToInt64 narrows a uint64 to int64 saturating at math.MaxInt64. The
 // audit-log CostCredits field is int64 (auditlog.records.go), but the
-// proto carries credits as uint64. Real settlement values are never
+// assertion carries credits as uint64. Real settlement values are never
 // remotely close to 2^63, so saturation is a safe over-cautious cap.
 func clampToInt64(v uint64) int64 {
 	if v > math.MaxInt64 {

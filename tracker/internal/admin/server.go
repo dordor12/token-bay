@@ -78,6 +78,26 @@ type Deps struct {
 	// path. Nil disables the route. cmd/run_cmd wires this to the live
 	// *federation.Federation.
 	FederationActions FederationActions
+
+	// Reputation surfaces the P7 identity freeze/unfreeze admin path
+	// (reputation.Subsystem.Freeze/Unfreeze). Optional: when nil,
+	// POST /identity/{id}/freeze and POST /identity/{id}/unfreeze return
+	// 501, mirroring the Federation-disabled convention used by
+	// /peers/add and /peers/remove. cmd/run_cmd wires this to the live
+	// *reputation.Subsystem via a small hex-id adapter.
+	Reputation ReputationActions
+}
+
+// ReputationActions is the P7 admin-side hook for reputation subsystem
+// operations that mutate runtime state (freeze/unfreeze). Defined as an
+// interface so the admin package doesn't depend on internal/reputation.
+type ReputationActions interface {
+	// Freeze marks the identity idHex as FROZEN, recording operator as
+	// the actor of record and triggering revocation gossip.
+	Freeze(idHex, operator string) error
+
+	// Unfreeze clears the FROZEN state for idHex, returning it to OK.
+	Unfreeze(idHex, operator string) error
 }
 
 // FederationActions is the slice-17 admin-side hook for federation
@@ -232,6 +252,8 @@ func (s *Server) buildMux() http.Handler {
 	mux.Handle("POST /peers/add", guard(http.HandlerFunc(s.handlePeersAdd)))
 	mux.Handle("POST /peers/remove", guard(http.HandlerFunc(s.handlePeersRemove)))
 	mux.Handle("GET /identity/{id}", guard(http.HandlerFunc(s.handleIdentity)))
+	mux.Handle("POST /identity/{id}/freeze", guard(http.HandlerFunc(s.handleFreeze)))
+	mux.Handle("POST /identity/{id}/unfreeze", guard(http.HandlerFunc(s.handleUnfreeze)))
 	mux.Handle("POST /maintenance", guard(http.HandlerFunc(s.handleMaintenance)))
 
 	// Subsystem mounts. Each subsystem owns its own route paths

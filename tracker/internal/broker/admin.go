@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/token-bay/token-bay/tracker/internal/session"
 )
 
 // AdminHandler returns an http.Handler covering /broker/* admin routes.
@@ -134,10 +136,25 @@ func (s *Subsystems) handleForceFailInflight(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	reqIDHex := hex.EncodeToString(reqID[:])
+	// Capture the assignment before the state flips: an Assigned request holds
+	// a registry load slot on its seeder, and ForceFail clears AssignedSeeder's
+	// meaning by moving the request out of Assigned.
+	_, seeder, wasAssigned := s.Broker.mgr.Inflight.LookupAssignment(reqID)
 	prev, ok := s.Broker.mgr.Inflight.ForceFail(reqID, time.Now())
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
+	}
+	// Failing an assigned request is a terminal transition, so it must return
+	// the seeder's registry load slot — exactly as settlement completion
+	// (settlement.go) and the TTL reaper (reaper.go) do when a request leaves
+	// the Assigned state. Without this, every operator force-fail permanently
+	// shrinks the seeder's effective capacity (the selector filters it at
+	// LoadThreshold) until it re-advertises. The credit reservation is a
+	// separate operator primitive released via POST /broker/reservations/release
+	// — this endpoint deliberately does not touch it.
+	if prev == session.StateAssigned && wasAssigned {
+		_, _ = s.Broker.deps.Registry.DecLoad(seeder)
 	}
 
 	s.Broker.deps.Logger.Info().

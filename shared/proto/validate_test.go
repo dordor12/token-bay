@@ -49,6 +49,16 @@ func TestValidateEnvelopeBody_Rejections(t *testing.T) {
 	}
 }
 
+func TestValidateEnvelopeBody_EphemeralPubLength(t *testing.T) {
+	b := fixtureEnvelopeBody()                // existing helper
+	b.ConsumerEphemeralPub = make([]byte, 31) // wrong length
+	require.Error(t, ValidateEnvelopeBody(b))
+	b.ConsumerEphemeralPub = make([]byte, 32) // valid
+	require.NoError(t, ValidateEnvelopeBody(b))
+	b.ConsumerEphemeralPub = nil // absent is allowed (0)
+	require.NoError(t, ValidateEnvelopeBody(b))
+}
+
 func TestValidateEnvelopeBody_NilBody(t *testing.T) {
 	err := ValidateEnvelopeBody(nil)
 	require.Error(t, err)
@@ -365,6 +375,26 @@ func TestValidateOfferAndSettlementPush(t *testing.T) {
 		EnvelopeHash:         make([]byte, 32),
 		Model:                "x",
 		ConsumerEphemeralPub: make([]byte, 33),
+	}))
+	// request_id is optional for backward compat (legacy trackers don't
+	// set it). Empty is OK; 16 bytes is OK; anything else is rejected.
+	require.NoError(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:   make([]byte, 32),
+		EnvelopeHash: make([]byte, 32),
+		Model:        "x",
+		RequestId:    nil,
+	}))
+	require.NoError(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:   make([]byte, 32),
+		EnvelopeHash: make([]byte, 32),
+		Model:        "x",
+		RequestId:    make([]byte, 16),
+	}))
+	require.Error(t, ValidateOfferPush(&OfferPush{
+		ConsumerId:   make([]byte, 32),
+		EnvelopeHash: make([]byte, 32),
+		Model:        "x",
+		RequestId:    make([]byte, 15),
 	}))
 	require.Error(t, ValidateSettlementPush(nil))
 	require.Error(t, ValidateSettlementPush(&SettlementPush{PreimageHash: make([]byte, 32)}))

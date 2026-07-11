@@ -17,9 +17,11 @@ type depeerFunc func(id ids.TrackerID, reason federation.DepeerReason) error
 
 // runReconnectIntegrityCheck is the per-peer-reconnect gate. Spec §8
 // acceptance: on every peer reconnect, walk the local chain and confirm
-// hash(entry[n-1]) == entry[n].prev_hash. A break means the local
-// store is corrupt — drop the peer that just attached (we do not want
-// to feed possibly-incorrect roots upstream) and record the failure.
+// hash(entry[n-1]) == entry[n].prev_hash, plus each entry's recomputed
+// body hash equals its append-time stored hash (the check that covers
+// the tip). A break means the local store is corrupt — drop the peer
+// that just attached (we do not want to feed possibly-incorrect roots
+// upstream) and record the failure.
 //
 // Called by the federation subsystem in its own goroutine, so it must
 // not assume any caller-side serialization.

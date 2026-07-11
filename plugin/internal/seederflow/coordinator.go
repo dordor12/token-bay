@@ -76,8 +76,14 @@ type Coordinator struct {
 // reservation holds the per-offer state created on accept and consumed
 // when the consumer's tunnel dial arrives.
 type reservation struct {
-	envelopeHash         [32]byte
-	consumerIDHash       [32]byte
+	envelopeHash   [32]byte
+	consumerIDHash [32]byte
+	// requestID is the tracker's reservation token from OfferPush.request_id.
+	// Echoed in UsageReport.request_id and signed into the usage-assertion.
+	requestID [16]byte
+	// consumerID is the raw consumer identity from the offer — the same
+	// 32 bytes the tracker binds into the usage-assertion as ConsumerID.
+	consumerID           [32]byte
 	model                string
 	maxInputTokens       uint32
 	maxOutputTokens      uint32
