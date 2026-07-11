@@ -325,3 +325,141 @@ func TestScenario33_ConcurrentMixedConsumerBehaviors(t *testing.T) {
 		}
 	})
 }
+
+// TestScenario34_ConcurrentHappyAssignments is the happy-path-under-concurrency
+// flow: load-cap consumers fire at the same instant and every one that WINS
+// must get a complete, usable seeder assignment — a real tunnel-reachable
+// address, an ephemeral pubkey, and a reservation token unique across winners.
+// Where scenario 28 only checks the winners' tokens and scenario 33 mixes in
+// credit rejects, this pins the quality of the happy outcome under a
+// concurrent burst: a won assignment is always fully populated and never
+// shares a seeder slot with another winner.
+//
+// Two architectural limits shape what "concurrent happy" can mean against a
+// SINGLE seeder, and both are real production properties, not test artifacts:
+//   - The seeder binds one fixed tunnel port, rebound per offer, so
+//     simultaneous offers collide and only some are accepted — hence winners
+//     are 1..cap, not exactly cap.
+//   - Driving each winner through to a settled usage entry serializes on that
+//     same port, so genuinely parallel happy SETTLEMENT needs multiple
+//     seeders (the multi-actor harness work).
+//
+// Here the winners' assignments are abandoned and their load reclaimed in
+// cleanup.
+func TestScenario34_ConcurrentHappyAssignments(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	require.NoError(t, seederCtl().SetConfig(ctx, driver.SeederConfig{
+		Available: true, Headroom: 0.9, Models: []string{sonnetModel}, Tiers: 1,
+		SSEBody: cannedSSEBody,
+	}), "configure the happy seeder")
+	// Demand-fits-capacity only holds from a clean slate: wait for any residual
+	// load left by earlier shared-stack scenarios to drain to zero so all cap
+	// racers can win.
+	require.Eventually(t, func() bool {
+		sid, err := seederCtl().Identity(ctx)
+		if err != nil {
+			return false
+		}
+		rec, err := adminA().Identity(ctx, sid.IdentityIDHex)
+		return err == nil && rec.Seeder != nil && rec.Seeder.Available && rec.Seeder.Load == 0
+	}, 40*time.Second, 500*time.Millisecond, "seeder available with zero residual load")
+
+	// Exactly the load cap: demand fits capacity, so every racer should win.
+	const n = 5
+
+	type happyOutcome struct {
+		addr     string
+		pubkey   string
+		resToken string
+		err      error
+	}
+	results := make([]happyOutcome, n)
+
+	var ready sync.WaitGroup
+	ready.Add(n)
+	gun := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
+
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			var res happyOutcome
+			cli := dialTrackerA(ctx, t)
+			enrollClient(ctx, t, cli)
+			snap, err := cli.VerifiedBalance(ctx, cli.IdentityID())
+			if err != nil {
+				res.err = err
+				results[i] = res
+				ready.Done()
+				<-gun
+				return
+			}
+			env := buildSignedBrokerEnvelope(t, cli, sonnetModel, 5, 5, snap)
+
+			ready.Done()
+			<-gun // fire together
+
+			resp, err := cli.Call(ctx, tbproto.RpcMethod_RPC_METHOD_BROKER_REQUEST, env)
+			if err != nil {
+				res.err = err
+				results[i] = res
+				return
+			}
+			if resp.Status == tbproto.RpcStatus_RPC_STATUS_OK {
+				var brr tbproto.BrokerRequestResponse
+				if err := proto.Unmarshal(resp.Payload, &brr); err != nil {
+					res.err = err
+					results[i] = res
+					return
+				}
+				if sa := brr.GetSeederAssignment(); sa != nil {
+					res.addr = string(sa.GetSeederAddr())
+					res.pubkey = hex.EncodeToString(sa.GetSeederPubkey())
+					res.resToken = hex.EncodeToString(sa.GetReservationToken())
+				}
+			}
+			results[i] = res
+		}(i)
+	}
+
+	ready.Wait()
+	close(gun)
+	wg.Wait()
+
+	// Every WINNER must carry a fully-populated, usable assignment; the token
+	// set proves no seeder slot is shared. (Non-winners lost the fixed-port
+	// offer race — a real, expected outcome, not a defect.)
+	won := 0
+	tokens := map[string]int{}
+	for i, r := range results {
+		require.NoError(t, r.err, "worker %d hit a transport/decode error", i)
+		if r.resToken == "" {
+			continue // lost the concurrent offer race for the single seeder's port
+		}
+		won++
+		assert.NotEmpty(t, r.addr, "worker %d won: assignment must carry a tunnel-reachable seeder address", i)
+		assert.NotEmpty(t, r.pubkey, "worker %d won: assignment must carry the seeder ephemeral pubkey", i)
+		tokens[r.resToken]++
+	}
+	assert.GreaterOrEqual(t, won, 1, "at least one consumer wins a happy assignment under concurrency")
+	assert.LessOrEqual(t, won, n, "winners cannot exceed the concurrent consumers")
+	assert.Len(t, tokens, won, "each winner holds a distinct reservation token (no double-assign)")
+
+	t.Cleanup(func() {
+		rctx, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer rcancel()
+		for tok := range tokens {
+			if _, err := adminA().ForceFailInflight(rctx, tok); err != nil {
+				t.Logf("e2e: scenario 34: force-fail %s: %v", tok, err)
+			}
+		}
+	})
+
+	h, err := adminA().Health(ctx)
+	require.NoError(t, err, "tracker-a healthy after the concurrent happy burst")
+	require.Equal(t, "ok", h.Status)
+	t.Logf("e2e: scenario 34: %d/%d concurrent consumers won a complete, distinct happy assignment", won, n)
+}
