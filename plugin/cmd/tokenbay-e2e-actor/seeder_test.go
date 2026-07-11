@@ -255,11 +255,17 @@ func TestSeederActor_OfferServeUsageReport(t *testing.T) {
 	}
 	assert.Equal(t, reqID, report.RequestId)
 	assert.Equal(t, model, report.Model)
-	assert.Equal(t, uint32(cannedInputTokens), report.InputTokens)
-	assert.Equal(t, uint32(cannedOutputTokens), report.OutputTokens)
+	// The reported usage is pinned to the offer's own MaxInputTokens/
+	// MaxOutputTokens (4096/1024 above), not a fixed canned value — see
+	// servedOffer's doc comment: reporting exactly what was reserved keeps
+	// actual cost == reserved cost so the tracker's overspend guard
+	// (broker/settlement.go, 5% tolerance) never rejects it regardless of
+	// what a test requests.
+	assert.Equal(t, uint32(4096), report.InputTokens)
+	assert.Equal(t, uint32(1024), report.OutputTokens)
 
-	// cost = 3*128 + 15*256 = 4224 (mirrored sonnet pricing 3 in / 15 out).
-	const wantCost = uint64(4224)
+	// cost = 3*4096 + 15*1024 = 27648 (mirrored sonnet pricing 3 in / 15 out).
+	const wantCost = uint64(27648)
 	assertion := signing.UsageAssertion{
 		RequestID:    reqID,
 		ConsumerID:   consumerID,
@@ -285,8 +291,8 @@ func TestSeederActor_OfferServeUsageReport(t *testing.T) {
 		return usageInfo.RequestIDHex != ""
 	}, 5*time.Second, 20*time.Millisecond, "/usage/last never populated")
 	assert.Equal(t, hex.EncodeToString(reqID), usageInfo.RequestIDHex)
-	assert.Equal(t, uint32(cannedInputTokens), usageInfo.InputTokens)
-	assert.Equal(t, uint32(cannedOutputTokens), usageInfo.OutputTokens)
+	assert.Equal(t, uint32(4096), usageInfo.InputTokens)
+	assert.Equal(t, uint32(1024), usageInfo.OutputTokens)
 	assert.Equal(t, model, usageInfo.Model)
 	assert.Equal(t, wantCost, usageInfo.CostCredits)
 }

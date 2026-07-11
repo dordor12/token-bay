@@ -42,9 +42,11 @@ const serveWindow = 60 * time.Second
 // usageReportTimeout bounds the post-serve UsageReport RPC.
 const usageReportTimeout = 5 * time.Second
 
-// Canned token counts reported for every served request. The actor never
-// runs a real model; these fixed counts make the expected cost_credits (and
-// therefore the ledger deltas the e2e scenarios assert) deterministic.
+// Fallback token counts used only when an offer omits MaxInputTokens/
+// MaxOutputTokens (the zero-value case OfferPush's doc comment calls out for
+// a legacy tracker build) — every offer from this e2e stack's tracker
+// populates them, so the normal path is fallbackInputTokens/
+// fallbackOutputTokens (below).
 const (
 	cannedInputTokens  uint32 = 128
 	cannedOutputTokens uint32 = 256
@@ -111,11 +113,27 @@ type usageInfo struct {
 
 // servedOffer is the per-offer state the serve goroutine needs, snapshotted
 // at HandleOffer time so later /config changes don't affect in-flight serves.
+//
+// inputTokens/outputTokens are the counts the UsageReport claims — pinned to
+// the offer's OWN MaxInputTokens/MaxOutputTokens (falling back to
+// cannedInputTokens/cannedOutputTokens only when the offer omits them). The
+// tracker's settlement path rejects a usage_report whose
+// Pricing.ActualCost(...) exceeds the request's own reserved MaxCost by more
+// than 5% (broker/settlement.go's overspend guard) — a FIXED canned cost
+// regardless of what was requested works only for requests that happen to
+// reserve at least that much, which silently breaks for any smaller/cheaper
+// request a test chooses to make. Reporting exactly what the request
+// reserved keeps actual == reserved for every request shape, so the e2e
+// settlement scenarios can pick whatever MaxInputTokens/MaxOutputTokens suit
+// the consumer's starter-grant budget without hand-tuning against a
+// hardcoded seeder cost.
 type servedOffer struct {
-	consumerID [32]byte
-	requestID  [16]byte
-	model      string
-	sseBody    string
+	consumerID   [32]byte
+	requestID    [16]byte
+	model        string
+	sseBody      string
+	inputTokens  uint32
+	outputTokens uint32
 }
 
 // seeder is the seeder-role state machine layered onto the Actor: an
@@ -271,11 +289,20 @@ func (s *seeder) HandleOffer(_ trackerclient.Ctx, o *trackerclient.Offer) (track
 	}
 	s.setActiveListener(ln)
 
+	inTok, outTok := o.MaxInputTokens, o.MaxOutputTokens
+	if inTok == 0 {
+		inTok = cannedInputTokens
+	}
+	if outTok == 0 {
+		outTok = cannedOutputTokens
+	}
 	off := servedOffer{
-		consumerID: o.ConsumerID,
-		requestID:  o.RequestID,
-		model:      o.Model,
-		sseBody:    s.currentSSEBody(),
+		consumerID:   o.ConsumerID,
+		requestID:    o.RequestID,
+		model:        o.Model,
+		sseBody:      s.currentSSEBody(),
+		inputTokens:  inTok,
+		outputTokens: outTok,
 	}
 	go s.serveOffer(ln, off, ephPriv)
 
@@ -333,7 +360,7 @@ func (s *seeder) serveOffer(ln *tunnel.Listener, off servedOffer, ephPriv ed2551
 // background context with its own bound keeps the report window full-length
 // regardless of where in the serve window it fires.
 func (s *seeder) reportUsage(off servedOffer, ephPriv ed25519.PrivateKey) {
-	cost, err := costCredits(off.model, cannedInputTokens, cannedOutputTokens)
+	cost, err := costCredits(off.model, off.inputTokens, off.outputTokens)
 	if err != nil {
 		s.log.Error().Err(err).Msg("cost lookup failed (should have been rejected at offer time)")
 		return
@@ -344,8 +371,8 @@ func (s *seeder) reportUsage(off servedOffer, ephPriv ed25519.PrivateKey) {
 		ConsumerID:   off.consumerID[:],
 		SeederID:     seederID[:],
 		Model:        off.model,
-		InputTokens:  cannedInputTokens,
-		OutputTokens: cannedOutputTokens,
+		InputTokens:  off.inputTokens,
+		OutputTokens: off.outputTokens,
 		CostCredits:  cost,
 	})
 	if err != nil {
@@ -357,8 +384,8 @@ func (s *seeder) reportUsage(off servedOffer, ephPriv ed25519.PrivateKey) {
 	defer cancel()
 	err = s.actor.client.UsageReport(rctx, &trackerclient.UsageReport{
 		RequestID:    uuid.UUID(off.requestID),
-		InputTokens:  cannedInputTokens,
-		OutputTokens: cannedOutputTokens,
+		InputTokens:  off.inputTokens,
+		OutputTokens: off.outputTokens,
 		Model:        off.model,
 		SeederSig:    sig,
 	})
@@ -368,8 +395,8 @@ func (s *seeder) reportUsage(off servedOffer, ephPriv ed25519.PrivateKey) {
 	}
 	s.recordUsage(usageInfo{
 		RequestIDHex: hex.EncodeToString(off.requestID[:]),
-		InputTokens:  cannedInputTokens,
-		OutputTokens: cannedOutputTokens,
+		InputTokens:  off.inputTokens,
+		OutputTokens: off.outputTokens,
 		Model:        off.model,
 		CostCredits:  cost,
 	})
