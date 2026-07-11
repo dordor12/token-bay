@@ -20,6 +20,9 @@ services:
       # (test/e2e/driver/rpc.go) instead of only through the actor
       # containers. UDP: QUIC rides on UDP datagrams.
       - "7777:7777/udp"
+      # STUN/TURN UDP ports for NAT traversal hole-punching
+      - "3478:3478/udp"
+      - "3479:3479/udp"
     networks:
       - tokenbay-e2e
     healthcheck:
