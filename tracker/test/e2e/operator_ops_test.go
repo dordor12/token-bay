@@ -18,8 +18,14 @@
 package e2e_test
 
 import (
+	"context"
+	"encoding/hex"
 	"net/http"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScenario30_OperatorAdmissionPerActorTriage(t *testing.T) {
@@ -43,4 +49,31 @@ func TestScenario30_OperatorAdmissionPerActorTriage(t *testing.T) {
 
 	_, err = adminA().AdmissionRecompute(t.Context(), "zz")
 	requireAdminStatus(t, err, http.StatusBadRequest, "POST /admission/recompute with a malformed id")
+}
+
+// TestScenario32_AdmissionTracksFromEnrollment is the positive counterpart to
+// scenario 30: with the starter-grant ledger-event wiring in place, admission
+// begins tracking a consumer the moment it enrolls — no settlement required.
+// A fresh identity that has done nothing but enroll (and receive its starter
+// grant) must already appear in admission's per-consumer view, flipping
+// scenario 30's untracked 404 to a populated 200 for a brand-new actor.
+func TestScenario32_AdmissionTracksFromEnrollment(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cli := dialTrackerA(ctx, t)
+	enrollClient(ctx, t, cli) // enroll → starter grant → admission.OnLedgerEvent
+	id := cli.IdentityID()
+	idHex := hex.EncodeToString(id[:])
+
+	// The enroll-time dispatch is synchronous with the enroll RPC, but the
+	// admin read races the tracker's own goroutines, so poll briefly.
+	eventually(t, 15*time.Second, 500*time.Millisecond,
+		"admission tracks the freshly-enrolled consumer via the starter-grant wiring", func() bool {
+			_, e := adminA().AdmissionConsumer(ctx, idHex)
+			return e == nil
+		})
+	adm, err := adminA().AdmissionConsumer(ctx, idHex)
+	require.NoError(t, err, "GET /admission/consumer/{id} for a freshly-enrolled consumer")
+	assert.Contains(t, adm, "score", "enrolled consumer's admission view should carry its local score")
 }

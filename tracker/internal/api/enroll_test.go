@@ -42,13 +42,18 @@ func (f *fakeEnrollLedger) SignedBalance(_ context.Context, _ []byte) (*tbproto.
 }
 
 type fakeAdmission struct {
-	called bool
-	retErr error
+	called     bool
+	retErr     error
+	ledgerEvts []admission.LedgerEvent
 }
 
 func (f *fakeAdmission) Admit(_ context.Context, _, _ []byte) error {
 	f.called = true
 	return f.retErr
+}
+
+func (f *fakeAdmission) OnLedgerEvent(ev admission.LedgerEvent) {
+	f.ledgerEvts = append(f.ledgerEvts, ev)
 }
 
 // Decide is a no-op stub so *fakeAdmission satisfies api.AdmissionService
@@ -132,6 +137,40 @@ func TestEnroll_AdmissionPasses_LedgerCalled(t *testing.T) {
 	}
 	if !adm.called {
 		t.Fatal("Admit not called")
+	}
+}
+
+// TestEnroll_EmitsStarterGrantLedgerEvent pins the starter-grant wiring: a
+// successful enrollment must hand admission a LedgerEventStarterGrant for the
+// mTLS-bound identity, so admission tracks the consumer from its first credit.
+func TestEnroll_EmitsStarterGrantLedgerEvent(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	fake := &fakeEnrollLedger{retEntry: &tbproto.Entry{Body: &tbproto.EntryBody{}}}
+	adm := &fakeAdmission{}
+	r, _ := api.NewRouter(api.Deps{Ledger: fake, Admission: adm})
+
+	rc := rcForPubkey(pub)
+	resp := r.Dispatch(context.Background(), rc, &tbproto.RpcRequest{
+		Method: tbproto.RpcMethod_RPC_METHOD_ENROLL, Payload: enrollRequestBytes(t, pub),
+	})
+	if resp.Status != tbproto.RpcStatus_RPC_STATUS_OK {
+		t.Fatalf("status = %v: %+v", resp.Status, resp.Error)
+	}
+	if len(adm.ledgerEvts) != 1 {
+		t.Fatalf("expected one ledger event, got %d", len(adm.ledgerEvts))
+	}
+	ev := adm.ledgerEvts[0]
+	if ev.Kind != admission.LedgerEventStarterGrant {
+		t.Errorf("kind = %v, want StarterGrant", ev.Kind)
+	}
+	if ev.CostCredits != 1000 {
+		t.Errorf("credits = %d, want 1000", ev.CostCredits)
+	}
+	var wantID ids.IdentityID
+	sum := sha256.Sum256(pub)
+	copy(wantID[:], sum[:])
+	if ev.ConsumerID != wantID {
+		t.Errorf("consumer id = %x, want the mTLS-bound identity %x", ev.ConsumerID, wantID)
 	}
 }
 
