@@ -4,23 +4,16 @@ package driver
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"time"
 
-	quicgo "github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 
 	tbproto "github.com/token-bay/token-bay/shared/proto"
 	"github.com/token-bay/token-bay/shared/signing"
-	"github.com/token-bay/token-bay/tracker/internal/server"
 )
 
 // balanceALPN is the Token-Bay tracker<->plugin QUIC ALPN. Mirrors
@@ -47,7 +40,10 @@ const dialTimeout = 10 * time.Second
 // and verifies the returned SignedBalanceSnapshot's tracker signature
 // against the tracker's own pubkey (recovered from the cert it presented
 // during the handshake, which is already bound to trackerSPKIHash by the
-// TLS verify callback below).
+// TLS verify callback).
+//
+// One-shot convenience over the reusable RPCClient (rpc.go), which owns
+// the dial/pin/heartbeat/framing machinery.
 //
 // Returns the verified snapshot on success. Callers read
 // snap.GetBody().GetCredits() for the balance; see BalanceCredits for a
@@ -56,100 +52,12 @@ func BalanceOf(trackerAddr string, trackerSPKIHash [32]byte, identityID [32]byte
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
 
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	cli, err := DialRPC(ctx, trackerAddr, trackerSPKIHash)
 	if err != nil {
-		return nil, fmt.Errorf("driver: generate client identity: %w", err)
+		return nil, err
 	}
-	cliCert, err := server.CertFromIdentity(priv)
-	if err != nil {
-		return nil, fmt.Errorf("driver: build client cert: %w", err)
-	}
-
-	var trackerPub ed25519.PublicKey
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cliCert},
-		//nolint:gosec // G402: InsecureSkipVerify is required so quic-go
-		// invokes VerifyPeerCertificate instead of doing web-PKI chain
-		// validation; the SPKI pin below is the real identity check
-		// (same pattern as tracker/test/integration's fixture.dial).
-		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return errors.New("driver: tracker presented no certificate")
-			}
-			parsed, err := x509.ParseCertificate(rawCerts[0])
-			if err != nil {
-				return fmt.Errorf("driver: parse tracker cert: %w", err)
-			}
-			got := sha256.Sum256(parsed.RawSubjectPublicKeyInfo)
-			if got != trackerSPKIHash {
-				return fmt.Errorf("driver: tracker SPKI mismatch: got %x want %x", got, trackerSPKIHash)
-			}
-			pub, ok := parsed.PublicKey.(ed25519.PublicKey)
-			if !ok {
-				return errors.New("driver: tracker cert is not Ed25519")
-			}
-			trackerPub = pub
-			return nil
-		},
-		NextProtos:             []string{balanceALPN},
-		MinVersion:             tls.VersionTLS13,
-		SessionTicketsDisabled: true,
-	}
-
-	conn, err := quicgo.DialAddr(ctx, trackerAddr, tlsCfg, &quicgo.Config{
-		EnableDatagrams: false,
-		Allow0RTT:       false,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("driver: quic dial %s: %w", trackerAddr, err)
-	}
-	defer func() { _ = conn.CloseWithError(0, "driver: balance rpc done") }()
-
-	// tracker/internal/server's serveConn loop blocks its first
-	// AcceptStream on a dedicated heartbeat stream before entering the
-	// per-connection RPC loop (see tracker/test/integration/rpc_path_test.go
-	// openHB) — open and hold one open for the lifetime of the RPC.
-	hb, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("driver: open heartbeat stream: %w", err)
-	}
-	defer hb.Close()
-
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("driver: open rpc stream: %w", err)
-	}
-	defer stream.Close()
-
-	payload, err := proto.Marshal(&tbproto.BalanceRequest{IdentityId: identityID[:]})
-	if err != nil {
-		return nil, fmt.Errorf("driver: marshal BalanceRequest: %w", err)
-	}
-	req := &tbproto.RpcRequest{Method: tbproto.RpcMethod_RPC_METHOD_BALANCE, Payload: payload}
-	if err := writeFrame(stream, req, maxBalanceFrameSize); err != nil {
-		return nil, fmt.Errorf("driver: write BALANCE request: %w", err)
-	}
-
-	var resp tbproto.RpcResponse
-	if err := readFrame(stream, &resp, maxBalanceFrameSize); err != nil {
-		return nil, fmt.Errorf("driver: read BALANCE response: %w", err)
-	}
-	if resp.Status != tbproto.RpcStatus_RPC_STATUS_OK {
-		return nil, fmt.Errorf("driver: BALANCE rpc status=%s error=%v", resp.Status, resp.GetError())
-	}
-
-	var snap tbproto.SignedBalanceSnapshot
-	if err := proto.Unmarshal(resp.Payload, &snap); err != nil {
-		return nil, fmt.Errorf("driver: unmarshal SignedBalanceSnapshot: %w", err)
-	}
-	if trackerPub == nil {
-		return nil, errors.New("driver: tracker pubkey not captured during handshake")
-	}
-	if !signing.VerifyBalanceSnapshot(trackerPub, &snap) {
-		return nil, errors.New("driver: SignedBalanceSnapshot failed tracker signature verification")
-	}
-	return &snap, nil
+	defer func() { _ = cli.Close() }()
+	return cli.VerifiedBalance(ctx, identityID)
 }
 
 // BalanceCredits is a nil-safe convenience accessor for the snapshot's

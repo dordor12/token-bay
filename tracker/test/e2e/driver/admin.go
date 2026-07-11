@@ -293,3 +293,152 @@ func (a *Admin) Reservations(ctx context.Context) ([]ReservationConsumer, error)
 	}
 	return out, nil
 }
+
+// postJSON marshals body (skipped when nil) and POSTs it to path,
+// decoding a 2xx JSON response into a generic map. Shared by the
+// operator-action routes below, whose response shapes are small ad-hoc
+// JSON objects (see tracker/internal/admin/handlers.go).
+func (a *Admin) postJSON(ctx context.Context, path string, body any) (map[string]any, error) {
+	var rdr io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("driver: marshal body for %s: %w", path, err)
+		}
+		rdr = strings.NewReader(string(raw))
+	}
+	var out map[string]any
+	if err := a.do(ctx, http.MethodPost, path, rdr, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PeerAddSpec is the POST /peers/add JSON body (handlers.go
+// peersAddBody). TrackerID is the FEDERATION tracker id (sha256 of the
+// raw pubkey), hex; PubKey is the raw 32-byte Ed25519 pubkey, hex.
+type PeerAddSpec struct {
+	TrackerID string `json:"tracker_id"`
+	PubKey    string `json:"pubkey"`
+	Addr      string `json:"addr"`
+	Region    string `json:"region"`
+}
+
+// PeersAdd calls POST /peers/add. 202 on success (dial is async).
+func (a *Admin) PeersAdd(ctx context.Context, spec PeerAddSpec) (map[string]any, error) {
+	return a.postJSON(ctx, "/peers/add", spec)
+}
+
+// PeersRemove calls POST /peers/remove.
+func (a *Admin) PeersRemove(ctx context.Context, trackerIDHex string) (map[string]any, error) {
+	return a.postJSON(ctx, "/peers/remove", map[string]string{"tracker_id": trackerIDHex})
+}
+
+// Maintenance calls POST /maintenance — this triggers a full graceful
+// drain of the tracker process (handleMaintenance fires cmd/run_cmd's
+// signal-context cancel asynchronously and answers 202 {draining:true}
+// immediately). Callers MUST restore the tracker afterward; see
+// TestScenario27_MaintenanceDrain.
+func (a *Admin) Maintenance(ctx context.Context) (map[string]any, error) {
+	return a.postJSON(ctx, "/maintenance", nil)
+}
+
+// ForceFailInflight calls POST /broker/inflight/fail/{reqIDHex}.
+func (a *Admin) ForceFailInflight(ctx context.Context, reqIDHex string) (map[string]any, error) {
+	return a.postJSON(ctx, "/broker/inflight/fail/"+reqIDHex, nil)
+}
+
+// ForceReleaseReservation calls POST /broker/reservations/release/{reqIDHex}.
+func (a *Admin) ForceReleaseReservation(ctx context.Context, reqIDHex string) (map[string]any, error) {
+	return a.postJSON(ctx, "/broker/reservations/release/"+reqIDHex, nil)
+}
+
+// ClearEquivocation calls POST /federation/peers/{trackerIDHex}/clear_equivocation.
+// Idempotent server-side: {"cleared": false} means the sticky flag was
+// already not set.
+func (a *Admin) ClearEquivocation(ctx context.Context, trackerIDHex string) (map[string]any, error) {
+	return a.postJSON(ctx, "/federation/peers/"+trackerIDHex+"/clear_equivocation", nil)
+}
+
+// TransferReversal calls POST /federation/transfer_reversal.
+func (a *Admin) TransferReversal(ctx context.Context, sourceTrackerIDHex, nonceHex, evidence string) (map[string]any, error) {
+	return a.postJSON(ctx, "/federation/transfer_reversal", map[string]string{
+		"source_tracker_id": sourceTrackerIDHex,
+		"nonce":             nonceHex,
+		"evidence":          evidence,
+	})
+}
+
+// AdmissionStatus calls GET /admission/status.
+func (a *Admin) AdmissionStatus(ctx context.Context) (map[string]any, error) {
+	var out map[string]any
+	if err := a.do(ctx, http.MethodGet, "/admission/status", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdmissionQueue calls GET /admission/queue.
+func (a *Admin) AdmissionQueue(ctx context.Context) ([]map[string]any, error) {
+	var out []map[string]any
+	if err := a.do(ctx, http.MethodGet, "/admission/queue", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdmissionConsumer calls GET /admission/consumer/{idHex}.
+func (a *Admin) AdmissionConsumer(ctx context.Context, idHex string) (map[string]any, error) {
+	var out map[string]any
+	if err := a.do(ctx, http.MethodGet, "/admission/consumer/"+idHex, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdmissionSeeder calls GET /admission/seeder/{idHex}.
+func (a *Admin) AdmissionSeeder(ctx context.Context, idHex string) (map[string]any, error) {
+	var out map[string]any
+	if err := a.do(ctx, http.MethodGet, "/admission/seeder/"+idHex, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdmissionBlocklist calls GET /admission/peers/blocklist.
+func (a *Admin) AdmissionBlocklist(ctx context.Context) ([]string, error) {
+	var out []string
+	if err := a.do(ctx, http.MethodGet, "/admission/peers/blocklist", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdmissionBlocklistAdd calls POST /admission/peers/blocklist/{peerIDHex}.
+func (a *Admin) AdmissionBlocklistAdd(ctx context.Context, peerIDHex string) (map[string]any, error) {
+	return a.postJSON(ctx, "/admission/peers/blocklist/"+peerIDHex, nil)
+}
+
+// AdmissionBlocklistRemove calls DELETE /admission/peers/blocklist/{peerIDHex}.
+func (a *Admin) AdmissionBlocklistRemove(ctx context.Context, peerIDHex string) (map[string]any, error) {
+	var out map[string]any
+	if err := a.do(ctx, http.MethodDelete, "/admission/peers/blocklist/"+peerIDHex, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AdmissionSnapshotForce calls POST /admission/snapshot.
+func (a *Admin) AdmissionSnapshotForce(ctx context.Context) (map[string]any, error) {
+	return a.postJSON(ctx, "/admission/snapshot", nil)
+}
+
+// AdmissionQueueDrain calls POST /admission/queue/drain with {"n": n}.
+func (a *Admin) AdmissionQueueDrain(ctx context.Context, n int) (map[string]any, error) {
+	return a.postJSON(ctx, "/admission/queue/drain", map[string]int{"n": n})
+}
+
+// AdmissionRecompute calls POST /admission/recompute/{consumerIDHex}.
+func (a *Admin) AdmissionRecompute(ctx context.Context, consumerIDHex string) (map[string]any, error) {
+	return a.postJSON(ctx, "/admission/recompute/"+consumerIDHex, nil)
+}

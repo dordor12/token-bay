@@ -15,6 +15,11 @@ services:
     ports:
       - "9090:9090"
       - "9100:9100"
+      # QUIC RPC listener (server.listen_addr), published so host-side
+      # scenario tests can drive RPCs directly via driver.RPCClient
+      # (test/e2e/driver/rpc.go) instead of only through the actor
+      # containers. UDP: QUIC rides on UDP datagrams.
+      - "7777:7777/udp"
     networks:
       - tokenbay-e2e
     healthcheck:
