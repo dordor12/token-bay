@@ -2,7 +2,6 @@ package server
 
 import "github.com/prometheus/client_golang/prometheus"
 
-//nolint:unused
 type udpMetrics struct {
 	stunRequests   *prometheus.CounterVec
 	turnDatagrams  *prometheus.CounterVec
@@ -12,8 +11,6 @@ type udpMetrics struct {
 
 // newUDPMetrics builds the UDP data-plane collectors. activeBindingsFn samples
 // the live relay binding count at scrape time.
-//
-//nolint:unused
 func newUDPMetrics(activeBindingsFn func() float64) *udpMetrics {
 	return &udpMetrics{
 		stunRequests: prometheus.NewCounterVec(
@@ -30,7 +27,6 @@ func newUDPMetrics(activeBindingsFn func() float64) *udpMetrics {
 	}
 }
 
-//nolint:unused
 func (m *udpMetrics) collectors() []prometheus.Collector {
 	return []prometheus.Collector{m.stunRequests, m.turnDatagrams, m.turnBytes, m.activeBindings}
 }
