@@ -269,6 +269,17 @@ func TestCompose_UpArgs_WithProject(t *testing.T) {
 		c.UpArgs())
 }
 
+func TestCompose_UpArgs_WithExtraFiles(t *testing.T) {
+	c := Compose{
+		File:       "compose.e2e.yaml",
+		ExtraFiles: []string{"compose.cover.yaml"},
+		Project:    "tokenbay-e2e",
+	}
+	assert.Equal(t,
+		[]string{"compose", "-f", "compose.e2e.yaml", "-f", "compose.cover.yaml", "-p", "tokenbay-e2e", "up", "-d", "--build"},
+		c.UpArgs())
+}
+
 func TestCompose_DownArgs(t *testing.T) {
 	c := Compose{File: "compose.e2e.yaml"}
 	assert.Equal(t, []string{"compose", "-f", "compose.e2e.yaml", "down"}, c.DownArgs(false))

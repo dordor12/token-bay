@@ -115,7 +115,25 @@ func TestMain(m *testing.M) {
 func runTestMain(m *testing.M) (exitCode int) {
 	genDir := filepath.Join(e2eDir, ".gen")
 
+	// E2E_REUSE_STACK=1 makes TestMain attach to an already-running
+	// compose stack instead of owning its lifecycle: skip artifact
+	// generation, Up and teardown, but still poll every service healthy
+	// before m.Run(). The coverage runner (test/e2e/run-cover.sh) uses
+	// this — it must start/stop the stack itself with an extra compose
+	// override (-f compose.cover.yaml) and SIGTERM the trackers after
+	// the tests so the coverage runtime flushes.
+	reuseStack := os.Getenv("E2E_REUSE_STACK") == "1"
+
 	composeHandle = driver.Compose{File: filepath.Join(e2eDir, "compose.e2e.yaml"), Project: composeProjectID}
+	// E2E_COMPOSE_EXTRA_FILES (os.PathListSeparator-separated) layers
+	// override files onto every compose invocation the scenarios make
+	// through compose() — required alongside E2E_REUSE_STACK so
+	// subcommands that materialize new containers from the file
+	// definitions (driver.Compose.Run) match the running stack's
+	// overridden topology.
+	if extra := os.Getenv("E2E_COMPOSE_EXTRA_FILES"); extra != "" {
+		composeHandle.ExtraFiles = filepath.SplitList(extra)
+	}
 	adminAClient = driver.NewAdmin(adminABaseURL, adminATokenE2E)
 	adminBClient = driver.NewAdmin(adminBBaseURL, adminBTokenE2E)
 	consumerCli = driver.NewConsumerCtl(consumerBaseURL)
@@ -132,18 +150,24 @@ func runTestMain(m *testing.M) (exitCode int) {
 			fmt.Fprintln(os.Stderr, "e2e: TestMain panic:", r)
 			exitCode = 1
 		}
-		teardown(genDir)
+		if !reuseStack {
+			teardown(genDir)
+		}
 	}()
 
-	if err := generateArtifacts(genDir); err != nil {
-		fmt.Fprintln(os.Stderr, "e2e: generate artifacts:", err)
-		return 1
-	}
+	if reuseStack {
+		fmt.Fprintln(os.Stderr, "e2e: E2E_REUSE_STACK=1 — attaching to an already-running compose stack (no generate/up/teardown here; the caller owns the lifecycle)...")
+	} else {
+		if err := generateArtifacts(genDir); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: generate artifacts:", err)
+			return 1
+		}
 
-	fmt.Fprintln(os.Stderr, "e2e: bringing up compose stack (assumes token-bay-tracker:dev and tokenbay-e2e-actors:dev images already built — see make -C tracker docker-e2e / plan Task 30)...")
-	if err := composeHandle.Up(); err != nil {
-		fmt.Fprintln(os.Stderr, "e2e: compose up:", err)
-		return 1
+		fmt.Fprintln(os.Stderr, "e2e: bringing up compose stack (assumes token-bay-tracker:dev and tokenbay-e2e-actors:dev images already built — see make -C tracker docker-e2e / plan Task 30)...")
+		if err := composeHandle.Up(); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: compose up:", err)
+			return 1
+		}
 	}
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

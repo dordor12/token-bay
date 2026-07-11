@@ -12,9 +12,16 @@ import (
 // file (tracker/test/e2e/compose.e2e.yaml, per Task 22). Project is
 // optional — when empty, `-p` is omitted and docker compose derives the
 // project name from the compose file's directory (its normal default).
+// ExtraFiles, when non-empty, are layered over File as additional -f
+// flags (docker compose override semantics) — the coverage run
+// (test/e2e/run-cover.sh) uses this so scenario-driven subcommands
+// (notably Run, which creates a fresh container from the file
+// definitions) resolve to the same overridden topology
+// (compose.cover.yaml) the stack was started with.
 type Compose struct {
-	File    string
-	Project string
+	File       string
+	ExtraFiles []string
+	Project    string
 }
 
 // composeArgs is the pure arg-vector builder shared by every subcommand
@@ -22,6 +29,9 @@ type Compose struct {
 // docker would receive without spawning a process.
 func (c Compose) composeArgs(sub ...string) []string {
 	args := []string{"compose", "-f", c.File}
+	for _, f := range c.ExtraFiles {
+		args = append(args, "-f", f)
+	}
 	if c.Project != "" {
 		args = append(args, "-p", c.Project)
 	}
