@@ -11,8 +11,11 @@ import (
 
 // runStartupIntegrityCheck walks the local ledger chain before any
 // server starts. Spec §8 acceptance: hash(entry[n-1]) == entry[n].prev_hash
-// for all n. A corrupt chain must NOT serve traffic, so the caller is
-// expected to fail startup non-zero on a non-nil return.
+// for all n, plus a per-entry content check — each body's recomputed hash
+// must equal its append-time stored hash, which is what covers the tip
+// (no successor's prev_hash ever vouches for it). A corrupt chain must
+// NOT serve traffic, so the caller is expected to fail startup non-zero
+// on a non-nil return.
 //
 // On success the gate emits an info-level structured event ("ledger
 // integrity verified at startup") so operators can confirm it ran. The

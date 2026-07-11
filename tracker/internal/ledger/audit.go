@@ -14,9 +14,19 @@ import (
 const auditBatchSize = 1000
 
 // AssertChainIntegrity walks entries with seq in (sinceSeq, untilSeq],
-// verifying each entry's prev_hash equals the previous entry's body hash.
-// Returns nil on a chain whose entries link correctly; an error
-// describing the first break otherwise.
+// verifying, for each entry:
+//
+//  1. Linkage: prev_hash equals the previous entry's body hash.
+//  2. Content: the body's recomputed hash equals the hash committed at
+//     append time (the row's stored hash column).
+//
+// The content check is what covers the tip. Linkage alone verifies an
+// entry's content only through its successor's prev_hash — and the tip
+// has no successor, so a corrupted tip body would pass a linkage-only
+// walk undetected.
+//
+// Returns nil on an intact chain; an error describing the first break
+// or corruption otherwise.
 //
 // untilSeq=0 means "up to current tip". Used for ad-hoc CI audits and
 // operator tooling; not called on every read.
@@ -55,7 +65,7 @@ func (l *Ledger) AssertChainIntegrity(ctx context.Context, sinceSeq, untilSeq ui
 
 	cursor := sinceSeq
 	for cursor < untilSeq {
-		batch, err := l.store.EntriesSince(ctx, cursor, auditBatchSize)
+		batch, err := l.store.EntriesWithHashSince(ctx, cursor, auditBatchSize)
 		if err != nil {
 			return fmt.Errorf("ledger: AssertChainIntegrity page: %w", err)
 		}
@@ -63,21 +73,31 @@ func (l *Ledger) AssertChainIntegrity(ctx context.Context, sinceSeq, untilSeq ui
 			break
 		}
 		for _, e := range batch {
-			if e.Body.Seq > untilSeq {
+			body := e.Entry.Body
+			if body.Seq > untilSeq {
 				return nil
 			}
-			if !bytes.Equal(e.Body.PrevHash, prevHash) {
+			if !bytes.Equal(body.PrevHash, prevHash) {
 				return fmt.Errorf(
 					"ledger: chain break at seq=%d: prev_hash=%x, expected=%x",
-					e.Body.Seq, e.Body.PrevHash, prevHash,
+					body.Seq, body.PrevHash, prevHash,
 				)
 			}
-			h, err := entry.Hash(e.Body)
+			h, err := entry.Hash(body)
 			if err != nil {
-				return fmt.Errorf("ledger: AssertChainIntegrity hash seq=%d: %w", e.Body.Seq, err)
+				return fmt.Errorf("ledger: AssertChainIntegrity hash seq=%d: %w", body.Seq, err)
+			}
+			// Content check: the recomputed body hash must equal the hash
+			// committed at append time. This is the only check that covers
+			// the tip — no successor's prev_hash ever vouches for it.
+			if !bytes.Equal(h[:], e.StoredHash) {
+				return fmt.Errorf(
+					"ledger: content corruption at seq=%d: body hash=%x, stored hash=%x",
+					body.Seq, h, e.StoredHash,
+				)
 			}
 			prevHash = h[:]
-			cursor = e.Body.Seq
+			cursor = body.Seq
 		}
 	}
 	return nil

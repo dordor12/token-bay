@@ -66,6 +66,33 @@ func TestEntriesSince_EmptyChain(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestEntriesWithHashSince_ReturnsStoredHashPerRow(t *testing.T) {
+	s := openTempStore(t)
+	hashes := chainOfN(t, s, 5)
+
+	got, err := s.EntriesWithHashSince(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 5)
+
+	for i, e := range got {
+		assert.Equal(t, uint64(i+1), e.Entry.Body.Seq, "entries returned in ascending seq order")
+		assert.Equal(t, hashes[i][:], e.StoredHash, "stored hash column returned verbatim for seq %d", i+1)
+	}
+}
+
+func TestEntriesWithHashSince_RespectsCursorAndLimit(t *testing.T) {
+	s := openTempStore(t)
+	hashes := chainOfN(t, s, 5)
+
+	got, err := s.EntriesWithHashSince(context.Background(), 1, 2)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, uint64(2), got[0].Entry.Body.Seq)
+	assert.Equal(t, hashes[1][:], got[0].StoredHash)
+	assert.Equal(t, uint64(3), got[1].Entry.Body.Seq)
+	assert.Equal(t, hashes[2][:], got[1].StoredHash)
+}
+
 func TestEntriesSince_CorruptCanonicalReturnsError(t *testing.T) {
 	s := openTempStore(t)
 	ctx := context.Background()
