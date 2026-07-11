@@ -62,17 +62,14 @@ func TestScenario29_DishonestSeederOverReportRejected(t *testing.T) {
 	balanceBefore := consumerBalance(ctx, t, consumerID.IdentityIDHex)
 	usageBefore := sqlCount(t, "tracker-a", "SELECT count(*) FROM entries WHERE kind=1;")
 
-	res, err := consumerCtl().Request(ctx, driver.RequestSpec{
+	// The seeder must genuinely serve the tunnel (so its post-serve report is
+	// real), retrying past the fixed-port serve race; then the tracker rejects
+	// the inflated report.
+	res := requestServedBody(ctx, t, driver.RequestSpec{
 		Model:           sonnetModel,
 		MaxInputTokens:  5,
 		MaxOutputTokens: 5,
 	})
-	require.NoError(t, err, "consumer POST /request")
-	require.Equalf(t, "seeder_assignment", res.Outcome,
-		"broker still assigns the seeder — dishonesty only surfaces at settlement (error=%q)", res.Error)
-	// The seeder genuinely served the tunnel: the consumer read the canned SSE
-	// back. So the report the tracker rejects is a real post-serve report, not
-	// a request that simply never ran.
 	require.Equal(t, cannedSSEBody, res.ResponseBody, "consumer must have received the served SSE body")
 
 	reqID := res.ReservationTokenHex

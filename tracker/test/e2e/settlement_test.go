@@ -138,15 +138,43 @@ func TestScenario03_BrokerAssignment(t *testing.T) {
 func TestScenario04_TunnelDataPlane(t *testing.T) {
 	ctx := context.Background()
 
-	res, err := consumerCtl().Request(ctx, driver.RequestSpec{
+	res := requestServedBody(ctx, t, driver.RequestSpec{
 		Model:           sonnetModel,
 		MaxInputTokens:  scenario4MaxInputTokens,
 		MaxOutputTokens: scenario4MaxOutputTokens,
 	})
-	require.NoError(t, err, "consumer POST /request")
-	require.Equal(t, "seeder_assignment", res.Outcome, "unexpected outcome (error=%q)", res.Error)
 	assert.Equal(t, cannedSSEBody, res.ResponseBody,
 		"tunnel round-trip must return the seeder's configured canned SSE body verbatim")
+}
+
+// requestServedBody issues a consumer request and retries while the tunnel
+// round-trip comes back empty. The seeder actor serves through a single fixed
+// tunnel port, rebound per offer, so a request that races a prior serve's
+// listener teardown can read an empty body — the real consumer retries a
+// failed tunnel too. Abandoned empty attempts never settle (no usage report),
+// so they cost no credits; their reservations are force-failed so a retry
+// storm cannot saturate the seeder's load cap.
+func requestServedBody(ctx context.Context, t *testing.T, spec driver.RequestSpec) *driver.RequestResult {
+	t.Helper()
+	var out *driver.RequestResult
+	ok := pollUntilTrue(45*time.Second, 1*time.Second, func() bool {
+		r, err := consumerCtl().Request(ctx, spec)
+		if err != nil {
+			t.Logf("e2e: requestServedBody: request error: %v", err)
+			return false
+		}
+		if r.Outcome == "seeder_assignment" && r.ResponseBody != "" {
+			out = r
+			return true
+		}
+		if r.ReservationTokenHex != "" {
+			_, _ = adminA().ForceFailInflight(ctx, r.ReservationTokenHex)
+		}
+		t.Logf("e2e: requestServedBody: retrying (outcome=%q body_len=%d err=%q)", r.Outcome, len(r.ResponseBody), r.Error)
+		return false
+	})
+	require.True(t, ok, "consumer must eventually get a non-empty served SSE body")
+	return out
 }
 
 // TestScenario05_SettlementHappyPath is scenario 5 (Task 25 Step 3): after

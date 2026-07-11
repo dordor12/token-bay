@@ -12,6 +12,15 @@ package driver
 // adds `sqlite` to the runtime `apk add` in
 // tracker/deployments/docker/Dockerfile (Task 23 Dockerfile addendum);
 // this helper only shells out to the binary, it does not install it.
-func SQLiteQuery(c Compose, service, dbPath, sql string) (string, error) {
+//
+// Takes the minimal Exec-capable surface so it works over either backend —
+// the legacy Compose shell-out or the testcontainers Stack.
+func SQLiteQuery(c execer, service, dbPath, sql string) (string, error) {
 	return c.Exec(service, "sqlite3", dbPath, sql)
+}
+
+// execer is the one-method surface SQLiteQuery needs; both Compose and Stack
+// satisfy it.
+type execer interface {
+	Exec(service string, args ...string) (string, error)
 }

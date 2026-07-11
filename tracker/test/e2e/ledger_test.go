@@ -209,8 +209,19 @@ func TestScenario09_CorruptionTripwire(t *testing.T) {
 	_, healthErr := adminA().Health(ctx)
 	assert.Error(t, healthErr, "tracker-a must not serve /health against a corrupted ledger")
 
+	// The tracker must never run NORMALLY on a corrupted chain. How that
+	// manifests at the container level depends on the backend's restart
+	// policy: docker-compose (restart:no) leaves it "Exited", while the
+	// testcontainers backend re-launches it into the same failing gate
+	// (crash-loop, seen mid-restart as "health: starting"). Either way it
+	// must never reach a healthy state — that is the invariant.
 	if psOut, psErr := compose().PsAll(); psErr == nil {
-		assert.Contains(t, psOut, "Exited", "tracker-a container should have exited (crash-fast on the startup gate) rather than keep running")
+		for _, line := range strings.Split(psOut, "\n") {
+			if strings.Contains(line, "tracker-a") {
+				assert.NotContains(t, line, "(healthy)",
+					"tracker-a must never be healthy on a corrupted chain (ps line: %q)", strings.TrimSpace(line))
+			}
+		}
 	}
 
 	// Restore happens in the t.Cleanup registered above.

@@ -22,7 +22,7 @@ test-integration:
 test-e2e:
 	docker build -f deployments/docker/Dockerfile -t token-bay-tracker:dev ../
 	docker build -f test/e2e/Dockerfile.actors -t tokenbay-e2e-actors:dev ../
-	go test -tags=e2e -count=1 -timeout=20m ./test/e2e/...
+	TESTCONTAINERS_RYUK_DISABLED=true go test -tags=e2e -count=1 -timeout=20m ./test/e2e/...
 
 # test-e2e-cover runs the same e2e suite against coverage-instrumented
 # trackers (go build -cover + GOCOVERDIR, Go integration coverage) and

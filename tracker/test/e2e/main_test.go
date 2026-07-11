@@ -68,8 +68,25 @@ func init() {
 	e2eDir = filepath.Dir(thisFile)
 }
 
+// stackDriver is the per-service container-control surface the scenarios use
+// through compose(). Both the legacy docker-compose shell-out (driver.Compose,
+// used by the E2E_REUSE_STACK coverage path) and the testcontainers-go
+// topology (driver.Stack, the default path) satisfy it, so scenario code is
+// identical on either backend.
+type stackDriver interface {
+	Exec(service string, args ...string) (string, error)
+	Logs(service string) (string, error)
+	Restart(service string) error
+	Stop(service string) error
+	Start(service string) error
+	Kill(service, signal string) error
+	PsAll() (string, error)
+	Run(service, entrypoint string, args ...string) (string, error)
+}
+
 var (
-	composeHandle driver.Compose
+	composeHandle stackDriver   // scenario container-control (Compose or Stack)
+	stackHandle   *driver.Stack // non-nil on the default testcontainers path
 	adminAClient  *driver.Admin
 	adminBClient  *driver.Admin
 	consumerCli   *driver.ConsumerCtl
@@ -99,9 +116,10 @@ func seederCtl() *driver.SeederCtl { return seederCli }
 //nolint:unused // consumed once federation_test.go (plan Task 27) lands.
 func fedactorCtl() *driver.FedactorCtl { return fedactorCli }
 
-// compose returns the Compose handle for the live stack, for scenario
-// files that need Exec/Logs/Ps or driver.SQLiteQuery.
-func compose() driver.Compose { return composeHandle }
+// compose returns the container-control handle for the live stack, for
+// scenario files that need Exec/Logs/Restart/etc. Backed by driver.Stack
+// (testcontainers) by default, or driver.Compose under E2E_REUSE_STACK.
+func compose() stackDriver { return composeHandle }
 
 // TestMain owns the whole-stack lifecycle for every e2e scenario in this
 // package: generate the deterministic key/config artifacts, bring the
@@ -124,15 +142,20 @@ func runTestMain(m *testing.M) (exitCode int) {
 	// the tests so the coverage runtime flushes.
 	reuseStack := os.Getenv("E2E_REUSE_STACK") == "1"
 
-	composeHandle = driver.Compose{File: filepath.Join(e2eDir, "compose.e2e.yaml"), Project: composeProjectID}
-	// E2E_COMPOSE_EXTRA_FILES (os.PathListSeparator-separated) layers
-	// override files onto every compose invocation the scenarios make
-	// through compose() — required alongside E2E_REUSE_STACK so
-	// subcommands that materialize new containers from the file
-	// definitions (driver.Compose.Run) match the running stack's
-	// overridden topology.
-	if extra := os.Getenv("E2E_COMPOSE_EXTRA_FILES"); extra != "" {
-		composeHandle.ExtraFiles = filepath.SplitList(extra)
+	composeFile := filepath.Join(e2eDir, "compose.e2e.yaml")
+	if reuseStack {
+		// Coverage path: attach to a stack the caller (run-cover.sh) brought
+		// up itself with compose overrides, via the legacy shell-out driver.
+		cmp := driver.Compose{File: composeFile, Project: composeProjectID}
+		// E2E_COMPOSE_EXTRA_FILES (os.PathListSeparator-separated) layers
+		// override files onto every compose invocation the scenarios make
+		// through compose() — required alongside E2E_REUSE_STACK so
+		// subcommands that materialize new containers from the file
+		// definitions match the running stack's overridden topology.
+		if extra := os.Getenv("E2E_COMPOSE_EXTRA_FILES"); extra != "" {
+			cmp.ExtraFiles = filepath.SplitList(extra)
+		}
+		composeHandle = cmp
 	}
 	adminAClient = driver.NewAdmin(adminABaseURL, adminATokenE2E)
 	adminBClient = driver.NewAdmin(adminBBaseURL, adminBTokenE2E)
@@ -163,9 +186,19 @@ func runTestMain(m *testing.M) (exitCode int) {
 			return 1
 		}
 
-		fmt.Fprintln(os.Stderr, "e2e: bringing up compose stack (assumes token-bay-tracker:dev and tokenbay-e2e-actors:dev images already built — see make -C tracker docker-e2e / plan Task 30)...")
-		if err := composeHandle.Up(); err != nil {
-			fmt.Fprintln(os.Stderr, "e2e: compose up:", err)
+		fmt.Fprintln(os.Stderr, "e2e: bringing up the testcontainers stack (assumes token-bay-tracker:dev and tokenbay-e2e-actors:dev images already built — see make -C tracker test-e2e)...")
+		st, err := driver.NewStack([]string{composeFile}, composeProjectID, nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: new stack:", err)
+			return 1
+		}
+		stackHandle = st
+		composeHandle = st
+
+		upCtx, upCancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer upCancel()
+		if err := st.Up(upCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: stack up:", err)
 			return 1
 		}
 	}
@@ -174,8 +207,8 @@ func runTestMain(m *testing.M) (exitCode int) {
 	defer cancel()
 	if err := waitReady(waitCtx); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: stack did not become ready:", err)
-		if logs, logErr := composeHandle.Ps(); logErr == nil {
-			fmt.Fprintln(os.Stderr, "e2e: compose ps:\n"+logs)
+		if logs, logErr := composeHandle.PsAll(); logErr == nil {
+			fmt.Fprintln(os.Stderr, "e2e: docker ps -a:\n"+logs)
 		}
 		return 1
 	}
@@ -215,8 +248,12 @@ func generateArtifacts(genDir string) error {
 // from a clean ledger, and removes the generated key/config artifacts
 // (they are seed-derived and gitignored — never committed).
 func teardown(genDir string) {
-	if err := composeHandle.Down(true); err != nil {
-		fmt.Fprintln(os.Stderr, "e2e: compose down:", err)
+	if stackHandle != nil {
+		downCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		if err := stackHandle.Down(downCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: stack down:", err)
+		}
 	}
 	if err := os.RemoveAll(genDir); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: remove .gen:", err)
