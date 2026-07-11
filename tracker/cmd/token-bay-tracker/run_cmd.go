@@ -284,6 +284,23 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
+			udpPlane, err := server.NewUDPDataPlane(server.UDPDeps{
+				STUNAddr:   cfg.STUNTURN.STUNListenAddr,
+				TURNAddr:   cfg.STUNTURN.TURNListenAddr,
+				Alloc:      alloc,
+				Now:        time.Now,
+				SessionTTL: time.Duration(cfg.STUNTURN.SessionTTLSeconds) * time.Second,
+				Logger:     logger,
+			})
+			if err != nil {
+				return fmt.Errorf("udp data plane: %w", err)
+			}
+			for _, c := range udpPlane.Collectors() {
+				if err := prometheus.DefaultRegisterer.Register(c); err != nil {
+					return fmt.Errorf("udp metrics register: %w", err)
+				}
+			}
+
 			// stunturn.Reflect is a STUN binding-response builder; for the
 			// stun_allocate handler we only need the observed remote
 			// address (QUIC's view). NAT translation is a broker-era
@@ -352,10 +369,13 @@ func newRunCmd() *cobra.Command {
 			// surface) don't send the admin token.
 			metricsSrv := buildMetricsServer(cfg)
 
-			startMaintenanceLoops(ctx, logger, fed, reg, alloc, cfg)
+			startMaintenanceLoops(ctx, logger, fed, reg, cfg)
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- srv.Run(ctx) }()
+
+			udpErrCh := make(chan error, 1)
+			go func() { udpErrCh <- udpPlane.Run(ctx) }()
 
 			adminErrCh := make(chan error, 1)
 			go func() { adminErrCh <- adminSrv.Run(ctx) }()
@@ -371,6 +391,13 @@ func newRunCmd() *cobra.Command {
 
 			select {
 			case err := <-errCh:
+				graceCtx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
+				defer cancel()
+				_ = adminSrv.Shutdown(graceCtx)
+				_ = metricsSrv.Shutdown(graceCtx)
+				return err
+			case err := <-udpErrCh:
 				graceCtx, cancel := context.WithTimeout(context.Background(),
 					time.Duration(cfg.Server.ShutdownGraceS)*time.Second)
 				defer cancel()

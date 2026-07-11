@@ -10,7 +10,6 @@ import (
 	"github.com/token-bay/token-bay/tracker/internal/config"
 	"github.com/token-bay/token-bay/tracker/internal/federation"
 	"github.com/token-bay/token-bay/tracker/internal/registry"
-	"github.com/token-bay/token-bay/tracker/internal/stunturn"
 )
 
 // registrySweepInterval is how often the stale-seeder reaper runs. Short
@@ -18,26 +17,20 @@ import (
 // window, large enough to not noticeably contend with Heartbeat writes.
 const registrySweepInterval = 30 * time.Second
 
-// stunturnSweepInterval matches the cadence the allocator doc recommends
-// ("intended to run from a single goroutine on a periodic timer (e.g.,
-// every 1s)"). Allocator.Sweep is O(active sessions) and lock-light.
-const stunturnSweepInterval = time.Second
-
 // startMaintenanceLoops spawns the periodic background routines that the
 // composition root owns but no subsystem owns internally: federation root
-// publisher, registry stale-seeder sweep, and STUN/TURN session sweep.
-// All exit on ctx cancel.
+// publisher and registry stale-seeder sweep. STUN/TURN session sweep is
+// owned by server.UDPDataPlane's reaper loop, not here. All exit on ctx
+// cancel.
 func startMaintenanceLoops(
 	ctx context.Context,
 	logger zerolog.Logger,
 	fed *federation.Federation,
 	reg *registry.Registry,
-	alloc *stunturn.Allocator,
 	cfg *config.Config,
 ) {
 	startFederationPublisher(ctx, logger, fed, cfg)
 	startRegistrySweeper(ctx, logger, reg, cfg)
-	startStunturnSweeper(ctx, alloc)
 }
 
 // startFederationPublisher ticks at cfg.Federation.PublishCadenceS and
@@ -112,25 +105,6 @@ func startRegistrySweeper(
 				if removed > 0 {
 					logger.Debug().Int("removed", removed).Msg("registry: stale seeder sweep")
 				}
-			}
-		}
-	}()
-}
-
-// startStunturnSweeper periodically calls Allocator.Sweep to release
-// sessions whose LastActive exceeds SessionTTL. Without this loop,
-// expired TURN sessions accumulate and the bandwidth-cap accounting
-// becomes inaccurate over a long-running tracker.
-func startStunturnSweeper(ctx context.Context, alloc *stunturn.Allocator) {
-	go func() {
-		t := time.NewTicker(stunturnSweepInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-t.C:
-				alloc.Sweep(now)
 			}
 		}
 	}()
