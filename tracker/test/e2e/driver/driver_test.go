@@ -302,6 +302,59 @@ func TestCompose_PsArgs(t *testing.T) {
 	assert.Equal(t, []string{"compose", "-f", "compose.e2e.yaml", "ps"}, c.PsArgs())
 }
 
+func TestCompose_PsAllArgs(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml"}
+	assert.Equal(t, []string{"compose", "-f", "compose.e2e.yaml", "ps", "-a"}, c.PsAllArgs())
+}
+
+func TestCompose_PsAllArgs_WithProject(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml", Project: "tokenbay-e2e"}
+	assert.Equal(t,
+		[]string{"compose", "-f", "compose.e2e.yaml", "-p", "tokenbay-e2e", "ps", "-a"},
+		c.PsAllArgs())
+}
+
+func TestCompose_RestartArgs(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml", Project: "tokenbay-e2e"}
+	assert.Equal(t,
+		[]string{"compose", "-f", "compose.e2e.yaml", "-p", "tokenbay-e2e", "restart", "tracker-a"},
+		c.RestartArgs("tracker-a"))
+}
+
+func TestCompose_StopArgs(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml"}
+	assert.Equal(t, []string{"compose", "-f", "compose.e2e.yaml", "stop", "tracker-a"}, c.StopArgs("tracker-a"))
+}
+
+func TestCompose_StartArgs(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml"}
+	assert.Equal(t, []string{"compose", "-f", "compose.e2e.yaml", "start", "tracker-a"}, c.StartArgs("tracker-a"))
+}
+
+func TestCompose_KillArgs(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml", Project: "tokenbay-e2e"}
+	assert.Equal(t,
+		[]string{"compose", "-f", "compose.e2e.yaml", "-p", "tokenbay-e2e", "kill", "-s", "SIGTERM", "tracker-a"},
+		c.KillArgs("tracker-a", "SIGTERM"))
+}
+
+func TestCompose_RunArgs_NoEntrypoint(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml"}
+	got := c.RunArgs("tracker-a", "")
+	want := []string{"compose", "-f", "compose.e2e.yaml", "run", "--rm", "-T", "tracker-a"}
+	assert.Equal(t, want, got)
+}
+
+func TestCompose_RunArgs_WithEntrypointAndArgs(t *testing.T) {
+	c := Compose{File: "compose.e2e.yaml", Project: "tokenbay-e2e"}
+	got := c.RunArgs("tracker-a", "sh", "-c", "echo hi")
+	want := []string{
+		"compose", "-f", "compose.e2e.yaml", "-p", "tokenbay-e2e",
+		"run", "--rm", "-T", "--entrypoint", "sh", "tracker-a", "-c", "echo hi",
+	}
+	assert.Equal(t, want, got)
+}
+
 // ArgsBuilder calls must not alias/mutate each other's backing arrays —
 // regression guard for a subtle append() bug class.
 func TestCompose_ArgsBuilders_DoNotAlias(t *testing.T) {
