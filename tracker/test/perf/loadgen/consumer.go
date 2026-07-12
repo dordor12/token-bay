@@ -69,7 +69,7 @@ func (c *SimConsumer) Close() { c.cl.close() }
 // initial phase (10k consumers must not fire in lockstep) and ±10%
 // jitter per cycle.
 func (c *SimConsumer) requestLoop(ctx context.Context) {
-	if !sleepCtx(ctx, time.Duration(rand.Int64N(int64(c.opts.RequestEvery)))) {
+	if !sleepCtx(ctx, time.Duration(rand.Int64N(int64(c.opts.RequestEvery)))) { //nolint:gosec // G404: pacing jitter, not crypto
 		return
 	}
 	for {
@@ -83,7 +83,7 @@ func (c *SimConsumer) requestLoop(ctx context.Context) {
 		if done := c.requestOnce(ctx); done {
 			return
 		}
-		jitter := time.Duration(rand.Int64N(int64(c.opts.RequestEvery) / 5))
+		jitter := time.Duration(rand.Int64N(int64(c.opts.RequestEvery) / 5)) //nolint:gosec // G404: pacing jitter, not crypto
 		if !sleepCtx(ctx, c.opts.RequestEvery-c.opts.RequestEvery/10+jitter) {
 			return
 		}

@@ -130,7 +130,7 @@ func (cl *client) markDead() {
 // registry record fresh for admission supply weighting.
 func (cl *client) heartbeatLoop(ctx context.Context, every time.Duration) {
 	var seq uint64
-	if !sleepCtx(ctx, time.Duration(rand.Int64N(int64(every)))) {
+	if !sleepCtx(ctx, time.Duration(rand.Int64N(int64(every)))) { //nolint:gosec // G404: scheduling jitter, not crypto
 		return
 	}
 	t := time.NewTicker(every)
