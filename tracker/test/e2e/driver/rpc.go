@@ -1,4 +1,4 @@
-//go:build e2e
+//go:build e2e || perf
 
 package driver
 
@@ -57,16 +57,27 @@ func DialRPC(ctx context.Context, trackerAddr string, trackerSPKIHash [32]byte) 
 // key, for scenarios that need a stable identity across connections (or
 // need to sign envelopes under the same key the mTLS layer presents).
 func DialRPCWithIdentity(ctx context.Context, trackerAddr string, trackerSPKIHash [32]byte, priv ed25519.PrivateKey) (*RPCClient, error) {
-	cliCert, err := server.CertFromIdentity(priv)
-	if err != nil {
-		return nil, fmt.Errorf("driver: build client cert: %w", err)
-	}
-	id, err := clientIdentityID(priv)
+	tlsCfg, trackerPub, err := clientTLSConfig(trackerSPKIHash, priv)
 	if err != nil {
 		return nil, err
 	}
+	conn, err := quicgo.DialAddr(ctx, trackerAddr, tlsCfg, rpcQUICConfig())
+	if err != nil {
+		return nil, fmt.Errorf("driver: quic dial %s: %w", trackerAddr, err)
+	}
+	return finishDial(ctx, conn, priv, trackerPub)
+}
 
-	var trackerPub ed25519.PublicKey
+// clientTLSConfig builds the mTLS client config that pins the tracker
+// by SPKI hash. trackerPub is filled in during the handshake's
+// VerifyPeerCertificate; read it only after a successful dial.
+func clientTLSConfig(trackerSPKIHash [32]byte, priv ed25519.PrivateKey) (*tls.Config, *ed25519.PublicKey, error) {
+	cliCert, err := server.CertFromIdentity(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("driver: build client cert: %w", err)
+	}
+
+	trackerPub := new(ed25519.PublicKey)
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cliCert},
 		//nolint:gosec // G402: InsecureSkipVerify is required so quic-go
@@ -90,20 +101,31 @@ func DialRPCWithIdentity(ctx context.Context, trackerAddr string, trackerSPKIHas
 			if !ok {
 				return errors.New("driver: tracker cert is not Ed25519")
 			}
-			trackerPub = pub
+			*trackerPub = pub
 			return nil
 		},
 		NextProtos:             []string{balanceALPN},
 		MinVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: true,
 	}
+	return tlsCfg, trackerPub, nil
+}
 
-	conn, err := quicgo.DialAddr(ctx, trackerAddr, tlsCfg, &quicgo.Config{
+// rpcQUICConfig is the QUIC config both dial paths share.
+func rpcQUICConfig() *quicgo.Config {
+	return &quicgo.Config{
 		EnableDatagrams: false,
 		Allow0RTT:       false,
-	})
+	}
+}
+
+// finishDial completes RPCClient construction after the QUIC dial:
+// opens the held heartbeat stream and checks the pinned tracker key.
+func finishDial(ctx context.Context, conn *quicgo.Conn, priv ed25519.PrivateKey, trackerPub *ed25519.PublicKey) (*RPCClient, error) {
+	id, err := clientIdentityID(priv)
 	if err != nil {
-		return nil, fmt.Errorf("driver: quic dial %s: %w", trackerAddr, err)
+		_ = conn.CloseWithError(0, "driver: identity id")
+		return nil, err
 	}
 
 	// The server's serveConn blocks its first AcceptStream on a dedicated
@@ -115,7 +137,7 @@ func DialRPCWithIdentity(ctx context.Context, trackerAddr string, trackerSPKIHas
 		return nil, fmt.Errorf("driver: open heartbeat stream: %w", err)
 	}
 
-	if trackerPub == nil {
+	if trackerPub == nil || *trackerPub == nil {
 		_ = conn.CloseWithError(0, "driver: no tracker pubkey")
 		return nil, errors.New("driver: tracker pubkey not captured during handshake")
 	}
@@ -123,7 +145,7 @@ func DialRPCWithIdentity(ctx context.Context, trackerAddr string, trackerSPKIHas
 	return &RPCClient{
 		conn:       conn,
 		hb:         hb,
-		trackerPub: trackerPub,
+		trackerPub: *trackerPub,
 		priv:       priv,
 		identityID: id,
 		maxFrame:   maxBalanceFrameSize,
