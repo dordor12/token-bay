@@ -145,6 +145,11 @@ func (f *Fleet) Live() []*liveTracker {
 func (f *Fleet) CheckHealth(ctx context.Context) (healthy int) {
 	for _, lt := range f.Live() {
 		state, err := lt.Container.State(ctx)
+		if ctx.Err() != nil {
+			// The run window closed mid-check: a context error is a
+			// shutdown race, never a death verdict.
+			return healthy
+		}
 		if err != nil || !state.Running {
 			f.recordDeath(lt.Node.Name)
 			continue
