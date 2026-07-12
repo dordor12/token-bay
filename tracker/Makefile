@@ -1,4 +1,4 @@
-.PHONY: all test test-integration test-e2e test-e2e-cover lint check build clean run-local docker
+.PHONY: all test test-integration test-e2e test-e2e-cover test-perf lint check build clean run-local docker
 
 all: check build
 
@@ -32,6 +32,20 @@ test-e2e:
 # reuse in TestMain. See test/e2e/run-cover.sh.
 test-e2e-cover:
 	./test/e2e/run-cover.sh
+
+# test-perf builds the tracker image and runs the //go:build perf soak
+# harness (test/perf): 10k simulated consumers + 10k simulated seeders
+# (defaults) against a tracker fleet that keeps growing during the run.
+# Parameters are PERF_* env vars (PERF_DURATION default 1h — see
+# docs/superpowers/specs/tracker/2026-07-12-tracker-perf-ci-design.md §7).
+# PERF_TEST_TIMEOUT must comfortably exceed PERF_DURATION (ramp + drain
+# + fleet setup/teardown ride on top). No -race: the race detector
+# cannot carry 20k-goroutine load, and this tier measures throughput,
+# not data races (make test already covers the concurrent modules).
+PERF_TEST_TIMEOUT ?= 90m
+test-perf:
+	docker build -f deployments/docker/Dockerfile -t token-bay-tracker:dev ../
+	TESTCONTAINERS_RYUK_DISABLED=true go test -tags=perf -count=1 -v -timeout=$(PERF_TEST_TIMEOUT) ./test/perf/...
 
 lint:
 	golangci-lint run ./...
