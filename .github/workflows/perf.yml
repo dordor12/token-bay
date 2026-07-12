@@ -1,0 +1,118 @@
+# Tracker performance CI (docs/superpowers/specs/tracker/
+# 2026-07-12-tracker-perf-ci-design.md §8).
+#
+# Runs the test/perf soak harness — 10k simulated consumers + 10k
+# simulated seeders against a tracker fleet that keeps growing during
+# the run — on PRs carrying the `core` label, or on demand via
+# workflow_dispatch with a configurable duration (default 1 hour).
+#
+# The `core` label is repository metadata: create it once under
+# Settings → Labels. Unlabeled PRs skip the job entirely.
+name: Tracker Perf
+
+on:
+  pull_request:
+    # `labeled` fires when the core label is added to an open PR;
+    # the other types re-run the soak on every push to an
+    # already-labeled PR.
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Run length (Go duration: 30m, 1h, 2h, ...)'
+        required: false
+        default: '1h'
+      consumers:
+        description: 'Simulated consumers'
+        required: false
+        default: '10000'
+      seeders:
+        description: 'Simulated seeders'
+        required: false
+        default: '10000'
+      trackers_max:
+        description: 'Tracker fleet cap (starts at 2, grows to this)'
+        required: false
+        default: '8'
+      tracker_add_interval:
+        description: 'How often a new tracker joins the network'
+        required: false
+        default: '5m'
+
+# An hour-long soak must never pile up behind every push: one run per
+# PR (or per ref for manual runs), newest wins.
+concurrency:
+  group: tracker-perf-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perf:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'core')
+    runs-on: ubuntu-latest
+    # Hard ceiling for the whole job; the go test -timeout below is the
+    # precise per-run bound (duration + 30m buffer).
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      # Same runner prep as the e2e job: quic-go wants bigger UDP
+      # buffers, and 20k QUIC connections across a bounded socket pool
+      # still needs headroom over the default fd soft limit.
+      - name: Raise UDP buffers for quic-go
+        run: sudo sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000
+
+      - name: Sync workspace
+        run: go work sync
+
+      # Turn the Go-style duration into the go test -timeout budget:
+      # run duration + 30 minutes for ramp, drain grace, fleet
+      # bring-up/teardown, and report writing.
+      - name: Resolve run parameters
+        id: params
+        env:
+          DURATION: ${{ inputs.duration || '1h' }}
+        run: |
+          python3 - "$DURATION" <<'EOF' >> "$GITHUB_OUTPUT"
+          import re, sys
+          d = sys.argv[1]
+          units = {"h": 3600, "m": 60, "s": 1}
+          parts = re.findall(r"(\d+)([hms])", d)
+          if not parts or "".join(n + u for n, u in parts) != d:
+              sys.exit(f"unparseable duration {d!r}; use forms like 30m, 1h, 1h30m")
+          secs = sum(int(n) * units[u] for n, u in parts)
+          print(f"duration={d}")
+          print(f"test_timeout={secs // 60 + 30}m")
+          EOF
+
+      - name: Tracker perf soak
+        env:
+          PERF_DURATION: ${{ steps.params.outputs.duration }}
+          PERF_CONSUMERS: ${{ inputs.consumers || '10000' }}
+          PERF_SEEDERS: ${{ inputs.seeders || '10000' }}
+          PERF_TRACKERS_MAX: ${{ inputs.trackers_max || '8' }}
+          PERF_TRACKER_ADD_INTERVAL: ${{ inputs.tracker_add_interval || '5m' }}
+          PERF_REPORT_DIR: ${{ github.workspace }}/perf-report
+        run: |
+          ulimit -n 65536
+          make -C tracker test-perf PERF_TEST_TIMEOUT=${{ steps.params.outputs.test_timeout }}
+
+      - name: Publish report to job summary
+        if: always()
+        run: |
+          if [ -f perf-report/report.md ]; then
+            cat perf-report/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No perf report was produced (run died before the final snapshot)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Report + summary.json + per-tracker container logs, pass or fail.
+      - name: Upload perf report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-perf-report
+          path: perf-report/
+          if-no-files-found: warn
